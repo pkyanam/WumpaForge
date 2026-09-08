@@ -15,3 +15,14 @@ format-converted PNGs stay ignored under local/reports.
 `tools/boot.py` permits bounded runs up to180seconds so the title's original
 attract transition can be observed. A debugger exit0 is never proof of success;
 inspect its stop and actual game state.
+
+For interactive UI testing, run `python3 tools/package.py` after a successful
+native build, then add `--app` to boot.py. LLDB debugs that packaged executable
+under the stable `local.wrath.native` app identity; the asset directory remains
+local. The ordinary unbundled diagnostic target remains the default.
+
+Window close and macOS Quit now terminate the host process explicitly. They do
+not pretend that the original game returned or release guest memory while its
+workers continue running. Process teardown lets macOS reclaim all game threads,
+GPU objects and audio handles. This is separate from the still-unfinished
+graceful guest-return cleanup path.

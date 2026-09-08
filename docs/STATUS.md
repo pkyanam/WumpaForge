@@ -1,5 +1,34 @@
 # Status — 2026-09-08
 
+## Latest: build45/46, near60FPS intro and backstory loading priority
+- User explicitly prioritizes the original backstory movie alongside first-realm
+  gameplay. Preserve native original story playback and A/Start skipping.
+- f76a459 removes the measured streaming VBO overwrite stall by replacing storage
+  for each UP upload. Ordered1024draw GPU regression passes256 distinct pixels.
+  Matched intro boot44→45:53.02→59.29FPS overall, accumulated animation/vblank lag
+  2.77→0.25s; sustained heavy windows now59–60FPS, remaining isolated long frames.
+- 741d5e2 fixes retail CreateIndexBuffer ignoring format/usage/pool: D3DX passes65,
+  game passes2C, both valid. Boot44 empty mesh registry confirms old rejection;
+  native draw/lifetime regression passes. Build45 crosses the old null-mesh stop.
+- 777c71c adds keyboard/mouse logical port0 merged with SDL gamepads. Focus/mapping,
+  reconnect/rumble and packed guest ABI fixtures pass. docs/CONTROLS.md documents
+  keys. No real keyboard navigation or physical Bluetooth test is yet confirmed.
+- Boot45 now fails in original read97380 (REP MOVSD) copying to a bad destination
+  returned by3A400 during model loading:97B00→A9680→A9960→9C3D0→9CAE0→9CC80→9CD00
+  →2B7E0→2B850→2BD80→2C020→87400→2D950. Level37,Demo0. Invalid Release small
+  handles precede it. This is a new memory/registry blocker; no backstory frames
+  or gameplay completion claimed. Native mac_runtime agent owns investigation.
+- Root's bounded Release diagnostics plus debugger native/TLS register commands
+  are in build46/boot46 (PID62949 at launch). All earlier game processes exited;
+  Computer Use get_app_state may relaunch a closed app, so check PID first.
+- Packaged build now refreshes from native binary and boot.py --app debugs it
+  using stable local.wrath.native identity. Window close/CmdQ ends host process;
+  graceful original guest-return worker shutdown remains separate unfinished work.
+- native_audio owns generic mixed CMP/TEST/backedge ZF fixes for proven original
+  menu cancel branches6ECA4/7012A. No lift/rebuild until it is validated/frozen.
+  controller_support audited short tap latch option; current snapshot can miss
+  presses entirely between polls. Root owns all UI/game launches and builds.
+
 ## Current checkpoint: boot43, verified title/menu and next gameplay blocker
 - The user's standalone family demo naturally exited after ~109 seconds at a real
   unresolved null call. PID94972 is gone; no protected/live demo remains. Boot43

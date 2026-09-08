@@ -1,19 +1,5 @@
-diff --git a/src/d3d/CMakeLists.txt b/src/d3d/CMakeLists.txt
-index f1b3606..4f014dc 100644
---- a/src/d3d/CMakeLists.txt
-+++ b/src/d3d/CMakeLists.txt
-@@ -25,6 +25,9 @@ else()
-     pkg_check_modules(EPOXY REQUIRED epoxy)
-     target_include_directories(xbox_d3d8 PRIVATE ${EPOXY_INCLUDE_DIRS})
-     target_link_libraries(xbox_d3d8 PUBLIC platform SDL2::SDL2 ${EPOXY_LIBRARIES})
-+    if(APPLE)
-+        target_link_libraries(xbox_d3d8 PUBLIC "-framework OpenGL")
-+    endif()
- endif()
- 
- target_include_directories(xbox_d3d8 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 diff --git a/src/d3d/d3d8_gl.c b/src/d3d/d3d8_gl.c
-index 7888785..b31bc76 100644
+index 7888785..18b98b4 100644
 --- a/src/d3d/d3d8_gl.c
 +++ b/src/d3d/d3d8_gl.c
 @@ -31,6 +31,12 @@
@@ -29,7 +15,7 @@ index 7888785..b31bc76 100644
  
  #ifndef D3D_OK
  #define D3D_OK ((HRESULT)0)
-@@ -99,9 +105,158 @@ typedef struct {
+@@ -99,9 +105,162 @@ typedef struct {
      GLint            u_use_tex;
      GLint            u_use_xform;
      GLint            u_tex0;
@@ -178,8 +164,12 @@ index 7888785..b31bc76 100644
 +        last_pump_ns = now;
 +        SDL_Event ev;
 +        while (SDL_PollEvent(&ev)) {
-+            if (ev.type == SDL_QUIT)
++            if (ev.type == SDL_QUIT) {
 +                fprintf(stderr, "[d3d8_gl] window close requested\n");
++                /* This is a host app quit, not a fabricated guest return.
++                 * End the process without freeing guest RAM beneath workers. */
++                exit(EXIT_SUCCESS);
++            }
 +        }
 +    }
 +    xbox_D3D8GLRelease();
@@ -188,7 +178,7 @@ index 7888785..b31bc76 100644
  
  /* ======================================================================== */
  /* Tiny helpers                                                             */
-@@ -181,29 +336,46 @@ static const char *VS_SRC =
+@@ -181,29 +340,46 @@ static const char *VS_SRC =
      "uniform mat4 u_mvp;\n"
      "uniform int  u_use_xform;\n"
      "out vec4 v_color;\n"
@@ -236,7 +226,7 @@ index 7888785..b31bc76 100644
      "  frag_color = c;\n"
      "}\n";
  
-@@ -267,6 +439,10 @@ static void init_gl_pipeline(void)
+@@ -267,6 +443,10 @@ static void init_gl_pipeline(void)
      g.u_use_tex   = glGetUniformLocation(g.prog, "u_use_tex");
      g.u_use_xform = glGetUniformLocation(g.prog, "u_use_xform");
      g.u_tex0      = glGetUniformLocation(g.prog, "u_tex0");
@@ -247,7 +237,7 @@ index 7888785..b31bc76 100644
  }
  
  /* ======================================================================== */
-@@ -483,6 +659,14 @@ static HRESULT __stdcall tex_UnlockRect(IDirect3DTexture8 *self, UINT lvl)
+@@ -483,6 +663,14 @@ static HRESULT __stdcall tex_UnlockRect(IDirect3DTexture8 *self, UINT lvl)
      return D3D_OK;
  }
  
@@ -262,7 +252,7 @@ index 7888785..b31bc76 100644
  static const IDirect3DTexture8Vtbl g_tex_vtbl = {
      tex_QueryInterface, tex_AddRef, tex_Release,
      tex_GetDevice, tex_SetPriority, tex_GetPriority, tex_PreLoad, tex_GetType,
-@@ -544,19 +728,53 @@ static HRESULT __stdcall dev_GetCreationParameters(IDirect3DDevice8 *s, void *pP
+@@ -544,19 +732,53 @@ static HRESULT __stdcall dev_GetCreationParameters(IDirect3DDevice8 *s, void *pP
  static HRESULT __stdcall dev_Reset(IDirect3DDevice8 *s, D3DPRESENT_PARAMETERS *pPP)
  { (void)s;(void)pPP; return D3D_OK; }
  
@@ -325,7 +315,7 @@ index 7888785..b31bc76 100644
      return D3D_OK;
  }
  
-@@ -714,6 +932,11 @@ static void bind_texture0(void)
+@@ -714,6 +936,11 @@ static void bind_texture0(void)
      }
      glUniform1i(g.u_tex0, 0);
      glUniform1i(g.u_use_tex, use_tex);
@@ -337,7 +327,7 @@ index 7888785..b31bc76 100644
  }
  
  static void update_mvp(DWORD fvf)
-@@ -721,8 +944,10 @@ static void update_mvp(DWORD fvf)
+@@ -721,8 +948,10 @@ static void update_mvp(DWORD fvf)
      D3DMATRIX wv, mvp;
      mat4_mul(&wv, &g.m_world, &g.m_view);
      mat4_mul(&mvp, &wv, &g.m_proj);
@@ -350,7 +340,7 @@ index 7888785..b31bc76 100644
      glUniform1i(g.u_use_xform, d3d8_fvf_transformed(fvf) ? 0 : 1);
  }
  
-@@ -737,17 +962,18 @@ static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETY
+@@ -737,17 +966,18 @@ static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETY
      glUseProgram(g.prog);
      glBindVertexArray(g.vao);
      glBindBuffer(GL_ARRAY_BUFFER, g.stream_vbo);
@@ -375,7 +365,7 @@ index 7888785..b31bc76 100644
      return D3D_OK;
  }
  
-@@ -765,16 +991,18 @@ static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s, D3DPRIM
+@@ -765,16 +995,18 @@ static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s, D3DPRIM
      glUseProgram(g.prog);
      glBindVertexArray(g.vao);
      glBindBuffer(GL_ARRAY_BUFFER, g.stream_vbo);
@@ -398,7 +388,7 @@ index 7888785..b31bc76 100644
      return D3D_OK;
  }
  
-@@ -974,6 +1202,14 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -974,6 +1206,14 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
  {
      (void)s; (void)adapter; (void)devtype; (void)hwnd; (void)flags;
      if (!pp || !pPP) return D3DERR_INVALIDCALL;
@@ -413,7 +403,7 @@ index 7888785..b31bc76 100644
  
      /* Initialise SDL video + GL 3.3 core context. */
      if (!SDL_WasInit(SDL_INIT_VIDEO)) SDL_InitSubSystem(SDL_INIT_VIDEO);
-@@ -1006,7 +1242,22 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -1006,7 +1246,22 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
          return D3DERR_INVALIDCALL;
      }
      SDL_GL_MakeCurrent(g.window, g.glctx);
@@ -436,7 +426,7 @@ index 7888785..b31bc76 100644
  
      fprintf(stderr, "[d3d8_gl] GL %s / GLSL %s\n",
              glGetString(GL_VERSION), glGetString(GL_SHADING_LANGUAGE_VERSION));
-@@ -1018,9 +1269,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -1018,9 +1273,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
      mat4_identity(&g.m_view);
      mat4_identity(&g.m_proj);
      g.rs[D3DRS_ZENABLE]            = 1;

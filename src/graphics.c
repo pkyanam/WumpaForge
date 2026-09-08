@@ -1168,10 +1168,27 @@ void sub_00103A90(void)
     if (!r || r->references == 0xFFFF) { fprintf(stderr, "[wrath graphics] invalid AddRef 0x%X\n", arg(0)); finish(4, 0); return; }
     ++r->references; update_common(r); finish(4, r->references);
 }
+static void diagnose_invalid_release(uint32_t handle)
+{
+    static unsigned failures;
+    if (failures++ >= 16) return;
+    fprintf(stderr,"[wrath graphics] invalid Release0x%X caller0x%X esp0x%X eax0x%X ecx0x%X edx0x%X stack=",
+            handle,read32(g_esp),g_esp,g_eax,g_ecx,g_edx);
+    for (unsigned i=0;i<8;++i) fprintf(stderr," %08X",read32(g_esp+i*4));
+#ifndef WRATH_GRAPHICS_SMOKE_TEST
+    extern _Thread_local uint32_t g_ebx,g_esi,g_edi,g_ebp;
+    fprintf(stderr," ebx0x%X esi0x%X edi0x%X ebp0x%X",g_ebx,g_esi,g_edi,g_ebp);
+#endif
+    if (handle>=0x1000u && handle<=0x4000000u-24) {
+        fputs(" header=",stderr);
+        for (unsigned i=0;i<6;++i) fprintf(stderr," %08X",read32(handle+i*4));
+    }
+    fputc('\n',stderr);
+}
 void sub_00103AD0(void)
 {
     struct Resource *r = resource(arg(0));
-    if (!r || !r->references) { fprintf(stderr, "[wrath graphics] invalid Release 0x%X\n", arg(0)); finish(4, 0); return; }
+    if (!r || !r->references) { diagnose_invalid_release(arg(0)); finish(4, 0); return; }
     uint32_t references = --r->references; release_resource(r); finish(4, references);
 }
 void sub_000FFC90(void)

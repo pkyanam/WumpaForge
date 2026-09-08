@@ -12,10 +12,14 @@ def main():
     parser.add_argument("name", help="Diagnostic log name, e.g. boot-08")
     parser.add_argument("--seconds", type=int, default=10)
     parser.add_argument("--break-at", action="append", default=[])
+    parser.add_argument("--on-stop", action="append", default=[],
+                        help="Additional LLDB inspection command at the diagnostic stop")
     parser.add_argument("--probe-intro", action="store_true",
                         help="Read-only matched intro and first draw snapshots")
     parser.add_argument("--probe-shader", action="store_true",
                         help="Export live shader state at a failure or bounded stop")
+    parser.add_argument("--app", action="store_true",
+                        help="Debug the packaged Mac app for Computer Use testing (package first)")
     args = parser.parse_args()
     if Path(args.name).name != args.name or not 1 <= args.seconds <= 180:
         parser.error("Use a plain log name and a duration from 1 to 180 seconds")
@@ -43,10 +47,13 @@ def main():
     # LLDB's -o commands stop after a crash; -k is required for that backtrace.
     command += ["-o", "run"]
     for flag in ("-o", "-k"):
-        for action in [*shader_dump, "thread backtrace all", "quit"]:
+        for action in [*args.on_stop, *shader_dump, "thread backtrace all", "quit"]:
             command += [flag, action]
-    command += ["--",
-                str(ROOT / "build/native/wrath_native"), str(ROOT / "local/assets")]
+    binary = ROOT / ("build/Wrath Native.app/Contents/MacOS/wrath_native"
+                     if args.app else "build/native/wrath_native")
+    if not binary.is_file():
+        parser.error("Build the native game and run tools/package.py before using --app")
+    command += ["--", str(binary), str(ROOT / "local/assets")]
     env = dict(os.environ, WRATH_BOOT_TIMEOUT=str(args.seconds + 5),
                RECOMP_WATCHDOG_SECS=str(args.seconds))
     with log.open("w") as output:

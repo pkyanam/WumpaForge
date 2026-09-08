@@ -48,7 +48,10 @@ def dump(debugger, destination):
         "texture_states": [words(0x10EC18 + stage * 128, 32)
                            for stage in range(4)],
         "game_state": {"level": words(0x19C068, 1)[0],
-                       "demo": words(0x23B750, 1)[0]},
+                       "demo": words(0x23B750, 1)[0],
+                       "cutmovie": words(1556068, 1)[0],
+                       "next_cut_movie": words(9391540, 1)[0],
+                       "cutworldix": words(9391612, 1)[0]},
     }
     # Capture the real D3DX mesh registry at a null indirect call. This does
     # not depend on LLDB being able to resolve ARM64 thread-local globals.
