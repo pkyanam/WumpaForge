@@ -1,6 +1,29 @@
 # Status — 2026-09-08
 
-## Current: story08 completed; story09 identifies stale inactive character input
+## Current: story10 corrected Cortex, original skip, then hub morph dependency
+- Build52 includes017dc9e null-texture combiner fallback andeb21d33 exact-dead
+  bound-input handling. Combined native GPU tests pass, including actual69shader
+  captured constants and dynamic nonzero regression. Cortex now visibly renders
+  and animates in chamber near60FPS; no initial character-range errors occur.
+- Root pressed Space during chamber; original story skip sets movie=-1/cut_on0
+  and returns to Level37 hub. Previous fixed texture stage crash is crossed.
+- Next bounded diagnostic stops at hub88-instruction shader, v6..v15 FLOAT4stream1,
+  offsets0..144, retained1600-byte buffer stride160, primary13vertices index0..12.
+  c122 is0 but direct proof is conservative and cannot prove transitive dependency.
+  Original88shader slot23 multiplies accumulated morph byc122.x then addsv0;
+  original B6310 disables morph without unbinding the prior stream. Controller
+  implements conservative all-input dependency analysis with real88 GPU checks.
+  mac_runtime confirmed original n*160 allocation and native metadata are consistent;
+  no bounds relaxation or buffer expansion is justified (ce463f3 report).
+- Exact target verified from original tables: ARCTIC ANTICS, Hub0/slot0, internal
+  Level7, filenamea/snow_m/snow and penguinp assets. Enter by WASD into portal radius
+  and remain60updates; no A-button selection. Verify Level7/Demo0 (attract usesDemo1).
+  See ARCTIC-ANTICS-ENTRY.md; shader probe now reads position/portal/timers/nextlevel.
+- No game running. Build52 packaged; story10 session64259 ended at deliberate first
+  failed fetch breakpoint. Next frozen dependency fix, combined GPU validation,
+  build53 and story11; validate original skip, hub pixels and movement to portal.
+
+## Earlier: story08 completed; story09 identifies stale inactive character input
 - User specifically requests the winter/penguin level in area1. This refines the
   first-realm playable milestone; keyboard remains available input. User confirms
   story kept playing with missing components, then crashed at its end.
