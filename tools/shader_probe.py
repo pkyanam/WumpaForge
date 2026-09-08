@@ -1,5 +1,6 @@
 """Read-only LLDB shader state export at a real game rendering failure."""
 import json
+import struct
 from pathlib import Path
 import lldb
 
@@ -58,6 +59,31 @@ def dump(debugger, destination):
                        "next_cut_movie": words(9391540, 1)[0],
                        "cutworldix": words(9391612, 1)[0]},
     }
+    def floats(address, count):
+        return [struct.unpack("<f", word.to_bytes(4, "little"))[0]
+                for word in words(address, count)]
+
+    out["hub_state"] = {
+        "hub": words(0x19A838, 1)[0],
+        "selected_slot": words(0x560F1C, 1)[0],
+        "candidate_available": words(0x560ECC, 1)[0],
+        "portal_dwell": words(0x23B7B8, 1)[0],
+        "pending_level": words(0x19C074, 1)[0],
+        "requested_level": words(0x19C06C, 1)[0],
+        "warp_elapsed": words(0x561674, 1)[0],
+        "warp_duration": words(0x561668, 1)[0],
+        "player_position": floats(0x8F518C, 3),
+    }
+    # First hub's original spline: portal slot0 center is point2. Only read a
+    # valid loaded structure; early title/story captures may have no hub yet.
+    spline = words(0x19C148, 1)[0]
+    if 0x1000 <= spline < 0x4000000 - 12:
+        header = words(spline, 3)
+        stride, points = header[0] >> 16, header[2]
+        center = points + 2 * stride
+        if 12 <= stride <= 4096 and 0x1000 <= center < 0x4000000 - 12:
+            out["hub_state"]["arctic_portal_center"] = floats(center, 3)
+
     # Capture the real D3DX mesh registry at a null indirect call. This does
     # not depend on LLDB being able to resolve ARM64 thread-local globals.
     # The original pool has 1000 five-DWORD entries at21F8B8; word4 is mesh*.
