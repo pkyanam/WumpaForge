@@ -70,3 +70,30 @@ pipeline still contain incomplete behavior; do not expose them as successful
 spatial/effects support. A native stream needs a real bounded packet queue and
 completion accounting. These tests establish buffer decoding/playback mechanics,
 not working game music or spatial sound.
+
+
+## Transactional format updates and memory validation
+
+SetFormat now validates and re-decodes existing owned bytes for supported codec,
+channel and rate changes. Failed updates preserve the old source and voice;
+successful live updates retain the mixer slot under its lock. Rate-only changes
+reuse decoded storage. See AUDIO-INTEGRATION.md for cursor/rate semantics and the
+verified SetPitch conversion used by the title bridge.
+
+The full backend test can now run with ASan/UBSan using `tools/test_audio_sink.c`,
+a test-only output sink linked in place of SDL. Actual APU producer and buffer
+code still execute. This is a memory/lifetime test, not an audio-device test:
+
+```sh
+clang -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -Ithird_party/xboxrecomp/src -Ithird_party/xboxrecomp/src/apu -Ithird_party/xboxrecomp/src/nv2a tools/test_dsound.c tools/test_audio_sink.c third_party/xboxrecomp/src/audio/xbox_adpcm.c third_party/xboxrecomp/src/apu/apu_core.c third_party/xboxrecomp/src/apu/apu_vp.c third_party/xboxrecomp/src/apu/apu_dsp.c build/native/third_party/xboxrecomp/src/platform/libplatform.a -o build/test_dsound_sanitized
+./build/test_dsound_sanitized
+```
+
+Passed with no sanitizer findings after fixing an existing overflow in the APU
+microsecond clock: multiplying the full nanosecond uptime counter by one million
+could overflow after2.6 hours. The helper now splits the quotient/remainder before
+scaling. The new cases exercise active source swaps, data/slot retention, codec and
+channel changes, rate reuse, malformed/locked changes, and injected allocation
+failure. The independently built guest bridge test also passes live pitch/rate
+updates, full pitch bounds and exact32-bit ABI serialization. No game boot or
+in-game sound was tested by this extension.

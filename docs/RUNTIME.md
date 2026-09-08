@@ -205,3 +205,53 @@ function discovery.
 clang -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,-dead_strip -Ithird_party/xboxrecomp/src tools/tests/worker_memory.c third_party/xboxrecomp/src/platform/win32_compat.c -o build/worker-memory-test
 build/worker-memory-test
 ```
+
+## Native vertical-blank callbacks
+
+Boot 13 reached real asset rendering, then the original game loop at 0x00087782
+waited for global 0x001BABB0 to reach 120. The sole increment is the compiled
+routine 0x00039910. Earlier initialization at 0x0003B0FA passes that function
+to SDK routine 0x000FEC90. The supplied XBE's four instructions there load the
+argument into EAX, load the device from 0x0010EBF0 into ECX, store EAX at
+device+0x2430, and return with `ret 4`. The nearby 0x000986B0/0x000985E0 calls
+are file/asset loading, not timer registration.
+
+`src/timing_bridge.c` implements this SDK registration boundary. A paced native
+pthread calls the registered AOT function on its own allocated guest stack and
+TIB/TLS. It passes a guest-resident 12-byte D3DVBLANKDATA structure using the
+callback's cdecl ABI. The struct and callback ABI are corroborated by the
+[Cxbx Xbox D3D8 type definitions](https://github.com/Cxbx-Reloaded/Cxbx-Reloaded-legacy/blob/master/src/core/hle/D3D8/XbD3D8Types.h)
+(VBlank, Swap, Flags; cdecl function receiving a pointer). No game-counter
+address appears in the implementation, and no raw GPU interrupt handler or
+CPU interpreter is used. The native graphics implementation already replaces
+the original GPU miniport that would have delivered this callback.
+
+The clock uses the requested refresh rate (zero/default selects nominal 60 Hz
+for this NTSC progressive mode), with monotonic absolute phase and interruptible
+waits. Host suspension advances blank accounting without producing a burst of
+stale callbacks. Registration preserves the SDK's visible register/stack/memory
+effects; unregister synchronizes with an outstanding callback. Shutdown joins
+the worker before releasing its 512 KB stack, TIB and callback-data allocation.
+Missing AOT callbacks or violated stack ABI fail visibly instead of silently
+claiming delivery. The implementation's clock is independent of Cocoa/SDL event
+pumping, so a game busy-wait cannot stop vertical-blank delivery.
+
+Integration requires adding 0x000FEC90 to manual functions and compiling
+`src/timing_bridge.c`. Graphics calls `wrath_vblank_set_refresh(refresh_hz)` after
+device creation and `wrath_vblank_notify_swap()` after a successful host swap;
+main calls `wrath_vblank_shutdown()` before memory teardown. Swap notification
+reports actual host completion with SWAPDONE. Physical monitor scanout phase,
+interlaced fields, and missed scheduled-swap classification are not modeled.
+The title's observed callback ignores the data argument entirely.
+
+`tools/tests/vblank_timing.c` includes the production timer and memory allocator.
+The bounded test passed with 60 Hz then 50 Hz pacing, a native compiled callback,
+stack/TIB/TLS/register isolation, cdecl cleanup, swap notification, unregister
+and shutdown reclamation. Evidence: `local/reports/vblank-timing-test.log`.
+This test does not claim that the complete game has passed the original hold;
+the parent performs that separate rebuilt-game check.
+
+```sh
+clang -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,-dead_strip -Ithird_party/xboxrecomp/src tools/tests/vblank_timing.c third_party/xboxrecomp/src/platform/win32_compat.c -o build/vblank-timing-test
+build/vblank-timing-test
+```

@@ -5,15 +5,33 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 extern void xbe_entry_point(void);
 extern int recomp_dispatch_init(void);
+extern void wrath_vblank_shutdown(void);
 extern ptrdiff_t g_xbox_mem_offset;
 extern RECOMP_TLS uint32_t g_esp;
 
 int main(int argc, char **argv)
 {
+    char bundled_assets[4096];
     const char *directory = argc > 1 ? argv[1] : "local/assets";
+#ifdef __APPLE__
+    if (argc < 2) {
+        char executable[4096]; uint32_t size = sizeof(executable);
+        if (!_NSGetExecutablePath(executable, &size)) {
+            char *base = strrchr(executable, '/');
+            if (base) {
+                *base = 0;
+                snprintf(bundled_assets, sizeof(bundled_assets), "%s/../Resources/assets", executable);
+                if (!access(bundled_assets, R_OK)) directory = bundled_assets;
+            }
+        }
+    }
+#endif
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     const char *boot_timeout = getenv("WRATH_BOOT_TIMEOUT");
@@ -57,6 +75,7 @@ int main(int argc, char **argv)
     printf("Calling recompiled Xbox entry point 0x000EF089, stack 0x%08X\n", g_esp);
     xbe_entry_point();
     puts("Game entry returned.");
+    wrath_vblank_shutdown();
     xbox_kernel_shutdown();
     xbox_MemoryLayoutShutdown();
     free(xbe);

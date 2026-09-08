@@ -3,6 +3,34 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
+## Latest checkpoint: boot-14, first actual rendered image
+- Boot-13 rendered the original Universal splash through native ARM64 game code
+  and GL4.1; actual GPU capture is `local/reports/game-frame-15.png`. Colors are
+  incorrect: the original game's generated DXT5 payload has black background
+  blocks where the source raw image is white. Compression/lifter investigation
+  remains active. This is not a verified correct splash, title screen, or menu.
+- Native paced vblank callback in `src/timing_bridge.c` invokes the game's actual
+  compiled callback0x39910. Boot-14 passes the two-second logo counter wait and
+  enters 3D intro code; thread isolation, ABI and60/50Hz pacing tests pass.
+- Boot-14 stops at nonzero programmable pixel shader0x2606890 after unsupported
+  vertex shader0x2606701 and texture render targets0x3B88660/0x3B9DC60. These are
+  substantial missing graphics compatibility features, not a launch setting.
+- Shader dump `boot14-shader-objects.bin` maps guest0x2606000..2608000. Vertex
+  object+0x118 contains six NV2A instructions. The toolkit HLSL decoder's opcode
+  word index is wrong; independent verified GLSL generators are in progress.
+- Root handles texture render targets and integration; mac_runtime handles
+  standalone vertex generator, native_audio standalone pixel generator, and
+  controller_support traces the incorrect DXT5 conversion. Avoid shared edits
+  and simultaneous game/debugger runs. No real menu/gameplay/audio/input verified.
+- Audio decoder, native output, lazy voices and28 title SDK bridges are tested
+  independently. `src/audio_bridge.c` is not yet linked into the real executable.
+- `tools/package.py` creates `build/Wrath Native.app` with an asset symlink and
+  native executable. Repackage after building; packaging is not proof of play.
+- User asked for distance to title/menu: reported real splash plus substantial
+  shader/render-target work; no reliable ETA or percentage asserted.
+
+The older numbered checkpoints below are historical; this section is current.
+
 ## Environment
 - Workspace started with only a 931 MiB ISO and `.DS_Store`; initialized Git on `main`.
 - Host reports arm64. Xcode beta, Homebrew, Python 3, CMake, and SDL2 are present.
@@ -66,7 +94,7 @@ Run the supplied game natively on Apple Silicon without emulation. **Native star
 - ISO SHA-256: `1caef217dd588655a851ce5ae3cdead912bf383ae86e574e9b33aa74c12900bc`
 - XBE SHA-256: `e8d7cbf225d899eb88227c11d1f40434c34e27c1b23ed946fb2c3471168d2f4d`
 
-## Current checkpoint (boot-08)
+## Current checkpoint (boot-10)
 - Real native ARM64 entry and CRT execute. Disc root, optical media query, save
   directory opens, title metadata creation and sparse HDD metadata reads now pass.
 - Safe guest runtime layout starts above the XBE image, avoiding its large .data.
@@ -77,8 +105,12 @@ Run the supplied game natively on Apple Silicon without emulation. **Native star
   and tested independent duplicate lifetimes/current-thread identity; boot-08 passes.
 - Boot-08 creates the real native 640x480 graphics device and a guest texture-level
   surface. It then stalls in the original D3D pushbuffer routine from render-state
-  initialization (FD830 ->103740). Graphics agent is implementing the actual state
-  boundary. No original-game title/menu pixels verified yet.
+  initialization (FD830 ->103740). Boot-09 passes that boundary with actual native
+  blend/depth/cull state hooks, then stalls on FillMode (FDDF0). Graphics agent is
+  handled FillMode, passthrough texture coordinates, and enabled alpha test with
+  actual fragment discard. Boot-10 passes material setup, loads actual2.7MB and
+ 786432-byte asset reads, then stalls at FEF20 SetRenderTarget. Graphics agent is
+  adding FEF20/FF830 native default-color/depth handling. No title/menu pixels verified.
 - Boot-05 aborts on a missing target inside CRT memmove 0xF5DD0: function discovery
   interpreted inline jump-table data as instructions. Native audited cdecl memmove
   bridge added; overlap/alignment/stack tests and boot-06 confirm the fix.
@@ -102,3 +134,28 @@ pixels and then gameplay/input before reporting success.
 `python3 tools/boot.py boot-NN` writes the LLDB report under local/reports.
 Use `--break-at sub_00087BF0` to verify game-main entry. Real crashes need LLDB
 `-k` commands (the helper includes them); process exit 0 is not game success.
+
+## Work after the graphics-init checkpoint
+- Audio worker entry 0x5DA30 seeded from its actual CreateThread argument; analyze
+  now finds it (4628 functions total). Four-pthread memory regression verifies
+  independent guest TIB/TLS/registers/stacks and synchronized heap allocation.
+- Recompiler chunk boundaries now retain original function positions when native
+  overrides omit bodies; stable sorted declarations avoid unrelated C rebuilds.
+  `tools/test_incremental_lift.py` and diagnostic lifter test pass.
+- Audio agent completed a native Xbox ADPCM decoder/lazy buffer-voice backend,
+  tested 252 idle buffers and bounded64 playing voices; patch/docs handoff pending.
+  It will next work on exact title-specific audio bridges in src/audio_bridge.c.
+- Computer-use skill read; node_repl has `sky` imported. Use that skill/API to
+  inspect the actual game window once rendering advances. No UI screenshot yet.
+
+## Latest handoff details
+- boot-10-surfaces.log breaks at FEF20: color[1E3CC8]=019E1030 from our GetBackBuffer,
+  depth[1E3CCC]=0 and fallback[1E8D60]=0. Color header six DWORDs:010D0001,019E1080,
+  0,00011221,271DF27F,0. Singleton+2070=color,+2074=0,+207C=color,+2080=0.
+- Runtime agent finished and frozen. Graphics agent active on FEF20/FF830 in
+  src/graphics.c/docs. Audio agent active on new src/audio_bridge.c, only verified
+  interfaces, explicit errors for unsupported effects/streams/spatial features.
+- Native backend/worker/incremental-lift checkpoint ad1a6db; prior game-main/native
+  graphics checkpoint ee6b9e9. Current graphics changes await next checkpoint.
+- All five tracked toolkit patches pass idempotent bootstrap (including new
+  graphics shader patch). Last native build/boot10 complete, no game left running.

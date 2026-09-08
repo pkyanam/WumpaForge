@@ -14,9 +14,16 @@
 #include <pthread.h>
 #endif
 
-extern _Thread_local uint32_t g_eax, g_esp;
+extern _Thread_local uint32_t g_eax, g_esp, g_ecx, g_edx;
 extern ptrdiff_t g_xbox_mem_offset;
 typedef void (*recomp_func_t)(void);
+#ifdef WRATH_GRAPHICS_SMOKE_TEST
+static void wrath_vblank_set_refresh(uint32_t hz) { (void)hz; }
+static void wrath_vblank_notify_swap(void) {}
+#else
+extern void wrath_vblank_set_refresh(uint32_t hz);
+extern void wrath_vblank_notify_swap(void);
+#endif
 
 #define D3DERR_INVALIDCALL ((HRESULT)0x8876086Cu)
 #define D3D_OK ((HRESULT)0)
@@ -39,6 +46,8 @@ _Static_assert(sizeof(D3DVIEWPORT8) == 24, "Xbox viewport layout");
 
 static IDirect3DDevice8 *s_device;
 static UINT s_width, s_height;
+static int s_depth_available;
+static HRESULT initialize_depth_surface(uint32_t format);
 static D3DVIEWPORT8 s_viewport;
 
 static void *guest_ptr(uint32_t address)
@@ -114,6 +123,7 @@ void sub_000FD6E0(void)
         finish(24, result < 0 ? (uint32_t)result : (uint32_t)D3DERR_INVALIDCALL);
         return;
     }
+    s_depth_available = pp.EnableAutoDepthStencil != 0;
     s_width = pp.BackBufferWidth;
     s_height = pp.BackBufferHeight;
     s_viewport = (D3DVIEWPORT8){0, 0, s_width, s_height, 0.0f, 1.0f};
@@ -128,10 +138,197 @@ void sub_000FD6E0(void)
     write32(0x10C550, 1);
     write32(GUEST_SWAP_COUNT, 0);
     memcpy(guest_ptr(GUEST_VIEWPORT), &s_viewport, sizeof(s_viewport));
+    if (s_depth_available && initialize_depth_surface(in.depth_format)<0) {
+        fprintf(stderr,"[wrath graphics] failed native depth surface initialization\n"); abort();
+    }
     write32(output, GUEST_DEVICE);
+    wrath_vblank_set_refresh(in.refresh_hz);
     fprintf(stderr, "[wrath graphics] native device %ux%u, guest handle 0x%08X\n",
             s_width, s_height, GUEST_DEVICE);
     finish(24, 0);
+}
+
+
+/* The 4361 SetRenderStateSimple SDK helper uses ECX=single NV097 method
+ * packet and EDX=value, not stack arguments. Translate identified API state
+ * commands directly; do not acknowledge a fictitious GPU/pushbuffer. */
+static void state_error(uint32_t method, uint32_t value)
+{
+    fprintf(stderr, "[wrath graphics] unsupported render state method 0x%X value 0x%X, guest return 0x%X\n",
+            method, value, read32(g_esp));
+    abort();
+}
+static void native_state(D3DRENDERSTATETYPE state, uint32_t value)
+{
+    if (s_device->lpVtbl->SetRenderState(s_device, state, value) < 0)
+        state_error(state, value);
+}
+static void gl_toggle(GLenum capability, uint32_t enabled)
+{
+    if (enabled) glEnable(capability); else glDisable(capability);
+}
+static uint32_t blend_factor(uint32_t value)
+{
+    switch (value) {
+    case 0: return D3DBLEND_ZERO; case 1: return D3DBLEND_ONE;
+    case 0x300: return D3DBLEND_SRCCOLOR; case 0x301: return D3DBLEND_INVSRCCOLOR;
+    case 0x302: return D3DBLEND_SRCALPHA; case 0x303: return D3DBLEND_INVSRCALPHA;
+    case 0x304: return D3DBLEND_DESTALPHA; case 0x305: return D3DBLEND_INVDESTALPHA;
+    case 0x306: return D3DBLEND_DESTCOLOR; case 0x307: return D3DBLEND_INVDESTCOLOR;
+    case 0x308: return D3DBLEND_SRCALPHASAT;
+    default: return 0;
+    }
+}
+static int compare_valid(uint32_t value) { return value >= GL_NEVER && value <= GL_ALWAYS; }
+static int stencil_valid(uint32_t value)
+{
+    return value == GL_KEEP || value == GL_ZERO || value == GL_REPLACE ||
+           value == GL_INCR || value == GL_DECR || value == GL_INVERT ||
+           value == GL_INCR_WRAP || value == GL_DECR_WRAP;
+}
+static GLenum s_stencil_fail = GL_KEEP, s_stencil_zfail = GL_KEEP, s_stencil_pass = GL_KEEP;
+static GLenum s_stencil_func = GL_ALWAYS;
+static uint32_t s_stencil_ref, s_stencil_mask = ~0u;
+static float s_offset_scale, s_offset_bias;
+void sub_000FD830(void)
+{
+    uint32_t packet = g_ecx, value = g_edx, method = packet & 0xFFFF;
+    unsigned guest_state = 0;
+    if (!s_device || !main_thread() || (packet & 0xFFFF0000) != 0x40000)
+        state_error(packet, value);
+    switch (method) {
+    case 0x354: /* ZFUNC, GL enum on Xbox vs D3DCMP enum in host API. */
+        if (!compare_valid(value)) state_error(method,value);
+        native_state(D3DRS_ZFUNC,value-GL_NEVER+1); glDepthFunc(value); guest_state=57; break;
+    case 0x33C:
+        if (!compare_valid(value)) state_error(method,value);
+        native_state(D3DRS_ALPHAFUNC,value-GL_NEVER+1); guest_state=58; break;
+    case 0x304:
+        native_state(D3DRS_ALPHABLENDENABLE,value!=0); gl_toggle(GL_BLEND,value); guest_state=59; break;
+    case 0x300:
+        native_state(D3DRS_ALPHATESTENABLE,value!=0); guest_state=60; break;
+    case 0x340: native_state(D3DRS_ALPHAREF,value&255); guest_state=61; break;
+    case 0x344: case 0x348: {
+        uint32_t factor=blend_factor(value);
+        if (!factor) state_error(method,value);
+        native_state(method==0x344?D3DRS_SRCBLEND:D3DRS_DESTBLEND,factor);
+        GLint old; glGetIntegerv(method==0x344?GL_BLEND_DST_RGB:GL_BLEND_SRC_RGB,&old);
+        glBlendFunc(method==0x344?value:(GLenum)old,method==0x348?value:(GLenum)old);
+        guest_state=method==0x344?62:63; break;
+    }
+    case 0x35C:
+        native_state(D3DRS_ZWRITEENABLE,value!=0); glDepthMask(value!=0); guest_state=64; break;
+    case 0x310: gl_toggle(GL_DITHER,value); guest_state=65; break;
+    case 0x37C:
+        if (value!=GL_SMOOTH && value!=GL_FLAT) state_error(method,value);
+        native_state(D3DRS_SHADEMODE,value==GL_FLAT?1:2); guest_state=66; break;
+    case 0x358: {
+        uint32_t mask=((value>>16)&1)|(((value>>8)&1)<<1)|((value&1)<<2)|(((value>>24)&1)<<3);
+        native_state(D3DRS_COLORWRITEENABLE,mask);
+        glColorMask(mask&1,mask&2,mask&4,mask&8); guest_state=67; break;
+    }
+    case 0x374: case 0x378:
+        if (!stencil_valid(value)) state_error(method,value);
+        if (method==0x374) s_stencil_zfail=value; else s_stencil_pass=value;
+        glStencilOp(s_stencil_fail,s_stencil_zfail,s_stencil_pass);
+        guest_state=method==0x374?68:69; break;
+    case 0x364:
+        if (!compare_valid(value)) state_error(method,value);
+        s_stencil_func=value; guest_state=70; goto stencil_function;
+    case 0x368: s_stencil_ref=value; guest_state=71; goto stencil_function;
+    case 0x36C: s_stencil_mask=value; guest_state=72;
+    stencil_function:
+        glStencilFunc(s_stencil_func,(GLint)s_stencil_ref,s_stencil_mask); break;
+    case 0x360: glStencilMask(value); guest_state=73; break;
+    case 0x350:
+        if (value!=GL_FUNC_ADD && value!=GL_FUNC_SUBTRACT && value!=GL_FUNC_REVERSE_SUBTRACT && value!=GL_MIN && value!=GL_MAX)
+            state_error(method,value);
+        glBlendEquation(value); guest_state=74; break;
+    case 0x34C:
+        glBlendColor(((value>>16)&255)/255.0f,((value>>8)&255)/255.0f,(value&255)/255.0f,(value>>24)/255.0f);
+        guest_state=75; break;
+    case 0x384: case 0x388: {
+        float f; memcpy(&f,&value,4); if (!isfinite(f)) state_error(method,value);
+        if (method==0x384) s_offset_scale=f; else s_offset_bias=f;
+        glPolygonOffset(s_offset_scale,s_offset_bias); guest_state=method==0x384?77:78; break;
+    }
+    case 0x330: gl_toggle(GL_POLYGON_OFFSET_POINT,value); guest_state=79; break;
+    case 0x334: gl_toggle(GL_POLYGON_OFFSET_LINE,value); guest_state=80; break;
+    case 0x338: gl_toggle(GL_POLYGON_OFFSET_FILL,value); guest_state=81; break;
+    default: state_error(method,value);
+    }
+    /* Callers also mirror this cache. Keep direct SDK helper calls coherent. */
+    write32(0x10EE18+guest_state*4,value);
+    finish(0,0);
+}
+void sub_000FDAD0(void) /* SetRenderState_CullMode(value), Xbox 0 / GL_CW / GL_CCW. */
+{
+    uint32_t value=arg(0);
+    if (!s_device || !main_thread() || (value && value!=GL_CW && value!=GL_CCW)) state_error(0x39C,value);
+    native_state(D3DRS_CULLMODE,value==0?D3DCULL_NONE:value==GL_CW?D3DCULL_CW:D3DCULL_CCW);
+    gl_toggle(GL_CULL_FACE,value); glCullFace(GL_BACK); glFrontFace(value==GL_CW?GL_CCW:GL_CW);
+    write32(0x10F018,value); finish(4,0);
+}
+void sub_000FDB40(void) /* SetRenderState_FrontFace(value). */
+{
+    uint32_t value=arg(0);
+    if (!s_device || !main_thread() || (value!=GL_CW && value!=GL_CCW)) state_error(0x3A0,value);
+    /* CullMode identifies the removed winding. The original setter recalculates
+     * GL_FRONT/GL_BACK to preserve that winding when FrontFace changes. */
+    write32(0x10F014,value); finish(4,0);
+}
+
+void sub_000FDDF0(void) /* SetRenderState_FillMode(GL_POINT/GL_LINE/GL_FILL), ret4. */
+{
+    uint32_t value=arg(0);
+    if (!s_device || !main_thread() || (value!=GL_POINT && value!=GL_LINE && value!=GL_FILL)) state_error(0x38C,value);
+    /* GL core supports a single polygon mode for both faces. */
+    if (read32(0x10F000) && read32(0x10EFFC)!=value) state_error(0x390,read32(0x10EFFC));
+    native_state(D3DRS_FILLMODE,value-GL_POINT+D3DFILL_POINT);
+    glPolygonMode(GL_FRONT_AND_BACK,value);
+    write32(0x10EFF8,value); finish(4,0);
+}
+void sub_000FDF60(void) /* SetTextureStageState_TexCoordIndex(stage,value), ret8. */
+{
+    uint32_t stage=arg(0), value=arg(1);
+    /* The native FVF path currently samples stage0 with explicit UV set0.
+     * Generated coordinates and additional sets require vertex shader work. */
+    if (!s_device || !main_thread() || stage!=0 || value!=0) state_error(0x1964+stage*4,value);
+    HRESULT result=s_device->lpVtbl->SetTextureStageState(s_device,stage,D3DTSS_TEXCOORDINDEX,value);
+    if (result<0) state_error(0x1964+stage*4,value);
+    write32(0x10EC88+stage*128,value);
+    *(uint8_t *)guest_ptr(0x1B11D1+stage)=(uint8_t)(value+9);
+    write32(GUEST_DEVICE+0x454,read32(GUEST_DEVICE+0x454)&~(1u<<stage));
+    write32(0x10EC10,read32(0x10EC10)|0x47F);
+    finish(8,0);
+}
+
+
+void sub_000FE660(void) /* SetRenderState_StencilEnable(value), ret4. */
+{
+    uint32_t value=arg(0);
+    if (!s_device || !main_thread()) state_error(0x32C,value);
+    /* Original SDK also updates early-Z optimizations; native GL owns those. */
+    gl_toggle(GL_STENCIL_TEST,value&&s_depth_available);
+    native_state(D3DRS_STENCILENABLE,value!=0);
+    write32(0x10F00C,value); finish(4,0);
+}
+void sub_000FE6F0(void) /* SetRenderState_StencilFail(GL stencil op), ret4. */
+{
+    uint32_t value=arg(0);
+    if (!s_device || !main_thread() || !stencil_valid(value)) state_error(0x370,value);
+    s_stencil_fail=value;
+    glStencilOp(s_stencil_fail,s_stencil_zfail,s_stencil_pass);
+    write32(0x10F010,value); finish(4,0);
+}
+
+void sub_000FE5C0(void) /* SetRenderState_ZEnable(value), 0=off / 1=Z / 2=W. */
+{
+    uint32_t value=arg(0);
+    if (!s_device || !main_thread() || value>1) state_error(0x30C,value);
+    native_state(D3DRS_ZENABLE,value&&s_depth_available);
+    gl_toggle(GL_DEPTH_TEST,value&&s_depth_available);
+    write32(0x10F008,value); finish(4,0);
 }
 
 /* DWORD/void WINAPI SetViewport(const XboxViewport*), same 24-byte layout. */
@@ -230,6 +427,7 @@ void sub_00100EA0(void)
         finish(24, (uint32_t)D3DERR_INVALIDCALL);
         return;
     }
+    if (!s_depth_available) flags &= ~3u;
     uint32_t native_flags = ((flags & 0xF0) ? D3DCLEAR_TARGET : 0) |
                             ((flags & 1) ? D3DCLEAR_ZBUFFER : 0) |
                             ((flags & 2) ? D3DCLEAR_STENCIL : 0);
@@ -245,6 +443,61 @@ void sub_00100EA0(void)
     finish(24, (uint32_t)result);
 }
 
+
+/* Opt-in diagnostic: save the real native backbuffer immediately before its
+ * requested one-based presentation. This does not inject any game pixels. */
+static void capture_frame(uint32_t frame)
+{
+    static int configured, attempted;
+    static uint32_t requested;
+    static const char *path;
+    if (!configured) {
+        configured=1;
+        const char *number=getenv("WRATH_CAPTURE_FRAME");
+        path=getenv("WRATH_CAPTURE_PATH");
+        if (number || path) {
+            char *end=NULL;
+            unsigned long value=number?strtoul(number,&end,10):0;
+            if (!number || !*number || !end || *end || !value || value>UINT32_MAX || !path || path[0]!='/') {
+                fprintf(stderr,"[wrath graphics] capture requires positive WRATH_CAPTURE_FRAME and absolute WRATH_CAPTURE_PATH\n");
+                return;
+            }
+            requested=(uint32_t)value;
+        }
+    }
+    if (!requested || attempted || frame!=requested) return;
+    attempted=1;
+    size_t pitch=(size_t)s_width*4, bytes=pitch*s_height;
+    uint8_t *pixels=malloc(bytes), *row=malloc(pitch);
+    if (!pixels || !row) {
+        fprintf(stderr,"[wrath graphics] capture allocation failed\n"); free(pixels); free(row); return;
+    }
+    GLint old_fbo,old_buffer,old_pack,old_alignment,old_row,old_skip_rows,old_skip_pixels;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&old_fbo); glGetIntegerv(GL_READ_BUFFER,&old_buffer);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING,&old_pack); glGetIntegerv(GL_PACK_ALIGNMENT,&old_alignment);
+    glGetIntegerv(GL_PACK_ROW_LENGTH,&old_row); glGetIntegerv(GL_PACK_SKIP_ROWS,&old_skip_rows);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS,&old_skip_pixels);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,0); glReadBuffer(GL_BACK);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER,0); glPixelStorei(GL_PACK_ALIGNMENT,4);
+    glPixelStorei(GL_PACK_ROW_LENGTH,0); glPixelStorei(GL_PACK_SKIP_ROWS,0); glPixelStorei(GL_PACK_SKIP_PIXELS,0);
+    glReadPixels(0,0,s_width,s_height,GL_BGRA,GL_UNSIGNED_BYTE,pixels);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,old_fbo); glReadBuffer(old_buffer);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER,old_pack); glPixelStorei(GL_PACK_ALIGNMENT,old_alignment);
+    glPixelStorei(GL_PACK_ROW_LENGTH,old_row); glPixelStorei(GL_PACK_SKIP_ROWS,old_skip_rows);
+    glPixelStorei(GL_PACK_SKIP_PIXELS,old_skip_pixels);
+    for (unsigned y=0;y<s_height/2;++y) {
+        uint8_t *top=pixels+y*pitch, *bottom=pixels+(s_height-1-y)*pitch;
+        memcpy(row,top,pitch); memcpy(top,bottom,pitch); memcpy(bottom,row,pitch);
+    }
+    SDL_Surface *surface=SDL_CreateRGBSurfaceWithFormatFrom(pixels,(int)s_width,(int)s_height,32,(int)pitch,SDL_PIXELFORMAT_BGRA32);
+    if (!surface || SDL_SaveBMP(surface,path)<0)
+        fprintf(stderr,"[wrath graphics] capture frame%u failed: %s\n",frame,SDL_GetError());
+    else
+        fprintf(stderr,"[wrath graphics] captured actual frame%u %ux%u to %s\n",frame,s_width,s_height,path);
+    if (surface) SDL_FreeSurface(surface);
+    free(row); free(pixels);
+}
+
 /* DWORD WINAPI Swap(flags): return observed swap count, not HRESULT. */
 void sub_00100C40(void)
 {
@@ -256,12 +509,14 @@ void sub_00100C40(void)
     if (!flags) flags = 5; /* SDK's default, observed at 0x00100C50. */
     /* Bit 2 submits a new swap; flag-only wait operations do not present. */
     if (flags & 4) {
+        capture_frame(read32(GUEST_SWAP_COUNT)+1);
         HRESULT result = s_device->lpVtbl->Swap(s_device, flags);
         if (result < 0) {
             finish(4, (uint32_t)result);
             return;
         }
         write32(GUEST_SWAP_COUNT, read32(GUEST_SWAP_COUNT) + 1);
+        wrath_vblank_notify_swap();
     }
     finish(4, read32(GUEST_SWAP_COUNT));
 }
@@ -274,6 +529,7 @@ extern void xbox_HeapFree(uint32_t address);
 #define RESOURCE_TEXTURE 1
 #define RESOURCE_VERTEX_BUFFER 2
 #define RESOURCE_SURFACE 3
+#define RESOURCE_DEPTH_SURFACE 4
 static struct Resource {
     uint32_t handle, data, bytes, width, height, levels, format, pitch, owner;
     uint32_t offsets[13], pitches[13], sizes[13];
@@ -299,7 +555,7 @@ static struct Resource *new_resource(void)
 }
 static void update_common(struct Resource *r)
 {
-    uint32_t kind = r->type == RESOURCE_TEXTURE ? 0x40000 : r->type == RESOURCE_SURFACE ? 0x50000 : 0;
+    uint32_t kind = r->type == RESOURCE_TEXTURE ? 0x40000 : (r->type == RESOURCE_SURFACE || r->type == RESOURCE_DEPTH_SURFACE) ? 0x50000 : 0;
     write32(r->handle, 0x1000000 | kind | (r->references & 0xFFFF) | (r->bindings << 19));
 }
 static void release_resource(struct Resource *r)
@@ -608,6 +864,32 @@ void sub_00102580(void)
     }
     finish(12, (uint32_t)result);
 }
+
+void sub_001026F0(void) /* SetShaderConstantMode(mode), ret4; mode0 is fixed pipeline. */
+{
+    uint32_t mode=arg(0);
+    if (!s_device || !main_thread() || mode!=0) state_error(0x1026F0,mode);
+    /* The native fixed vertex shader owns its matrices/uniforms; it needs no
+     * NV2A constant-bank upload. Preserve the observed guest mode/dirty fields. */
+    write32(GUEST_DEVICE+8,read32(GUEST_DEVICE+8)&~0x200u);
+    write32(GUEST_DEVICE+0x2018,0);
+    write32(0x10EC10,read32(0x10EC10)|0x1600);
+    finish(4,0);
+}
+void sub_00102BB0(void) /* SetPixelShader(handle), ret4; NULL selects fixed texture stages. */
+{
+    uint32_t handle=arg(0);
+    if (!s_device || !main_thread() || handle!=0) state_error(0x102BB0,handle);
+    HRESULT result=s_device->lpVtbl->SetPixelShader(s_device,0);
+    if (result<0) state_error(0x102BB0,handle);
+    native_state(D3DRS_TEXTUREFACTOR,read32(0x10F01C));
+    write32(GUEST_DEVICE+0x370,0);
+    uint32_t dirty=0x4800;
+    if (read32(GUEST_DEVICE+0x374)) dirty|=0x2000;
+    write32(0x10EC10,read32(0x10EC10)|dirty);
+    finish(4,0);
+}
+
 void sub_00102940(void) /* SetVertexShader: even FVF codes vs odd program handles. */
 {
     uint32_t fvf = arg(0);
@@ -689,7 +971,62 @@ void sub_00101B20(void) /* DrawVertices(type,startVertex,vertexCount) */
 
 /* Xbox surfaces can refer to the live native drawable or to guest texture
  * storage. Framebuffer CopyRects always moves actual rendered pixels. */
-static uint32_t s_backbuffer_handle, s_frontbuffer_handle;
+static uint32_t s_backbuffer_handle, s_frontbuffer_handle, s_depthbuffer_handle;
+static HRESULT initialize_depth_surface(uint32_t format)
+{
+    /* Native SDL drawable has D24S8; the title requests its Xbox linear format. */
+    if (format!=0x2A) return D3DERR_INVALIDCALL;
+    struct Resource *r=new_resource(); if (!r) return (HRESULT)0x8007000E;
+    r->width=s_width; r->height=s_height; r->format=format; r->linear=1;
+    r->pitch=(s_width*4+63)&~63u; r->bytes=r->pitch*s_height;
+    r->handle=xbox_HeapAlloc(24,16); r->data=xbox_HeapAlloc(r->bytes,128);
+    if (!r->handle || !r->data) {
+        if (r->handle) xbox_HeapFree(r->handle); if (r->data) xbox_HeapFree(r->data);
+        memset(r,0,sizeof(*r)); return (HRESULT)0x8007000E;
+    }
+    r->type=RESOURCE_DEPTH_SURFACE; r->levels=1; r->bindings=1;
+    r->sizes[0]=r->bytes; r->pitches[0]=r->pitch;
+    update_common(r); write32(r->handle+4,r->data); write32(r->handle+8,0);
+    write32(r->handle+12,0x10021|(format<<8));
+    write32(r->handle+16,(r->width-1)|((r->height-1)<<12)|((r->pitch/64-1)<<24));
+    write32(r->handle+20,0); s_depthbuffer_handle=r->handle;
+    write32(GUEST_DEVICE+0x2074,r->handle);
+    return 0;
+}
+void sub_000FF830(void) /* GetDepthStencilSurface(out), ret4. */
+{
+    uint32_t out=arg(0);
+    if (!s_device || !main_thread() || !out) { finish(4,(uint32_t)D3DERR_INVALIDCALL); return; }
+    struct Resource *r=resource(read32(GUEST_DEVICE+0x2074));
+    write32(out,r?r->handle:0);
+    if (!r) { finish(4,0x88760866); return; } /* D3DERR_NOTFOUND, observed FF850. */
+    ++r->references; update_common(r); finish(4,0);
+}
+void sub_000FEF20(void) /* SetRenderTarget(color,depth), ret8. NULL color keeps current. */
+{
+    uint32_t color=arg(0),depth=arg(1);
+    if (!color) color=read32(GUEST_DEVICE+0x2070);
+    struct Resource *r=resource(color), *z=resource(depth);
+    if (!s_device || !main_thread() || !r || r->type!=RESOURCE_SURFACE || r->framebuffer!=GL_BACK ||
+        (depth && (!z || z->type!=RESOURCE_DEPTH_SURFACE || depth!=s_depthbuffer_handle))) {
+        fprintf(stderr,"[wrath graphics] unsupported SetRenderTarget color0x%X depth0x%X\n",color,depth);
+        finish(8,(uint32_t)D3DERR_INVALIDCALL); return;
+    }
+    /* This subset binds the actual window backbuffer and its real D24S8 storage.
+     * A null depth surface disables both tests and prevents subsequent clears
+     * from modifying the still physically present window depth attachment. */
+    glBindFramebuffer(GL_FRAMEBUFFER,0); glDrawBuffer(GL_BACK); glReadBuffer(GL_BACK);
+    write32(GUEST_DEVICE+0x2070,color); write32(GUEST_DEVICE+0x2074,depth);
+    s_depth_available=depth!=0;
+    native_state(D3DRS_ZENABLE,s_depth_available&&read32(0x10F008));
+    gl_toggle(GL_DEPTH_TEST,s_depth_available&&read32(0x10F008));
+    gl_toggle(GL_STENCIL_TEST,s_depth_available&&read32(0x10F00C));
+    s_viewport=(D3DVIEWPORT8){0,0,r->width,r->height,0,1};
+    s_device->lpVtbl->SetViewport(s_device,&s_viewport);
+    memcpy(guest_ptr(GUEST_VIEWPORT),&s_viewport,sizeof(s_viewport));
+    finish(8,0);
+}
+
 void sub_000FF450(void) /* GetBackBuffer(index,type,out), ret12 */
 {
     int32_t index = (int32_t)arg(0); uint32_t out = arg(2);
@@ -871,7 +1208,17 @@ recomp_func_t wrath_graphics_lookup(uint32_t address)
 {
     switch (address) {
     case 0x000FD6E0: return sub_000FD6E0;
+    case 0x000FD830: return sub_000FD830;
+    case 0x000FDAD0: return sub_000FDAD0;
+    case 0x000FDDF0: return sub_000FDDF0;
+    case 0x000FDF60: return sub_000FDF60;
+    case 0x000FDB40: return sub_000FDB40;
+    case 0x000FE5C0: return sub_000FE5C0;
+    case 0x000FE660: return sub_000FE660;
+    case 0x000FE6F0: return sub_000FE6F0;
     case 0x000FF450: return sub_000FF450;
+    case 0x000FF830: return sub_000FF830;
+    case 0x000FEF20: return sub_000FEF20;
     case 0x000FF580: return sub_000FF580;
     case 0x000FF860: return sub_000FF860;
     case 0x00100EA0: return sub_00100EA0;
@@ -888,6 +1235,8 @@ recomp_func_t wrath_graphics_lookup(uint32_t address)
     case 0x00100DD0: return sub_00100DD0;
     case 0x00102580: return sub_00102580;
     case 0x00102940: return sub_00102940;
+    case 0x001026F0: return sub_001026F0;
+    case 0x00102BB0: return sub_00102BB0;
     case 0x001019C0: return sub_001019C0;
     case 0x00101B20: return sub_00101B20;
     default: return NULL;
@@ -898,13 +1247,13 @@ recomp_func_t wrath_graphics_lookup(uint32_t address)
 /* Standalone native rendering/guest ABI test; no ISO or game assets needed. */
 #include <assert.h>
 #include <stdlib.h>
-_Thread_local uint32_t g_eax, g_esp;
+_Thread_local uint32_t g_eax, g_esp, g_ecx, g_edx;
 ptrdiff_t g_xbox_mem_offset;
 static uint32_t test_heap = 0x180000;
 uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
 {
     test_heap = (test_heap + alignment - 1) & ~(alignment - 1);
-    if (size > 0x200000 - test_heap) return 0;
+    if (size > 0x400000 - test_heap) return 0;
     uint32_t result = test_heap; test_heap += size; return result;
 }
 void xbox_HeapFree(uint32_t address) { (void)address; }
@@ -918,6 +1267,11 @@ static void call(uint32_t address, const uint32_t *args, unsigned n)
     function();
     assert(g_esp == 0x1000 + 4 + n * 4);
 }
+static void test_state(uint32_t method, uint32_t value)
+{
+    g_ecx=0x40000|method; g_edx=value; call(0xFD830,NULL,0);
+    assert(g_eax==0);
+}
 int main(void)
 {
     /* Independent decoder facts: Morton order and canonical BC endpoints. */
@@ -927,7 +1281,7 @@ int main(void)
     const uint8_t transparent[8] = {0,0,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
     assert(dxt_color(transparent, 0, 0x0C) == 0);
     assert(uncompressed_color(0x7E0, 5) == 0xFF00FF00);
-    void *memory = calloc(1, 0x200000);
+    void *memory = calloc(1, 0x400000);
     assert(memory);
     g_xbox_mem_offset = (ptrdiff_t)memory;
     GuestPresentation pp = {0};
@@ -939,6 +1293,22 @@ int main(void)
     call(0xFD6E0, create, 6);
     assert(g_eax == 0 && read32(0x3000) == GUEST_DEVICE);
     assert(read32(GUEST_DEVICE_GLOBAL) == GUEST_DEVICE);
+    uint32_t no_state[]={0}, z_on[]={1};
+    write32(GUEST_DEVICE+8,read32(GUEST_DEVICE+8)|0x200);
+    call(0x1026F0,no_state,1); assert(g_eax==0 && !(read32(GUEST_DEVICE+8)&0x200));
+    assert(read32(GUEST_DEVICE+0x2018)==0 && (read32(0x10EC10)&0x1600)==0x1600);
+    call(0x102BB0,no_state,1); assert(g_eax==0 && read32(GUEST_DEVICE+0x370)==0);
+    assert((read32(0x10EC10)&0x4800)==0x4800);
+    call(0xFDAD0,no_state,1); assert(read32(0x10F018)==0 && !glIsEnabled(GL_CULL_FACE));
+    call(0xFE5C0,z_on,1); assert(read32(0x10F008)==1 && glIsEnabled(GL_DEPTH_TEST));
+    call(0xFE5C0,no_state,1); assert(!glIsEnabled(GL_DEPTH_TEST));
+    test_state(0x304,0); assert(!glIsEnabled(GL_BLEND) && read32(0x10EE18+59*4)==0);
+    test_state(0x354,GL_LEQUAL);
+    test_state(0x35C,1);
+    test_state(0x300,0);
+    test_state(0x33C,GL_GREATER);
+    test_state(0x340,127); assert(read32(0x10EE18+61*4)==127);
+    test_state(0x358,0x1010101);
     uint32_t clear[] = {0, 0, 0xF3, 0xFF204080, 0x3F800000, 0};
     call(0x100EA0, clear, 6);
     assert(g_eax == 0);
@@ -1007,6 +1377,62 @@ int main(void)
     assert(pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255);
     ref[0] = vb; call(0x103AD0, ref, 1); stream[1] = 0; call(0x102580, stream, 3);
     assert(!resource(vb));
+    /* Guest SDK blend values are GL enums, unlike the host D3D API enums.
+     * Verify alpha blending through the actual native draw, not only caches. */
+    clear[0]=0; clear[1]=0; clear[2]=0xF0; clear[3]=0xFF000000;
+    call(0x100EA0,clear,6);
+    for (unsigned i=0;i<4;++i) vertices[i].color=0x80FF0000;
+    memcpy(guest_ptr(0x6000),vertices,sizeof(vertices));
+    test_state(0x344,GL_SRC_ALPHA); test_state(0x348,GL_ONE_MINUS_SRC_ALPHA);
+    test_state(0x304,1); test_state(0x350,GL_FUNC_ADD);
+    call(0x1019C0,draw,4); assert(g_eax==0);
+    glReadPixels(60,240-60,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+    assert(pixel[0]>=127 && pixel[0]<=129 && pixel[1]==0 && pixel[2]==0);
+    test_state(0x304,0);
+    /* Every alpha comparison must discard/retain real native fragments. */
+    test_state(0x300,1); test_state(0x340,128);
+    const int alpha_pass[3][8]={{0,0,0,0,1,1,1,1},{0,0,1,1,0,0,1,1},{0,1,0,1,0,1,0,1}};
+    for (unsigned reference=0;reference<3;++reference) {
+        test_state(0x340,127+reference);
+        for (unsigned comparison=0;comparison<8;++comparison) {
+            test_state(0x33C,GL_NEVER+comparison);
+            call(0x100EA0,clear,6); call(0x1019C0,draw,4); assert(g_eax==0);
+            glReadPixels(50,240-60,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+            assert(pixel[0]==(alpha_pass[reference][comparison]?255:0));
+        }
+    }
+    test_state(0x300,0);
+    uint32_t fill[]={GL_LINE}, coords[]={0,0};
+    call(0xFDF60,coords,2); assert(g_eax==0 && read32(0x10EC88)==0);
+    assert(*(uint8_t *)guest_ptr(0x1B11D1)==9);
+    call(0xFDDF0,fill,1); assert(read32(0x10EFF8)==GL_LINE);
+    call(0x100EA0,clear,6); call(0x1019C0,draw,4);
+    glReadPixels(50,240-60,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==0);
+    fill[0]=GL_FILL; call(0xFDDF0,fill,1); call(0x1019C0,draw,4);
+    glReadPixels(50,240-60,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==255);
+    /* Stencil fail operations write the actual native stencil attachment. */
+    clear[0]=0; clear[1]=0; clear[2]=0xF2; clear[3]=0xFF000000; clear[5]=0;
+    call(0x100EA0,clear,6);
+    call(0xFE660,z_on,1); assert(glIsEnabled(GL_STENCIL_TEST) && read32(0x10F00C)==1);
+    uint32_t stencil_op[]={GL_REPLACE}; call(0xFE6F0,stencil_op,1);
+    test_state(0x364,GL_NEVER); test_state(0x368,3); test_state(0x36C,255); test_state(0x360,255);
+    call(0x1019C0,draw,4);
+    glReadPixels(50,240-60,1,1,GL_STENCIL_INDEX,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==3);
+    glReadPixels(50,240-60,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==0);
+    stencil_op[0]=GL_KEEP; call(0xFE6F0,stencil_op,1); assert(read32(0x10F010)==GL_KEEP);
+    test_state(0x364,GL_EQUAL); call(0x1019C0,draw,4);
+    glReadPixels(50,240-60,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==255);
+    call(0xFE660,no_state,1); assert(!glIsEnabled(GL_STENCIL_TEST));
+    /* Flat color uses the primitive's first vertex; UVs still interpolate. */
+    vertices[1].color=0xFF00FF00; vertices[2].color=0xFF0000FF; vertices[3].color=0xFFFFFFFF;
+    memcpy(guest_ptr(0x6000),vertices,sizeof(vertices)); test_state(0x37C,GL_FLAT);
+    call(0x1019C0,draw,4);
+    glReadPixels(50,240-60,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+    assert(pixel[0]==255 && pixel[1]==0 && pixel[2]==0);
+    test_state(0x37C,GL_SMOOTH); call(0x1019C0,draw,4);
+    glReadPixels(50,240-60,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[1]>0 || pixel[2]>0);
+    for (unsigned i=0;i<4;++i) vertices[i].color=0x80FF0000;
+    memcpy(guest_ptr(0x6000),vertices,sizeof(vertices));
     /* Capture real framebuffer pixels into a guest texture surface, preserving
      * top/bottom orientation, then restore them through native framebuffer blit. */
     clear[0] = 0; clear[1] = 0; clear[2] = 0xF0; clear[3] = 0xFF102030;
@@ -1015,6 +1441,23 @@ int main(void)
     clear[0] = 1; clear[1] = 0x8000; clear[3] = 0xFFB04020; call(0x100EA0, clear, 6);
     uint32_t get_back[] = {0,0,0x8100}; call(0xFF450, get_back, 3); assert(g_eax == 0);
     uint32_t back = read32(0x8100); assert(read32(GUEST_DEVICE + 0x207C) == back);
+    uint32_t get_depth[]={0x8150}; call(0xFF830,get_depth,1); assert(g_eax==0);
+    uint32_t depth_handle=read32(0x8150); assert(resource(depth_handle)->type==RESOURCE_DEPTH_SURFACE);
+    uint32_t target[]={back,depth_handle}; call(0xFEF20,target,2); assert(g_eax==0);
+    call(0xFE5C0,z_on,1); test_state(0x354,GL_LEQUAL); test_state(0x35C,1);
+    clear[0]=0; clear[1]=0; clear[2]=0xF1; clear[3]=0xFF000000; clear[4]=0x3E800000;
+    call(0x100EA0,clear,6); call(0x1019C0,draw,4);
+    glReadPixels(50,240-60,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==0);
+    target[1]=0; call(0xFEF20,target,2); assert(g_eax==0 && !glIsEnabled(GL_DEPTH_TEST));
+    call(0xFF830,get_depth,1); assert(g_eax==0x88760866 && read32(0x8150)==0);
+    call(0x1019C0,draw,4);
+    glReadPixels(50,240-60,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==255);
+    target[1]=depth_handle; call(0xFEF20,target,2); assert(g_eax==0);
+    uint32_t depth_release[]={depth_handle}; call(0x103AD0,depth_release,1); assert(resource(depth_handle));
+    call(0xFE5C0,no_state,1);
+    /* Restore the capture pattern after the independent depth tests. */
+    clear[0]=0; clear[1]=0; clear[2]=0xF0; clear[3]=0xFF102030; call(0x100EA0,clear,6);
+    clear[0]=1; clear[1]=0x8000; clear[3]=0xFFB04020; call(0x100EA0,clear,6);
     uint32_t capture_texture_args[] = {16,8,1,0,0x12,0,0x8110};
     call(0xFE9C0, capture_texture_args, 7); assert(g_eax == 0);
     uint32_t capture_texture = read32(0x8110), capture_surface_args[] = {capture_texture,0,0x8120};
@@ -1040,14 +1483,35 @@ int main(void)
     assert(!resource(capture_surface) && !resource(capture_texture));
     ref[0] = back; call(0x103AD0, ref, 1); assert(g_eax == 0 && resource(back));
     uint32_t swap[] = {0};
+    GLuint capture_pbo; glGenBuffers(1,&capture_pbo); glBindBuffer(GL_PIXEL_PACK_BUFFER,capture_pbo);
+    glBufferData(GL_PIXEL_PACK_BUFFER,16,NULL,GL_STREAM_READ); glReadBuffer(GL_FRONT);
+    glPixelStorei(GL_PACK_ROW_LENGTH,17); glPixelStorei(GL_PACK_SKIP_ROWS,2);
+    glPixelStorei(GL_PACK_SKIP_PIXELS,3); glPixelStorei(GL_PACK_ALIGNMENT,8);
     call(0x100C40, swap, 1);
+    GLint capture_pack; glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING,&capture_pack); assert((GLuint)capture_pack==capture_pbo);
+    glGetIntegerv(GL_READ_BUFFER,&capture_pack); assert(capture_pack==GL_FRONT);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER,0); glDeleteBuffers(1,&capture_pbo); glReadBuffer(GL_BACK);
+    glGetIntegerv(GL_PACK_ROW_LENGTH,&capture_pack); assert(capture_pack==17);
+    glGetIntegerv(GL_PACK_SKIP_ROWS,&capture_pack); assert(capture_pack==2);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS,&capture_pack); assert(capture_pack==3);
+    glGetIntegerv(GL_PACK_ALIGNMENT,&capture_pack); assert(capture_pack==8);
+    glPixelStorei(GL_PACK_ROW_LENGTH,0); glPixelStorei(GL_PACK_SKIP_ROWS,0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS,0); glPixelStorei(GL_PACK_ALIGNMENT,4);
+    if (getenv("WRATH_CAPTURE_FRAME") && !strcmp(getenv("WRATH_CAPTURE_FRAME"),"1") && getenv("WRATH_CAPTURE_PATH")) {
+        SDL_Surface *bmp=SDL_LoadBMP(getenv("WRATH_CAPTURE_PATH")); assert(bmp && bmp->w==320 && bmp->h==240);
+        SDL_Surface *bgra=SDL_ConvertSurfaceFormat(bmp,SDL_PIXELFORMAT_BGRA32,0); assert(bgra);
+        uint32_t top,bottom; memcpy(&top,bgra->pixels,4);
+        memcpy(&bottom,(uint8_t *)bgra->pixels+7*bgra->pitch,4);
+        assert((top&0xFFFFFF)==0xB04020 && (bottom&0xFFFFFF)==0x102030);
+        SDL_FreeSurface(bgra); SDL_FreeSurface(bmp);
+    }
     assert(g_eax == 1 && read32(GUEST_SWAP_COUNT) == 1);
     swap[0] = 1;
     call(0x100C40, swap, 1);
     assert(g_eax == 1);
     assert(glGetError() == GL_NO_ERROR);
     assert(wrath_graphics_lookup(0xDEADBEEF) == NULL);
-    puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, framebuffer copies, swap");
+    puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     SDL_Quit();
     free(memory);
     return 0;

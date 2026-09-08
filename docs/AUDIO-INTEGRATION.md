@@ -1,10 +1,11 @@
 # Title-specific DirectSound integration — 2026-09-08
 
-Investigation only: no bridge source changes or game launches were made for this
-pass. The native SDL/CoreAudio output and APU software mixer work in focused
-checks, but **the existing DirectSound API cannot be used directly for this
-Xbox title**. Its normal startup creates Xbox ADPCM buffers, and its stream API
-returns success with a NULL object.
+The ABI findings below began as a read-only investigation. Native SDL/CoreAudio
+output, PCM16 and Xbox ADPCM buffers now pass focused tests; see [ADPCM.md](ADPCM.md).
+The backend supports 252 idle buffer objects with a separate 64-active-voice budget.
+Streams now return an explicit unsupported error. A title-specific guest bridge is
+still required: guest descriptors, objects and calling conventions cannot be passed
+directly to the native DirectSound API. No in-game sound has been verified.
 
 ## Confirmed public functions
 
@@ -79,9 +80,10 @@ positions/regions to PCM frames deliberately. Avoid decoding or retaining the
 whole disc; the game supplies buffer contents later through SetBufferData
 (`0x13755A`, game helper `0xB8DA0`; 3-argument stdcall / `ret 12`).
 
-## Existing implementation audit
+## Initial implementation audit (superseded for buffers)
 
-`third_party/xboxrecomp/src/audio/dsound_device.c` provides:
+Before the changes in [ADPCM.md](ADPCM.md),
+`third_party/xboxrecomp/src/audio/dsound_device.c` provided:
 
 - `xbox_DirectSoundCreate`, returning a host singleton device. It does **not**
   initialize `mcpx_apu_init_standalone`; an integration must create the actual
@@ -167,8 +169,8 @@ Use exact `sub_*` exports plus manual lookup for bindings: the current generated
 dispatch table references excluded/manual symbols directly. Validate descriptor
 packing, hundreds of idle objects without voice exhaustion, 64-sample ADPCM
 framing, real playback cursor advancement, bounded packet completion, and object
-shutdown with the existing lightweight audio tests. No such title-specific
-DirectSound bridge has been implemented or tested by this investigation.
+shutdown with the existing lightweight audio tests. The new `src/audio_bridge.c` is independently tested as described below; it has
+not been installed into the game dispatch/build by this subtask.
 
 Local evidence: `local/reports/scan_audio_signatures.py`,
 `audio-signature-matches.json`, `audio-signatures-xref-resolved.json`, downloaded
@@ -176,3 +178,172 @@ Local evidence: `local/reports/scan_audio_signatures.py`,
 DSOUND disassemblies. The refined signature report still contains candidates for
 ambiguous wrappers whose callee signature was unavailable: use the confirmed
 addresses above, not every report entry as a binding.
+
+## Native bridge handoff (not yet wired into game)
+
+`src/audio_bridge.c` exports `wrath_audio_lookup`, exact `sub_*` functions, and
+`wrath_audio_shutdown`. Device creation starts the real SDL/APU PCM producer and
+fails if no output backend becomes active. Buffer objects contain only 32-bit guest
+addresses and native-side associations: 16-byte device metadata, 32-byte buffer
+metadata, at most 512 live buffers, guest blocks reused after release. Native
+pointers are never copied into guest memory. These are opaque public API objects,
+not original internal Xbox SDK objects or COM vtables. Recompiled internal methods
+must never receive them. All public calls below must be excluded and dispatched
+together when constructors are installed.
+
+A scan of direct call/jump targets in the original game `.text` found these audio
+boundaries (the separate XWaveFileCreateMediaObject stays recompiled):
+
+| Address | Operation | Stack argument bytes | Bridge behavior |
+| --- | --- | --- | --- |
+| 137A06 | device create | 12 | native device, APU initialization |
+| 137A4D | buffer create | 8 | field-by-field descriptor/format translation |
+| 135BE8 | device release | 4 | reference/lifecycle accounting |
+| 135BFE | buffer release | 4 | release actual native buffer |
+| 13755A | buffer data | 12 | checked guest range, native owned copy/decode |
+| 136D21 | buffer format | 8 | transactional supported format/data revalidation and live source replacement |
+| 136664 | buffer play | 16 | native playback |
+| 136688 | buffer stop | 4 | native stop |
+| 13662C | buffer volume | 8 | native millibel volume |
+| 1366DC | buffer seek | 8 | compressed-byte to PCM-frame mapping |
+| 1366A0 | buffer status | 8 | actual producer state |
+| 1366BC | buffer cursors | 12 | actual producer cursor, serialized DWORD outputs |
+| 136702 | DoWork | 0 | reap actual completed buffer voices |
+| 136605 | effects image | 20 | E_NOTIMPL and NULL descriptor |
+| 137AA4 | output stream create | 8 | E_NOTIMPL and NULL stream |
+| 135C14 | full HRTF | 0 | void API, explicit unsupported diagnostic |
+| 136648 | buffer pitch | 8 | checked absolute pitch-to-native-rate conversion |
+| 136D3D | buffer max distance | 12 | E_NOTIMPL |
+| 136D61 | buffer min distance | 12 | E_NOTIMPL |
+| 136D85 | buffer position | 20 | E_NOTIMPL |
+| 136CED | headphone HRTF | 8 | E_NOTIMPL |
+| 136D09 | deferred spatial commit | 4 | E_NOTIMPL |
+| 137497 | listener orientation | 32 | E_NOTIMPL |
+| 1374E1 | listener position | 20 | E_NOTIMPL |
+| 137516 | listener rolloff | 12 | E_NOTIMPL |
+| 13753A | I3DL2 listener | 12 | E_NOTIMPL |
+| 1366F8 | stream volume | 8 | E_NOTIMPL |
+| 1366FD | stream pause | 8 | E_NOTIMPL |
+
+Additional ABI evidence: `136D21` adjusts the buffer by -0x1C and calls `136B8C`,
+which reaches `136A17`/`1368D0` and the wave-format copy at `138428`. Game `B8DA0`
+passes its sample's format at sample+8 immediately after SetBufferData succeeds.
+The native extension `xbox_DirectSoundBufferSetFormat` now validates and reconfigures
+owned data atomically, as described in the implementation update below. `1366F8` tail-jumps to `1365B3`, whose
+callee `135E7A` is the independently identified volume setter. `1366FD` tail-jumps
+to `13649E`; both terminal functions return with `ret 8`. The other argument widths
+are explicit `ret` immediates in the local DSOUND disassembly.
+
+Do not treat this handoff as safe completion of title sound. The initializer ignores
+the failed effects HRESULT and saves the NULL descriptor; later descriptor consumers
+still need auditing before broad gameplay. Real stream construction, output packet
+completion and spatial behavior remain unfinished. No unsupported
+native spatial stubs are called through this bridge, and no effects descriptors or
+stream objects are fabricated. The void HRTF call can only log the unsupported request.
+
+Root integration requires adding the new source, all 28 manual exclusions/dispatch
+bindings, and calling `wrath_audio_shutdown` after guest workers have stopped and
+before SDL/platform teardown. No root build/config/generated files were changed by
+this subtask. A mutex serializes bridge lifetime/lookup operations across title workers.
+
+Focused validation: `tools/test_audio_bridge.c` uses synthetic guest RAM and
+an SDL dummy output. It passed native device/APU lifecycle, 252 serialized objects,
+ADPCM playback/completion, stdcall stack cleanup, unchanged adjacent output DWORDs,
+compressed cursor mapping, invalid input ranges, explicit effects/stream errors and
+shutdown on 2026-09-08. `src/audio_bridge.c` separately passed a C11 compile with
+`-Wall -Wextra -Werror`. No title audio calls or audible in-game output were tested.
+
+Reproduce the bridge test after the native platform library exists:
+
+```sh
+clang -std=c11 -O1 -g -Ithird_party/xboxrecomp/src -Ithird_party/xboxrecomp/src/apu -Ithird_party/xboxrecomp/src/nv2a $(pkg-config --cflags sdl2) tools/test_audio_bridge.c third_party/xboxrecomp/src/audio/dsound_device.c third_party/xboxrecomp/src/audio/xbox_adpcm.c third_party/xboxrecomp/src/apu/apu_core.c third_party/xboxrecomp/src/apu/apu_vp.c third_party/xboxrecomp/src/apu/apu_dsp.c third_party/xboxrecomp/src/apu/apu_xaudio2.c build/native/third_party/xboxrecomp/src/platform/libplatform.a $(pkg-config --libs sdl2) -o build/test_audio_bridge
+./build/test_audio_bridge
+```
+
+`config/audio-functions.json` is the sorted, exact 28-address exclusion list; each
+address has a matching exported symbol in the bridge. Merge it with the complete
+manual-function list rather than replacing graphics/input/runtime entries.
+
+## Follow-up read-only audit: descriptor, SetFormat, pitch
+
+The sound manager's concrete address is `0x00427A58`: the startup wrapper at
+`0xEC960` loads that ECX value and tail-jumps to `0xB99D0`. The effect-image
+output slot is therefore `0x00427A60`. No absolute read or address-taking reference
+to `0x427A60` appears in the disassembled game `.text`. The sound-manager method
+region `0xB9100–0xBA200` has only two identified manager+8 operations: the output
+address at `0xB9A2D`, and constructor zeroing at `0xBA044`. Other +8 accesses in
+that region are buffer-array/sample/vector/stack fields, as shown by their base
+register initialization (e.g. `B9550` uses manager+0x7D20; `B98A0` iterates the
+buffer arrays). The destructor beginning `0xBA070` does not consume this field.
+
+This is evidence that the descriptor is stored but unused by the ordinary sound
+manager, not a proof against every indirect alias/control path. No NULL descriptor
+dereference was found. A hardware read watchpoint on native guest address
+`g_xbox_mem_offset + 0x427A60` after initialization would settle actual title-path
+usage once that stage runs. Keep E_NOTIMPL for effects; there is no need to invent
+a descriptor just to fill the unused slot.
+
+SetFormat `136D21` is further confirmed by its `138428` callee switching on format
+WORD+0 and selecting PCM tag1, Xbox ADPCM tag0x69 or extensible tag0xFFFE. Game
+`B8DA0` passes data/bytes from sample+0/+4, then format at sample+8. SetBufferData's
+HRESULT is checked, but SetFormat's result at `B8DED` is ignored; the helper then
+records sample ID at sample+0x1C and returns true. Thus explicit SetFormat failure
+avoids false success in the API, but does not make a changed-format sample play
+correctly. The real format values must be logged at that reached call or decoded
+from the sample loader; only the initialization format (mono22050 ADPCM) is proven.
+
+Pitch is **absolute hardware sample rate relative to 48 kHz**, not a multiplier
+on the original buffer rate. The title's bundled SDK proves the conversion:
+`135C3C` maps rate48000 to zero; otherwise it multiplies rate by the float at
+`0x16B6CC` (1/48000), then `13A340` executes `4096 * log2(ratio)` using FYL2X and
+integer rounding. The inverse for native rate is `48000 * 2^(pitch/4096)`.
+`13AA11` clamps the hardware value to -32767..8191 before packing it into the
+register's upper WORD; spatial/submix contributions are added before that clamp.
+
+The game's sole buffer-pitch wrapper `B9020` passes negative inputs directly. For
+nonnegative inputs p it computes `trunc(max(200-p, 0) * 0.01 * basePitch)`, with
+basePitch=-4608 when its stored buffer rate is22050, otherwise -512. The float at
+`0x15E3B0` is0.01; `7AF40` supplies the float-to-integer conversion. At p=100 this
+therefore requests approximately22008 Hz for the22050 case. The bridge now uses that absolute inverse and rejects pitch values outside
+-32767..8191. The full accepted interval maps to approximately188..191968 Hz,
+within the backend's100..192000 Hz range. It does not multiply22050 by the same
+ratio again.
+
+No source changes were made for this follow-up audit. Source remains frozen for
+parent integration; no audio call has yet been observed during a real game boot.
+
+
+## Implemented SetFormat and SetPitch
+
+`136D21` now marshals the format to the native `xbox_DirectSoundBufferSetFormat`
+extension; no host vtable order changes. The backend validates PCM16/Xbox ADPCM,
+mono/stereo, rate/block/header constraints and current owned bytes before changing
+anything. It reuses encoded storage. A rate-only change reuses decoded PCM; a
+codec/channel change decodes replacement PCM first. Allocation failure, malformed
+input, unsupported format, or an outstanding buffer Lock returns an error with the
+old buffer/source/voice unchanged. The test injects an allocation failure to verify
+this transaction rather than relying only on validation errors.
+
+For a playing buffer, `apu_mixer_set_source` swaps the source under the mixer lock,
+retaining its reserved slot, active/looping state and volume. Old decoded storage
+is freed only after that swap. A successful change resets frequency/original-frequency
+to the new format rate, as the bundled SDK does. Rate-only changes preserve the PCM
+frame cursor; changed block layouts map the current encoded byte position to a whole
+new block and reset to zero if beyond the new extent. No extra active voice is
+reserved. The small interval between cursor snapshot and source swap can repeat a
+few frames; streaming-quality seamless format changes are not claimed.
+
+`136648` now computes `round(48000 * exp2(pitch/4096))` and calls the actual native
+frequency method. It accepts signed pitch -32767..8191, checks the resulting native
+rate and rejects out-of-range values with E_INVALIDARG. Checked examples: pitch0
+→48000 Hz,4096→96000,-4096→24000,-4608→22008. The accepted endpoints round to188 and
+191968 Hz. Live voices update through the mixer lock.
+
+Tests now cover empty-buffer format changes; live mono PCM→stereo ADPCM→stereo PCM;
+golden decoded samples; unchanged encoded allocation and voice slot; rate-only PCM
+reuse; cursor conversion; original-frequency reset; locked/malformed/OOM rollback;
+and pitch sign, endpoints, absolute-rate semantics and invalid-input preservation.
+Both ordinary SDL-dummy tests and the memory-sanitized backend test passed. The
+sanitized run uses the actual APU/mixer with a test-only output sink to avoid SDL's
+pre-main dynamic-loader failure; it does not validate audible output. See ADPCM.md
+for its command. No additional manual addresses are needed for these changes.

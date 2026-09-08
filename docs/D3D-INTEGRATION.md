@@ -367,3 +367,329 @@ subtask.
 Observed result: `PASS: native GL, clears, guest ABI, texture/quad, vertex buffer,
 lifetime, framebuffer copies, swap`. This remains subsystem validation; actual
 menu/game behavior is owned by the main runtime integration effort.
+
+## Boot-08 render-state boundary (2026-09-08)
+
+Boot-08 reaches native CreateDevice640x480, then stalls in the original SDK
+pushbuffer replenishment loop. `local/reports/boot-08.log` and
+`boot-08-stack.log` show the live route `103740 -> FD830 -> 3A830 -> 9E860`.
+Saved ECX at guest stack `0x011DFE04` is `0x40304`; saved EDX at `0x011DFE08`
+is zero. Caller arguments at `0x011DFE1C/20` are state59,value0. Thus the first
+blocked operation is ALPHABLENDENABLE=false, not missing game rendering data.
+
+Four additional exact SDK entry points are exported in `src/graphics.c` and
+must be excluded from automatic lifting:
+
+| Address | SDK operation | Guest ABI |
+|---|---|---|
+| `0x000FD830` | SetRenderStateSimple | ECX=one-word NV097 method packet, EDX=value; bare ret |
+| `0x000FDAD0` | SetRenderState_CullMode | one DWORD; ret4 |
+| `0x000FDB40` | SetRenderState_FrontFace | one DWORD; ret4 |
+| `0x000FE5C0` | SetRenderState_ZEnable | one DWORD; ret4 |
+
+These identifications follow complete local instructions and caller evidence.
+`FD830` writes ECX and EDX into the pushbuffer, and on exhaustion saves both
+registers before calling `103740` at `FD84E`. It takes no guest stack arguments.
+Game wrapper `3A830` reads the method packet from `15AD48+state*4`, invokes it
+at `3A84F`, and mirrors value into `10EE18+state*4` at `3A854`. The SDK generic
+setter `FD860` follows the same convention. The bridge replaces the SDK boundary;
+the original compiled game wrapper and its state decisions still execute.
+
+The original XBE table confirms these state/method pairs (hex method only):
+
+```
+57:354 58:33C 59:304 60:300 61:340 62:344 63:348 64:35C 65:310
+66:37C 67:358 68:374 69:378 70:364 71:368 72:36C 73:360 74:350
+75:34C 76:9F8 77:384 78:388 79:330 80:334 81:338
+```
+
+Packet headers add `0x40000` (one parameter). NV097 names and enum encodings
+are corroborated by the pinned toolkit's
+[`nv2a_regs.h`](https://github.com/sp00nznet/xboxrecomp/blob/051a128df5ec27ef14f1ceaaead11c5457321eef/src/nv2a/nv2a_regs.h).
+Xbox comparison and blend-factor values use GL encodings; the host D3D API
+uses different ordinal enums. The bridge explicitly converts these, converts
+Xbox color mask bytes into native channel bits, mirrors the guest state cache,
+and applies actual native depth, blend, masks, dither, stencil functions/ops,
+blend equation/color and polygon-offset state. No pushbuffer cursor, GPU idle
+register or hardware acknowledgment is fabricated.
+
+`FDAD0` emits CULL_FACE_ENABLE method308, then method39C with GL_FRONT if
+its winding equals FrontFace, GL_BACK otherwise. It mirrors CullMode at10F018.
+CullMode accepts 0/GL_CW/GL_CCW and identifies the removed winding; native
+D3DCULL enums reproduce that result. `FDB40` mirrors FrontFace at10F014 and
+reapplies the current CullMode in the original SDK. The bridge retains this
+guest value; its native culled winding remains unchanged. `FE5C0` emits depth
+enable30C gated by depth-surface availability, mirrors at10F008 and has special
+W-buffer work when value2 is used. Current bridge supports 0/1 and gates actual
+native depth testing on the CreateDevice auto-depth setting; W-buffer stops.
+
+Limits are explicit: enabled alpha test requires fragment-shader discard, which
+the current upstream native shader does not implement. It aborts with method,
+value and guest return address, as do unknown method packets, flat shading,
+unsupported blend factors and W-buffer mode. This includes swath-width method9F8
+and shader-combiner states. Disabled alpha test and its cached function/reference
+are valid. The stencil fail/enable complex setters remain outside this subset;
+unbridged complex SDK entries may still reach hardware queue code. No upstream
+renderer source was changed in this step.
+
+Validation: production source compiles with `-Wall -Wextra -Werror`. The existing
+standalone ARM64 native graphics smoke test now calls these guest SDK boundaries,
+asserts exact stack consumption and guest cache values, verifies native depth/
+cull enablement, and draws 50%-alpha red over black using Xbox blend enums.
+Actual GL readback produces red127..129, green0, blue0, demonstrating the native
+renderer retained the translated blend state. Prior resource/copy/swap checks
+still pass. This is subsystem validation; no game title/menu is claimed here.
+
+## Boot-09 FillMode and initialization audit (2026-09-08)
+
+Boot-09 passes the initial blend, depth and cull setters. The next stalled call
+is FillMode(state120,value`0x1B02`) from game `9EB6E -> 3A8C1 -> FDDF0`, with
+saved return `FDE03` after the SDK pushbuffer exhaustion call. Added exclusions:
+
+| Address | SDK operation | Guest ABI |
+|---|---|---|
+| `0x000FDDF0` | SetRenderState_FillMode | GL_POINT/GL_LINE/GL_FILL DWORD; ret4 |
+| `0x000FDF60` | SetTextureStageState_TexCoordIndex | stage,value DWORDs; ret8 |
+
+FillMode local instructions emit consecutive front/back polygon mode methods
+`38C/390`, and mirror the requested mode at `10EFF8`. Back mode comes from
+`10EFFC` only when two-sided lighting `10F000` is enabled. Native GL core accepts
+one polygon mode for both faces, so the bridge faithfully supports common
+front/back modes and explicitly stops on distinct modes. It applies real
+`glPolygonMode` and translates GL enum values into native D3DFILL enum values.
+
+The full `9E860` audit finds FillMode is its last hardware-writing scalar setter.
+Its Material call `3A6E0 -> FEB50` copies68bytes into singleton+9F0 and dirties
+lighting state. Remaining state indices92,93,95,100,101,102,103 are deferred
+cache writes in the compiled `3A830`; they do not themselves submit commands.
+Their eventual shader/lighting semantics remain a separate rendering task.
+
+`A01A0` records ten material state blocks with the repeated pattern
+`3A780(BeginStateBlock) -> 9E860 -> AADE0 -> 3A7A0(EndStateBlock)`.
+SDK Begin `1012CC -> 101290` clears recording flags; End `10191E -> 1012DA`
+serializes changed guest states/material data into guest heap memory. These
+CPU routines remain compiled game-library code; no replacement success token
+is returned. The bridge's guest state mirrors preserve the recorded values.
+
+`AADE0` sets texture-stage state through wrapper `3AC60`. Most states are
+again deferred. The textured branch calls state28,value0 at`AAE5B`, which
+routes to hardware-writing SDK `FDF60`. Its code stores value at
+`10EC88+stage*128`, maps the explicit vertex attribute index at`1B11D1+stage`,
+updates generated-coordinate flags at singleton+454 and dirties bits47F.
+The new bridge supports stage0, explicit coordinate set0: the actual native
+FVF shader reads those UVs. It reproduces those guest mirrors and native
+D3DTSS_TEXCOORDINDEX cache. Generated coordinates and other coordinate/stage
+selections stop explicitly; they require additional vertex-stage semantics.
+
+### Native alpha test patch
+
+The previous section's alpha-test limitation is superseded by
+`patches/xboxrecomp-graphics.patch`. Static audit proves the same initializer
+will request enabled alpha testing: material bits are set to blend mode1 at
+`A0577` and `A0659`, then calls to`9E860` at`A05CB/A06AD` take its
+`9E997/9E999` alpha-enable1 path. This justified fixing the renderer before
+another full boot.
+
+The patch changes only pinned upstream `src/d3d/d3d8_gl.c` (22 added lines).
+It adds alpha-enable, comparison-function and reference uniforms, uploads
+native D3D render-state values before draws, and executes real fragment
+`discard` after texture/vertex-color modulation when the comparison fails.
+All eight D3DCMP predicates are supported, with 8-bit ALPHAREF normalized to
+0..1; default alpha testing remains disabled. The guest SDK simple-state
+bridge now forwards enabled alpha test to this implementation. Apply this
+patch after the other tracked runtime patches during bootstrap.
+
+Validation used a tiny separately compiled updated GL renderer object linked
+before the existing D3D archive, avoiding a full game build. Production bridge
+compiles with `-Wall -Wextra -Werror`. Standalone native smoke tests pass 24
+actual fragment-readback cases (all eight predicates, each with source alpha
+below/equal/above the reference), real wireframe-vs-fill pixel checks, explicit
+UV-set guest mirrors, and all earlier blend, resource, copy and swap tests.
+The archived renderer library was not changed by this test, so a normal parent
+build must pick up the patched source. These remain subsystem tests, not game
+menu verification.
+
+## Boot-10 actual render-target boundary (2026-09-08)
+
+The next stall after real asset reads is SetRenderTarget, not an indexed draw.
+`boot-10.log` has returnFF210 from original queue refill; exact native debugger
+stack and `boot-10-surfaces.log` confirm game39BE1 calls SDKFEF20. Added bridges:
+
+| Address | SDK operation | Guest ABI |
+|---|---|---|
+| `0x000FEF20` | SetRenderTarget | colorSurface,depthSurface; ret8 |
+| `0x000FF830` | GetDepthStencilSurface | outputPointer; ret4 |
+
+FEF20 reads color after48bytes local/saved stack atFEF2C, substitutes current
+singleton+2070 for null color, then consumes optional depth. Its original
+FF204..FF210 loop is where boot-10 stalls. FF427 invokes SetViewport with
+zero origin, clamped full-target dimensions and depth range0..1. These are
+API semantics carried into the bridge, without hardware queue execution.
+
+Actual debugger evidence: game1E3CC8 contains019E1030; depth1E3CCC and fallback
+1E8D60 are zero. Color header is
+`010D0001 019E1080 00000000 00011221 271DF27F 00000000`.
+Singleton2070/207C also contain019E1030;2074/2080 are zero. This is exactly
+our tracked linear640x480,2560-byte-pitch backbuffer. Local399F0 obtains it
+through native GetBackBufferFF450, then calls previously unbridged
+GetDepthStencilSurfaceFF830 twice. The missing depth pointer exposed a real
+CreateDevice compatibility gap despite native SDL auto-depth being present.
+
+CreateDevice now materializes the requested linear D24S8 guest surface header
+and retains it as a device-owned resource representing the native drawable's
+actual depth/stencil storage. Native pointers are never serialized. FF830
+returns the currently bound guest depth handle and increments external refs;
+with no depth bound it writes null and returns original observed
+D3DERR_NOTFOUND88760866. The guest data allocation is header backing storage,
+not a coherent CPU depth-buffer mapping: direct depth locking/readback remains
+outside the supported APIs.
+
+SetRenderTarget currently accepts the tracked native backbuffer and this native
+default depth resource or null. It actually binds GL framebuffer0/backbuffer,
+mirrors singleton2070/2074, resets native and guest viewport to full target,
+and enables depth/stencil according to the guest state cache and attachment
+availability. A null depth target disables both tests and excludes depth/stencil
+bits from subsequent clears, preserving the physically retained window depth
+attachment. The device-owned depth reference survives caller Release and
+binding changes. Texture/foreign render targets return an explicit diagnostic
+and INVALIDCALL; no unrelated surface is silently redirected to the window.
+
+Validation: production bridge compiles under `-Wall -Wextra -Werror`. Native
+smoke clears real depth to0.25, draws a quad at0.5 and confirms no color appears;
+detaching depth through the guest SetRenderTarget API makes that same quad
+visible. It verifies GetDepthStencilSurface returns NOTFOUND while detached,
+restores the depth handle and checks its retained lifetime. Existing fragment
+comparison, blend, fill, resources, framebuffer-copy and swap tests still pass.
+Only the tiny subsystem executable was built; no full game build by this subtask.
+
+## Boot-11 fixed pipeline selection (2026-09-08)
+
+Boot-11 advances past render-target binding and clear, then stalls at102738
+from398CA/B5AB6. The exact API is SetShaderConstantMode, not SetPixelShader.
+Added exclusions:
+
+| Address | SDK operation | Guest ABI |
+|---|---|---|
+| `0x001026F0` | SetShaderConstantMode | mode DWORD; ret4 |
+| `0x00102BB0` | SetPixelShader | handle DWORD; ret4 |
+
+The public generic3911
+[SetShaderConstantMode signature](https://github.com/Cxbx-Reloaded/XbSymbolDatabase/blob/20eced544726f5558c5a408458f38a086cc4e543/src/OOVPADatabase/D3D8/3911.inl)
+exactly matches local entry `mov eax,[esp+4]`, `test al,10`, device-global load,
+and `or ecx,200` at offset12. Local code maps input bit10 to device flags200,
+stores the remaining mode at singleton+2018, and uploads default NV2A fixed
+vertex-program constants when mode0 is selected. Game wrapper398C0 calls it.
+The native fixed vertex shader already owns the corresponding matrix/uniform
+pipeline; it needs no NV2A constant-bank packet. The bridge supports observed
+mode0, mirrors guest flags and mode, and marks dirty1600 like the original.
+Other modes stop explicitly until their constant-register semantics are needed.
+
+The immediately following game sequence calls398A0 with FVF152 and3ADD0 with
+zero. The former reaches existing SetVertexShader102940; the latter reaches
+actual SetPixelShader102BB0. This setter stores the shader handle at
+singleton+370. The null branch restores fixed texture-stage combination state,
+restores the cached texture factor and marks dirty4800 (plus2000 when prior
+shader texture dependencies require it). The bridge calls native SetPixelShader0,
+restores native texture-factor state and reproduces these guest mirrors.
+Nonzero Xbox shader objects require actual register-combiner translation and
+stop explicitly; none is silently accepted as the fixed shader.
+
+Validation: production bridge passes `-Wall -Wextra -Werror`. Tiny native smoke
+invokes both new guest APIs, asserts ret4 consumption, the mode/shader globals
+and dirty bits, then runs actual textured-quad, alpha-test, fill, blend, depth,
+resource and framebuffer-copy readbacks successfully. No additional upstream
+renderer changes or full game build were required.
+
+## Boot-12 stencil setup and screen-queue audit (2026-09-08)
+
+Boot-12 reaches9FFD0 and stalls atFE673 while requesting state125,value1.
+Two additional SDK exclusions are implemented:
+
+| Address | SDK operation | Guest ABI |
+|---|---|---|
+| `0x000FE660` | SetRenderState_StencilEnable | DWORD boolean; ret4 |
+| `0x000FE6F0` | SetRenderState_StencilFail | GL stencil-op enum; ret4 |
+
+FE660 writes NV097 STENCIL_TEST_ENABLE32C, gated on a non-null bound depth
+surface at singleton2074, then mirrors value at10F00C. FE6F0 writes
+STENCIL_OP_FAIL370 and mirrors at10F010. Both originally also recompute
+NV2A early-depth-test optimizations through method1D84; the native graphics
+driver owns that optimization. The bridge implements actual GL stencil tests
+and fail operations and preserves the guest values; no NV2A idle/status reply
+is fabricated.
+
+The complete9FFD0 screen-queue sequence initializes alpha reference0,
+stencil enable1, stencil functionALWAYS, depth-failKEEP, stencil-failKEEP,
+reference1 and read/write masksFFFFFFFF. Every scalar boundary is now bridged.
+Per queue-item branches use stencil-passREPLACE, INCR_WRAP, DECR_WRAP orZERO,
+plus cull direction and blend factors already covered by the simple-state
+bridge. The end resets smooth shading and stencil enable0. Lighting states
+92/103 remain deferred guest cache writes and need later fixed-lighting work.
+
+Queue types2/3 conditionally request SHADEMODE_FLAT atA0090. The existing
+`patches/xboxrecomp-graphics.patch` now additionally gives the native fixed
+vertex shader a flat color output; the fragment shader selects flat or smooth
+color from the actual render-state cache while UVs continue interpolating.
+GL uses the first-vertex convention, matching documented Direct3D
+[flat shading semantics](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/bb153356(v=vs.85)).
+The previous explicit flat-shading limitation is superseded. Shader programs
+and unsupported fixed-lighting/texture-stage combinations remain outside this
+small renderer extension.
+
+Tiny native smoke tests verify an actual stencil-failing fragment writes
+reference3 through REPLACE while leaving its color black, then a matching
+EQUAL stencil test permits the same red geometry. They check guest stencil
+mirrors and disablement. Another real draw gives the first vertex red and
+other vertices differing colors: flat mode reads pure red inside the quad,
+smooth mode reads interpolated color. All previous subsystem tests and the
+production `-Wall -Wextra -Werror` compile pass. No full game build was run.
+
+## Opt-in native frame capture (2026-09-08)
+
+The existing native Swap bridge accepts two diagnostic environment variables:
+
+```
+WRATH_CAPTURE_FRAME=1
+WRATH_CAPTURE_PATH=/absolute/path/to/frame.bmp
+```
+
+Frame numbering is one-based and counts actual native presentation submissions,
+matching guest swap-count increments. Immediately before the requested Swap,
+the bridge reads the real default-framebuffer GL_BACK pixels and writes that
+single image as BMP. It flips native GL bottom-up rows into top-down image rows,
+logs the exact count/dimensions/path, and releases its temporary buffers. It
+never creates replacement game imagery. Capture is disabled by default; malformed
+configuration reports once and is ignored. No new lifted-function exclusions
+or upstream patch changes are needed.
+
+The capture restores read framebuffer, read buffer, pixel-pack buffer, alignment,
+row length, skipped rows and skipped pixels. The native game and render loop
+continue normally after writing. File extension does not select a codec: output
+is always BMP. Choose an ignored path under local/reports for actual game frames.
+
+Standalone validation saved/reloaded `build/input/frame-smoke.bmp`, verified
+exact top/bottom pixel orientation and dimensions, and retained GL_FRONT read
+selection, an intentionally undersized bound pack PBO, nonzero row/skip values
+and nondefault pack alignment. All prior native graphics assertions and the
+production `-Wall -Wextra -Werror` compile pass. This test BMP contains only
+subsystem test geometry; it is not evidence of original game rendering.
+
+## First logo visual audit (in progress)
+
+The actual native frame-15 capture reaches the original game's Universal logo,
+but its dark background/bright outlines differ from the raw source. The original
+`0x875A0` loads `Crashdat/Gfx/copyr1.raw` through string VA `0x162EA0`; this is a
+512×512 RGB24/BGR24 payload (786432 bytes), with 239487 of 262144 pixels pure white
+and a predominantly dark filled logo. The similarly named BMP is not the source
+for this particular path. `local/reports/copyr1-raw-rgb.png` is an ignored lossless
+diagnostic decode, not game-output evidence or a substitute render.
+
+The descriptor type-2 route in `0x3CFE0` converts each source pixel to opaque
+ARGB, normalizes it, calls the original D3DX saturation helper `0x10F661` with
+saturation 1, clamps channels and repacks bytes through `0x7AF40`. An isolated
+native harness extracting the exact generated statements `0x3D324–0x3D529` and
+both helper bodies, with constants copied from this XBE, reproduces all 256
+grayscale inputs exactly, including 255 → FFFFFFFF. This rules out that initial
+conversion sequence in isolation. The remaining diagnosis requires comparing
+the post-D3DX guest texture and active draw state against the actual framebuffer;
+no corrective renderer change has been justified yet.

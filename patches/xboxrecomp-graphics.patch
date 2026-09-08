@@ -1,0 +1,93 @@
+diff --git a/src/d3d/d3d8_gl.c b/src/d3d/d3d8_gl.c
+index 7888785..8b79604 100644
+--- a/src/d3d/d3d8_gl.c
++++ b/src/d3d/d3d8_gl.c
+@@ -99,6 +99,7 @@ typedef struct {
+     GLint            u_use_tex;
+     GLint            u_use_xform;
+     GLint            u_tex0;
++    GLint            u_alpha_enable, u_alpha_func, u_alpha_ref, u_flat_shade;
+ } D3DGL;
+ 
+ static D3DGL g;
+@@ -181,6 +182,7 @@ static const char *VS_SRC =
+     "uniform mat4 u_mvp;\n"
+     "uniform int  u_use_xform;\n"
+     "out vec4 v_color;\n"
++    "flat out vec4 v_flat_color;\n"
+     "out vec2 v_uv;\n"
+     "void main() {\n"
+     "  if (u_use_xform != 0) {\n"
+@@ -191,19 +193,34 @@ static const char *VS_SRC =
+     "    gl_Position = a_pos;\n"
+     "  }\n"
+     "  v_color = a_color;\n"
++    "  v_flat_color = a_color;\n"
+     "  v_uv    = a_uv;\n"
+     "}\n";
+ 
+ static const char *FS_SRC =
+     "#version 330 core\n"
+     "in  vec4 v_color;\n"
++    "flat in vec4 v_flat_color;\n"
++    "uniform int u_flat_shade;\n"
+     "in  vec2 v_uv;\n"
+     "uniform int       u_use_tex;\n"
+     "uniform sampler2D u_tex0;\n"
++    "uniform int u_alpha_enable, u_alpha_func;\n"
++    "uniform float u_alpha_ref;\n"
+     "out vec4 frag_color;\n"
+     "void main() {\n"
+-    "  vec4 c = v_color;\n"
++    "  vec4 c = u_flat_shade != 0 ? v_flat_color : v_color;\n"
+     "  if (u_use_tex != 0) c *= texture(u_tex0, v_uv);\n"
++    "  if (u_alpha_enable != 0) {\n"
++    "    bool pass = u_alpha_func == 8 ||\n"
++    "      (u_alpha_func == 2 && c.a <  u_alpha_ref) ||\n"
++    "      (u_alpha_func == 3 && c.a == u_alpha_ref) ||\n"
++    "      (u_alpha_func == 4 && c.a <= u_alpha_ref) ||\n"
++    "      (u_alpha_func == 5 && c.a >  u_alpha_ref) ||\n"
++    "      (u_alpha_func == 6 && c.a != u_alpha_ref) ||\n"
++    "      (u_alpha_func == 7 && c.a >= u_alpha_ref);\n"
++    "    if (!pass) discard;\n"
++    "  }\n"
+     "  frag_color = c;\n"
+     "}\n";
+ 
+@@ -267,6 +284,10 @@ static void init_gl_pipeline(void)
+     g.u_use_tex   = glGetUniformLocation(g.prog, "u_use_tex");
+     g.u_use_xform = glGetUniformLocation(g.prog, "u_use_xform");
+     g.u_tex0      = glGetUniformLocation(g.prog, "u_tex0");
++    g.u_flat_shade = glGetUniformLocation(g.prog, "u_flat_shade");
++    g.u_alpha_enable = glGetUniformLocation(g.prog, "u_alpha_enable");
++    g.u_alpha_func = glGetUniformLocation(g.prog, "u_alpha_func");
++    g.u_alpha_ref = glGetUniformLocation(g.prog, "u_alpha_ref");
+ }
+ 
+ /* ======================================================================== */
+@@ -714,6 +735,11 @@ static void bind_texture0(void)
+     }
+     glUniform1i(g.u_tex0, 0);
+     glUniform1i(g.u_use_tex, use_tex);
++    glUniform1i(g.u_flat_shade, g.rs[D3DRS_SHADEMODE] == 1);
++    glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
++    glUniform1i(g.u_alpha_enable, g.rs[D3DRS_ALPHATESTENABLE] != 0);
++    glUniform1i(g.u_alpha_func, g.rs[D3DRS_ALPHAFUNC]);
++    glUniform1f(g.u_alpha_ref, (g.rs[D3DRS_ALPHAREF] & 255) / 255.0f);
+ }
+ 
+ static void update_mvp(DWORD fvf)
+@@ -1018,9 +1044,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+     mat4_identity(&g.m_view);
+     mat4_identity(&g.m_proj);
+     g.rs[D3DRS_ZENABLE]            = 1;
++    g.rs[D3DRS_SHADEMODE]          = 2;
+     g.rs[D3DRS_ZWRITEENABLE]       = 1;
+     g.rs[D3DRS_ZFUNC]              = D3DCMP_LESSEQUAL;
+     g.rs[D3DRS_ALPHABLENDENABLE]   = 0;
++    g.rs[D3DRS_ALPHATESTENABLE]    = 0;
++    g.rs[D3DRS_ALPHAFUNC]          = D3DCMP_ALWAYS;
++    g.rs[D3DRS_ALPHAREF]           = 0;
+     g.rs[D3DRS_SRCBLEND]           = D3DBLEND_SRCALPHA;
+     g.rs[D3DRS_DESTBLEND]          = D3DBLEND_INVSRCALPHA;
+     g.rs[D3DRS_CULLMODE]           = D3DCULL_CCW;
