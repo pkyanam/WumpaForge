@@ -53,6 +53,21 @@ static void test_mixed_shader_bridge(void)
     uint8_t pixel[4]; glReadPixels(60, 240 - 60, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
     const unsigned expected[4] = {96, 64, 160, 128};
     for (unsigned i = 0; i < 4; ++i) assert(abs((int)pixel[i] - (int)expected[i]) <= 1);
+    /* The original SDK replaces only the portion using an absent texture.
+     * Stage0 passes diffuse; stage1 passes CURRENT and does not end the cascade. */
+    const unsigned missing_expected[3][4]={{192,96,207,128},{32,32,144,128},{128,64,191,128}};
+    for(unsigned missing=1;missing<=3;++missing) {
+        for(unsigned stage=0;stage<2;++stage) {
+            uint32_t bind[]={stage,(missing&(1u<<stage))?0:textures[stage]};call(0xFFC90,bind,2);
+        }
+        call(0x1019C0,draw,4);assert(g_eax==0);
+        glReadPixels(60,180,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+        for(unsigned c=0;c<4;++c)assert(abs((int)pixel[c]-(int)missing_expected[missing-1][c])<=1);
+    }
+    for(unsigned stage=0;stage<2;++stage) {uint32_t bind[]={stage,textures[stage]};call(0xFFC90,bind,2);}
+    call(0x1019C0,draw,4);assert(g_eax==0);
+    glReadPixels(60,180,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+    for(unsigned c=0;c<4;++c)assert(abs((int)pixel[c]-(int)expected[c])<=1);
     /* Texture-factor-only variant then changes its uniform without compiling a
      * new program. A stale previously bound programmed-pixel definition fails. */
     stages[0][12] = stages[0][16] = 2; stages[0][14] = stages[0][18] = 3;
@@ -71,5 +86,5 @@ static void test_mixed_shader_bridge(void)
     uint32_t fvf[] = {D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1}; call(0x102940, fvf, 1);
     memcpy(guest_ptr(0x10EC18), old_stages, sizeof(old_stages)); write32(0x10F01C, old_factor);
     assert(glGetError() == GL_NO_ERROR);
-    puts("PASS: programmed vertex + actual fixed texture-stage equations, preserved alpha, live factor uniforms and program cache reuse");
+    puts("PASS: programmed vertex + actual fixed texture-stage equations, null texture diffuse/CURRENT passthrough and rebind, preserved alpha, live factor uniforms and program cache reuse");
 }

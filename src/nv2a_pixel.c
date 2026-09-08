@@ -74,7 +74,11 @@ static int fixed_argument(unsigned stage, unsigned value, int alpha,
 {
     static const unsigned regs[6] = {4, 12, 0, 1, 5, 13};
     unsigned source = value & 15;
-    if ((value & ~0x3fu) || source > 5 || (source == 2 && !dimensions[stage])) return 0;
+    if ((value & ~0x3fu) || source > 5) return 0;
+    /* Original10A91D..10A930 returns an all-ones sentinel for a missing
+     * texture. Keep it distinct from an invalid argument:10AD7E replaces the
+     * entire input equation with diffuse/CURRENT, preserving output mapping. */
+    if (source == 2 && !dimensions[stage]) { *byte = 0xff; return 1; }
     *byte = source == 2 ? 8 + stage : regs[source];
     if (alpha || (value & 0x20)) *byte |= 0x10;
     if (value & 0x10) *byte |= 0x20;
@@ -97,6 +101,8 @@ static int fixed_portion(unsigned stage, unsigned op, unsigned arg1, unsigned ar
     if (op == 2 || op == 3) *inputs = ((op == 2 ? a : b) << 24) | 0x00200000u;
     else if (op >= 4 && op <= 6) *inputs = (a << 24) | (b << 16);
     else *inputs = (a << 24) | 0x00200000u | (b << 8) | (op == 10 ? 0x40u : 0x20u);
+    if (a == 0xff || b == 0xff)
+        *inputs = ((stage ? 12u : 4u) | (alpha ? 0x10u : 0u)) << 24 | 0x00200000u;
     *outputs = (dst << 8) | mapping;
     return 1;
 }

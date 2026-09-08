@@ -86,7 +86,14 @@ int main(int argc,char **argv)
  assert(nv2a_pixel_fixed_definition(fixed,dimensions,0xff4080c0,&lowered,error,sizeof(error)));
  const float factor[4]={.2f*64/255,.3f*128/255,.25f*192/255,.8};draw(&lowered,texels,NULL,factor);
  fixed[0][11]=1;assert(!nv2a_pixel_fixed_definition(fixed,dimensions,0,&lowered,error,sizeof(error)));
- fixed[0][11]=0;dimensions[0]=0;assert(!nv2a_pixel_fixed_definition(fixed,dimensions,0,&lowered,error,sizeof(error)));
+ fixed[0][11]=0;dimensions[0]=0;
+ assert(nv2a_pixel_fixed_definition(fixed,dimensions,0,&lowered,error,sizeof(error)));
+ draw(&lowered,texels,NULL,diffuse);
+ /* RGB null fallback must not replace independent alpha or output scaling. */
+ fixed[0][12]=5;fixed[0][16]=2;fixed[0][18]=3;
+ assert(nv2a_pixel_fixed_definition(fixed,dimensions,0x40201008,&lowered,error,sizeof(error)));
+ const float null_scaled[4]={1,1,1,64/255.0f};draw(&lowered,texels,NULL,null_scaled);
+ fixed[0][14]=0x42;assert(!nv2a_pixel_fixed_definition(fixed,dimensions,0,&lowered,error,sizeof(error)));
  puts("PASS: fixed pixel modulation/add/preserved alpha, disabled stages, independent arguments/factor and explicit invalid-state rejection");
  Nv2aPixelDef d=copy_texture();draw(&d,texels,NULL,texels[0]);
  opts.fog_enabled=1;float fogged[4]={0.2,0.225,0.2125,0.75};draw(&d,texels,NULL,fogged);opts.fog_enabled=0;
