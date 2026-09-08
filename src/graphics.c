@@ -103,6 +103,8 @@ static int window_thread(void)
 #endif
 }
 
+#include "graphics_timing_probe.inc"
+
 /* HRESULT WINAPI Direct3D_CreateDevice(adapter,type,window,flags,pp,out). */
 void sub_000FD6E0(void)
 {
@@ -581,6 +583,7 @@ void sub_00100C40(void)
     /* Bit 2 submits a new swap; flag-only wait operations do not present. */
     if (flags & 4) {
         capture_frame(read32(GUEST_SWAP_COUNT)+1);
+        uint64_t profile_start=wrath_profile_present_begin();
         HRESULT result = s_device->lpVtbl->Swap(s_device, flags);
         if (result < 0) {
             finish(4, (uint32_t)result);
@@ -588,6 +591,7 @@ void sub_00100C40(void)
         }
         write32(GUEST_SWAP_COUNT, read32(GUEST_SWAP_COUNT) + 1);
         wrath_vblank_notify_swap();
+        wrath_profile_present_end(profile_start);
     }
     finish(4, read32(GUEST_SWAP_COUNT));
 }
@@ -764,6 +768,7 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
         }
     }
     if (!r->dirty) return 0;
+    uint64_t profile_start=wrath_profile_begin(),profile_bytes=0;
     uint32_t *pixels = malloc((size_t)r->width * r->height * 4);
     if (!pixels) return (HRESULT)0x8007000E;
     GLint old_texture, old_unpack, old_alignment, old_row, old_rows, old_columns, old_swap;
@@ -783,6 +788,7 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
     for (unsigned face = 0; face < faces; ++face) for (unsigned level = 0; level < r->levels; ++level) {
         uint32_t width = r->width >> level, height = r->height >> level;
         if (!width) width = 1; if (!height) height = 1;
+        profile_bytes+=(uint64_t)width*height*4;
         const uint8_t *source = guest_ptr(r->data + face * r->face_stride + r->offsets[level]);
         for (unsigned y = 0; y < height; ++y) for (unsigned x = 0; x < width; ++x) {
             uint32_t color;
@@ -820,6 +826,7 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
         fprintf(stderr, "[wrath graphics] texture upload failed GL0x%X\n", error);
         return D3DERR_INVALIDCALL;
     }
+    wrath_profile_upload(profile_start,profile_bytes);
     r->dirty = 0; return 0;
 }
 static HRESULT upload_cube_texture(struct Resource *r)
@@ -1102,6 +1109,7 @@ void sub_000FFC90(void)
         finish(8, (uint32_t)D3DERR_INVALIDCALL); return;
     }
     HRESULT result = 0;
+    wrath_profile_bind(handle,s_texture_handles[stage]);
     if (r) { r->dirty = 1; if (r->format != 0x0B) result = r->type==RESOURCE_CUBE_TEXTURE ? upload_cube_texture(r) : upload_texture(r); }
     if (result >= 0) result = s_device->lpVtbl->SetTexture(s_device, stage,
                                    r && r->type==RESOURCE_TEXTURE ? (IDirect3DBaseTexture8 *)r->texture : NULL);
@@ -1140,10 +1148,19 @@ void sub_00100DD0(void) /* VertexBuffer_Lock(buffer,offset,size,out,flags) */
     }
     write32(out, r->data + offset); finish(20, 0);
 }
+static void trace_stream_binding(uint32_t stream, uint32_t handle, uint32_t stride, HRESULT result)
+{
+    static unsigned traced;
+    if (!stream || traced>=32 || !getenv("WRATH_TRACE_STREAMS")) return;
+    ++traced;
+    fprintf(stderr,"[wrath streams] bind%u stream%u handle0x%X stride%u result0x%X caller0x%X swaps%u\n",
+            traced,stream,handle,stride,(unsigned)result,read32(g_esp),read32(GUEST_SWAP_COUNT));
+}
 void sub_00102580(void)
 {
     uint32_t stream = arg(0), handle = arg(1), stride = arg(2); struct Resource *r = resource(handle);
     if (!s_device || stream != 0 || (handle && (!r || r->type != RESOURCE_VERTEX_BUFFER || !stride))) {
+        trace_stream_binding(stream,handle,stride,D3DERR_INVALIDCALL);
         finish(12, (uint32_t)D3DERR_INVALIDCALL); return;
     }
     HRESULT result = s_device->lpVtbl->SetStreamSource(s_device, 0, r ? r->vertex_buffer : NULL, stride);
@@ -1157,6 +1174,7 @@ void sub_00102580(void)
         write32(0x10F280, stride); write32(0x10F288, handle);
         write32(0x10EC10, read32(0x10EC10) | 0x70);
     }
+    trace_stream_binding(stream,handle,stride,result);
     finish(12, (uint32_t)result);
 }
 
@@ -1222,6 +1240,7 @@ static void apply_fixed_transforms(void)
 
 static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *vertices, uint32_t stride)
 {
+    wrath_profile_draw((uint64_t)count*stride);
     if (!count) return 0;
     if (!s_device || !graphics_thread() || !vertices || !stride || stride > 1024 || count > 1024 * 1024 || (uint64_t)count * stride > 64 * 1024 * 1024 || !s_fvf)
         return D3DERR_INVALIDCALL;

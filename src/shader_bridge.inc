@@ -201,8 +201,20 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
         glDisableVertexAttribArray(i); glVertexAttrib4f(i,0,0,0,1);
         if (!(p->vertex.input_mask&(1u<<i))) continue;
         Nv2aVertexSlot *slot=&s_vertex_object.slots[i];
-        if (slot->stream || slot->offset>stride || slot->byte_count>stride-slot->offset || slot->tessellation_type)
+        if (slot->stream || slot->offset>stride || slot->byte_count>stride-slot->offset || slot->tessellation_type) {
+            if (getenv("WRATH_TRACE_STREAMS")) {
+                fprintf(stderr,"[wrath streams] error slot%u stream%u offset%u format0x%X bytes%u stride%u primary0x%X inputmask0x%X c122=(%.9g,%.9g,%.9g,%.9g) c114=(%.9g,%.9g,%.9g,%.9g)\n",
+                        i,slot->stream,slot->offset,slot->format,slot->byte_count,stride,s_stream_handle,p->vertex.input_mask,
+                        s_vertex_constants[122][0],s_vertex_constants[122][1],s_vertex_constants[122][2],s_vertex_constants[122][3],
+                        s_vertex_constants[114][0],s_vertex_constants[114][1],s_vertex_constants[114][2],s_vertex_constants[114][3]);
+                for (unsigned stream=0;stream<16;++stream) {
+                    uint32_t address=0x10F280+12*stream;
+                    fprintf(stderr,"[wrath streams] guest%u stride%u offset%u handle0x%X\n",
+                            stream,read32(address),read32(address+4),read32(address+8));
+                }
+            }
             shader_error("vertex stream","unsupported stream/stride/tessellation");
+        }
         GLenum type; GLint components=slot->components; GLboolean normalize=slot->normalized;
         switch(slot->kind) {
         case NV2A_VERTEX_FLOAT32:type=GL_FLOAT;break;

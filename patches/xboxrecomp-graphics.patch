@@ -13,7 +13,7 @@ index f1b3606..4f014dc 100644
  
  target_include_directories(xbox_d3d8 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 diff --git a/src/d3d/d3d8_gl.c b/src/d3d/d3d8_gl.c
-index 7888785..50dd1ad 100644
+index 7888785..c4c84a2 100644
 --- a/src/d3d/d3d8_gl.c
 +++ b/src/d3d/d3d8_gl.c
 @@ -31,6 +31,12 @@
@@ -225,7 +225,39 @@ index 7888785..50dd1ad 100644
  static const IDirect3DTexture8Vtbl g_tex_vtbl = {
      tex_QueryInterface, tex_AddRef, tex_Release,
      tex_GetDevice, tex_SetPriority, tex_GetPriority, tex_PreLoad, tex_GetType,
-@@ -548,15 +695,15 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *s, const RECT *src, const
+@@ -544,19 +691,52 @@ static HRESULT __stdcall dev_GetCreationParameters(IDirect3DDevice8 *s, void *pP
+ static HRESULT __stdcall dev_Reset(IDirect3DDevice8 *s, D3DPRESENT_PARAMETERS *pPP)
+ { (void)s;(void)pPP; return D3D_OK; }
+ 
++/* Optional timing uses CPU clocks only: never forces GPU completion. The
++ * existing device lock protects counters; keep main and loading-worker windows
++ * separate. Report once per60 presents, not once per draw. */
++static int profile_present_enabled(void)
++{
++    static int enabled=-1;
++    if (enabled<0) { const char *v=getenv("WRATH_PROFILE"); enabled=v&&!strcmp(v,"1"); }
++    return enabled;
++}
++static void profile_present(uint64_t start,uint64_t swap_end,uint64_t pace_end,uint64_t end)
++{
++    static struct { unsigned n; uint64_t driver,pace,pump,maximum; } frames[2];
++    unsigned index=0;
++#ifdef __APPLE__
++    index=!pthread_main_np();
++#endif
++    frames[index].driver+=swap_end-start;
++    frames[index].pace+=pace_end-swap_end;
++    frames[index].pump+=end-pace_end;
++    if(end-start>frames[index].maximum) frames[index].maximum=end-start;
++    if(++frames[index].n==60) {
++        fprintf(stderr,"[wrath present profile] thread=%s driver_ms=%.3f pace_ms=%.3f pump_ms=%.3f max_present_ms=%.3f\n",
++            index?"worker":"main",frames[index].driver/60e6,frames[index].pace/60e6,
++            frames[index].pump/60e6,frames[index].maximum/1e6);
++        memset(&frames[index],0,sizeof(frames[index]));
++    }
++}
++
+ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *s, const RECT *src, const RECT *dst,
                                       HWND hwnd, void *dirty)
  {
      (void)s;(void)src;(void)dst;(void)hwnd;(void)dirty;
@@ -238,6 +270,8 @@ index 7888785..50dd1ad 100644
 -            fprintf(stderr, "[d3d8_gl] window close requested\n");
 -        }
 -    }
++    int profiling=profile_present_enabled();
++    uint64_t profile_start=profiling?monotonic_ns():0;
 +#ifdef __APPLE__
 +    if (!pthread_main_np()) {
 +        if (!g_cgl || CGLFlushDrawable(g_cgl) != kCGLNoError)
@@ -245,12 +279,15 @@ index 7888785..50dd1ad 100644
 +    } else
 +#endif
 +        SDL_GL_SwapWindow(g.window);
++    uint64_t swap_end=profiling?monotonic_ns():0;
 +    pace_present();
++    uint64_t pace_end=profiling?monotonic_ns():0;
 +    xbox_D3D8GLPumpEvents();
++    if(profiling) profile_present(profile_start,swap_end,pace_end,monotonic_ns());
      return D3D_OK;
  }
  
-@@ -714,6 +861,11 @@ static void bind_texture0(void)
+@@ -714,6 +894,11 @@ static void bind_texture0(void)
      }
      glUniform1i(g.u_tex0, 0);
      glUniform1i(g.u_use_tex, use_tex);
@@ -262,7 +299,7 @@ index 7888785..50dd1ad 100644
  }
  
  static void update_mvp(DWORD fvf)
-@@ -721,8 +873,10 @@ static void update_mvp(DWORD fvf)
+@@ -721,8 +906,10 @@ static void update_mvp(DWORD fvf)
      D3DMATRIX wv, mvp;
      mat4_mul(&wv, &g.m_world, &g.m_view);
      mat4_mul(&mvp, &wv, &g.m_proj);
@@ -275,7 +312,7 @@ index 7888785..50dd1ad 100644
      glUniform1i(g.u_use_xform, d3d8_fvf_transformed(fvf) ? 0 : 1);
  }
  
-@@ -974,6 +1128,14 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -974,6 +1161,14 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
  {
      (void)s; (void)adapter; (void)devtype; (void)hwnd; (void)flags;
      if (!pp || !pPP) return D3DERR_INVALIDCALL;
@@ -290,7 +327,7 @@ index 7888785..50dd1ad 100644
  
      /* Initialise SDL video + GL 3.3 core context. */
      if (!SDL_WasInit(SDL_INIT_VIDEO)) SDL_InitSubSystem(SDL_INIT_VIDEO);
-@@ -1006,7 +1168,22 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -1006,7 +1201,22 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
          return D3DERR_INVALIDCALL;
      }
      SDL_GL_MakeCurrent(g.window, g.glctx);
@@ -313,7 +350,7 @@ index 7888785..50dd1ad 100644
  
      fprintf(stderr, "[d3d8_gl] GL %s / GLSL %s\n",
              glGetString(GL_VERSION), glGetString(GL_SHADING_LANGUAGE_VERSION));
-@@ -1018,9 +1195,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -1018,9 +1228,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
      mat4_identity(&g.m_view);
      mat4_identity(&g.m_proj);
      g.rs[D3DRS_ZENABLE]            = 1;
