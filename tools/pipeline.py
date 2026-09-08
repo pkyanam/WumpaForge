@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -84,13 +85,24 @@ def analyze():
 
 
 def lift():
+    # Keep unchanged generated files' timestamps, so adding a small SDK bridge
+    # does not force every large game translation unit to recompile.
+    generated = ROOT / "local/generated"
+    previous = {path.name: (hashlib.sha256(path.read_bytes()).digest(),
+                           path.stat().st_atime_ns, path.stat().st_mtime_ns)
+                for path in generated.glob("*") if path.is_file()}
     run("tools.recomp", [ASSETS / "default.xbe", "--all", "--split", "100",
                         "--game-name", "Crash Bandicoot: The Wrath of Cortex",
                         "--disasm-dir", REPORTS / "disasm",
                         "--func-id-dir", REPORTS / "func_id",
                         "--abi-dir", REPORTS / "abi",
+                        "--manual-functions", ROOT / "config/manual-functions.json",
                         "--output-dir", REPORTS / "recomp",
                         "--gen-dir", ROOT / "local/generated"], "recomp.log")
+    for path in generated.glob("*"):
+        old = previous.get(path.name)
+        if old and path.is_file() and hashlib.sha256(path.read_bytes()).digest() == old[0]:
+            os.utime(path, ns=(old[1], old[2]))
 
 
 def main():

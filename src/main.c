@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 extern void xbe_entry_point(void);
 extern int recomp_dispatch_init(void);
@@ -17,13 +18,16 @@ int main(int argc, char **argv)
     setvbuf(stderr, NULL, _IONBF, 0);
     const char *boot_timeout = getenv("WRATH_BOOT_TIMEOUT");
     if (boot_timeout) alarm((unsigned)strtoul(boot_timeout, NULL, 10));
-    char resolved[4096], xbe_path[4096], save_path[4096];
+    char resolved[4096], xbe_path[4096], save_path[4096], run_path[4096];
     if (!realpath(directory, resolved)) {
         perror(directory);
         return 1;
     }
     snprintf(xbe_path, sizeof(xbe_path), "%s/default.xbe", resolved);
     snprintf(save_path, sizeof(save_path), "%s/../saves", resolved);
+    snprintf(run_path, sizeof(run_path), "%s/../run", resolved);
+    mkdir(run_path, 0755);
+    if (chdir(run_path)) { perror(run_path); return 1; }
     FILE *input = fopen(xbe_path, "rb");
     if (!input) { perror(xbe_path); return 1; }
     if (fseek(input, 0, SEEK_END)) { fclose(input); return 1; }

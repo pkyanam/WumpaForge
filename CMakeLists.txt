@@ -10,10 +10,12 @@ file(GLOB GENERATED CONFIGURE_DEPENDS "local/generated/*.c")
 if(NOT GENERATED)
     message(FATAL_ERROR "Generate the game C sources first with tools/pipeline.py")
 endif()
-add_executable(wrath_native src/main.c src/overrides.c ${GENERATED})
+add_executable(wrath_native src/main.c src/overrides.c src/graphics.c src/input_bridge.c src/crt_bridge.c ${GENERATED})
 target_include_directories(wrath_native PRIVATE local/generated)
 target_link_libraries(wrath_native PRIVATE xboxrecomp)
 target_link_directories(wrath_native PRIVATE /opt/homebrew/lib)
+target_include_directories(wrath_native PRIVATE /opt/homebrew/include)
+target_link_libraries(wrath_native PRIVATE epoxy)
 # Machine-lifted code intentionally aliases memory through different types.
 target_compile_options(wrath_native PRIVATE -fno-strict-aliasing -fwrapv
     -Wno-unused-label -Wno-unused-variable)

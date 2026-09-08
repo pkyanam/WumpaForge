@@ -1,8 +1,8 @@
 diff --git a/src/kernel/kernel.h b/src/kernel/kernel.h
-index ade9b08..12d9c3a 100644
+index ade9b08..42926eb 100644
 --- a/src/kernel/kernel.h
 +++ b/src/kernel/kernel.h
-@@ -537,7 +537,7 @@ typedef char  xbox_host_char;
+@@ -537,9 +537,10 @@ typedef char  xbox_host_char;
   * host_path_buf must be at least MAX_PATH characters (not bytes).
   */
  /* Host path produced by the most recent xbox_translate_path call. */
@@ -10,8 +10,11 @@ index ade9b08..12d9c3a 100644
 +const xbox_host_char *xbox_LastHostPath(void);
  
  BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size);
++BOOL xbox_translate_path_for_open(const char *path, xbox_host_char *out, DWORD size, BOOL directory);
  
-@@ -776,6 +776,7 @@ VOID    __stdcall xbox_KeBugCheckEx(ULONG BugCheckCode, ULONG_PTR Param1, ULONG_
+ /* ============================================================================
+  * Pool Allocator (kernel_pool.c)
+@@ -776,6 +777,7 @@ VOID    __stdcall xbox_KeBugCheckEx(ULONG BugCheckCode, ULONG_PTR Param1, ULONG_
  
  VOID    __stdcall xbox_KeInitializeInterrupt(PXBOX_KINTERRUPT Interrupt, PVOID ServiceRoutine, PVOID ServiceContext, ULONG Vector, KIRQL Irql, ULONG InterruptMode, BOOLEAN ShareVector);
  BOOLEAN __stdcall xbox_KeConnectInterrupt(PXBOX_KINTERRUPT Interrupt);
@@ -20,10 +23,75 @@ index ade9b08..12d9c3a 100644
  /* KeTickCount - exported as a data pointer, not a function */
  extern volatile ULONG xbox_KeTickCount;
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 2d996b1..3f07965 100644
+index 2d996b1..34930fb 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
-@@ -2619,7 +2619,7 @@ static void bridge_NtCreateFile(void)
+@@ -26,6 +26,7 @@
+  */
+ 
+ #include "kernel.h"
++#include "xbox_optical_mode.h"
+ #include "xbox_memory_layout.h"
+ #include "recomp_icall_feedback.h"
+ #include <stdio.h>
+@@ -2386,13 +2387,14 @@ static void bridge_write_iostatus(uint32_t ios_va, NTSTATUS status, uint32_t inf
+ #define BRIDGE_HANDLE_MASK 0x00FFFFFFu
+ #define BRIDGE_HANDLE_MAX  16384
+ static HANDLE s_handle_table[BRIDGE_HANDLE_MAX];
++static unsigned char s_handle_optical_device[BRIDGE_HANDLE_MAX];
+ 
+ static uint32_t bridge_handle_token(HANDLE h)
+ {
+     int i;
+     if (!h || h == INVALID_HANDLE_VALUE) return 0;
+-    for (i = 1; i < BRIDGE_HANDLE_MAX; i++)
+-        if (s_handle_table[i] == h) return BRIDGE_HANDLE_TAG | (uint32_t)i;
++    /* Every owned HANDLE reference gets its own guest token. Duplicates may
++     * share a native object pointer but must close independently. */
+     for (i = 1; i < BRIDGE_HANDLE_MAX; i++)
+         if (s_handle_table[i] == NULL) {
+             s_handle_table[i] = h;
+@@ -2418,6 +2420,8 @@ static HANDLE bridge_read_handle(uint32_t va)
+         return (i > 0 && i < BRIDGE_HANDLE_MAX) ? s_handle_table[i] : NULL;
+     }
+     /* Untagged value: synthetic/dummy handle -- pass through unchanged. */
++    if (token == 0xfffffffeu) return (HANDLE)(intptr_t)-2;
++    if (token == 0xffffffffu) return (HANDLE)(intptr_t)-1;
+     return (HANDLE)(uintptr_t)token;
+ }
+ 
+@@ -2441,6 +2445,8 @@ static HANDLE bridge_resolve_handle(uint32_t token)
+         return (i > 0 && i < BRIDGE_HANDLE_MAX) ? s_handle_table[i] : NULL;
+     }
+     /* Untagged: synthetic/dummy handle -- pass through unchanged. */
++    if (token == 0xfffffffeu) return (HANDLE)(intptr_t)-2;
++    if (token == 0xffffffffu) return (HANDLE)(intptr_t)-1;
+     return (HANDLE)(uintptr_t)token;
+ }
+ 
+@@ -2451,6 +2457,7 @@ static HANDLE bridge_take_handle(uint32_t token)
+         if (i > 0 && i < BRIDGE_HANDLE_MAX) {
+             HANDLE h = s_handle_table[i];
+             s_handle_table[i] = NULL;
++            s_handle_optical_device[i] = 0;
+             return h;
+         }
+     }
+@@ -2494,6 +2501,13 @@ static NTSTATUS bridge_create_file_impl(
+ 
+     if (NT_SUCCESS(st)) {
+         bridge_write_handle(handle_va, h);
++        if (handle_va) {
++            uint32_t token = BRIDGE_MEM32(handle_va);
++            if ((token & 0xFF000000u) == BRIDGE_HANDLE_TAG)
++                s_handle_optical_device[token & BRIDGE_HANDLE_MASK] =
++                    !_stricmp(name.Buffer, "\\Device\\CdRom0")
++                    || !_stricmp(name.Buffer, "\\Device\\CdRom0\\");
++        }
+         bridge_write_iostatus(iostatus_va, ios.Status, (uint32_t)ios.Information);
+     } else {
+         bridge_write_iostatus(iostatus_va, st, 0);
+@@ -2619,7 +2633,7 @@ static void bridge_NtCreateFile(void)
          char host[MAX_PATH * 2];
          size_t n = 0;
  
@@ -32,8 +100,88 @@ index 2d996b1..3f07965 100644
  
          while (n < sizeof(host) - 1 && w[n]) {
              host[n] = (char)w[n];
+@@ -3163,6 +3177,40 @@ static void bridge_NtDeviceIoControlFile(void)
+     uint32_t out_va  = STACK_ARG(8);
+     uint32_t out_len = STACK_ARG(9);
+ 
++    if (ioctl == 0x0004D014u) { /* IOCTL_SCSI_PASS_THROUGH_DIRECT */
++        uint32_t token = STACK_ARG(0);
++        uint32_t in_va = STACK_ARG(6), in_len = STACK_ARG(7);
++        size_t mapped = xbox_GetMappedSize(), transferred = 0;
++        uint32_t status = STATUS_INVALID_PARAMETER;
++        uint32_t slot = token & BRIDGE_HANDLE_MASK;
++        if ((token & 0xFF000000u) != BRIDGE_HANDLE_TAG || !slot
++            || slot >= BRIDGE_HANDLE_MAX || !s_handle_table[slot]) {
++            status = STATUS_INVALID_HANDLE;
++        } else if (!s_handle_optical_device[slot]) {
++            status = 0xC00000BBu;
++        } else if (in_va && in_len >= 44 && mapped >= 44 && in_va <= mapped - 44
++                   && BRIDGE_MEM16(in_va) == 44 && BRIDGE_MEM8(in_va + 8) == 1) {
++            /* Xbox's 32-bit direct packet: transfer length +12, data VA +20,
++             * CDB +28. Data is returned through that VA, not IOCTL's output. */
++            uint32_t data_va = BRIDGE_MEM32(in_va + 20);
++            uint32_t capacity = BRIDGE_MEM32(in_va + 12);
++            if (data_va && capacity <= mapped && data_va <= mapped - capacity) {
++                status = xbox_optical_mode_sense(
++                    (const uint8_t *)XBOX_TO_NATIVE(in_va + 28), 16,
++                    (uint8_t *)XBOX_TO_NATIVE(data_va), capacity, &transferred);
++                if (!status) {
++                    BRIDGE_MEM8(in_va + 2) = 0; /* SCSI GOOD */
++                    BRIDGE_MEM32(in_va + 12) = (uint32_t)transferred;
++                }
++            }
++        }
++        bridge_write_iostatus(ios_va, status, status ? 0 : 44);
++        bridge_complete_file_io(STACK_ARG(1), STACK_ARG(2), STACK_ARG(3), ios_va);
++        fprintf(stderr, "  [OPTICAL] MODE SENSE status=0x%08X bytes=%zu\n", status, transferred);
++        g_eax = status;
++        return;
++    }
++
+     if (ioctl == IOCTL_DISK_GET_DRIVE_GEOMETRY) {
+         /* DISK_GEOMETRY: Cylinders (LARGE_INTEGER), MediaType,
+          * TracksPerCylinder, SectorsPerTrack, BytesPerSector -- 24 bytes. */
+@@ -4429,12 +4477,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
+  * The source resolves through the table, DuplicateHandle produces a real
+  * native handle, and the target lands via bridge_write_handle as a fresh
+  * token -- same shape as NtCreateEvent. DUPLICATE_CLOSE_SOURCE also closes
+- * the native handle behind the source token, which is why the source token is
+- * NOT consumed here (the OS handle it wraps is gone after this call). */
++ * the native reference behind the source token. Remove that source token
++ * without closing the same native reference a second time. */
+ static void bridge_NtDuplicateObject(void)
+ {
+     uint32_t target_va = STACK_ARG(1);
+-    HANDLE src = bridge_resolve_handle(STACK_ARG(0));
++    uint32_t source_token = STACK_ARG(0);
++    HANDLE src = bridge_resolve_handle(source_token);
+     HANDLE dup = NULL;
+     DWORD opts = 0;
+ 
+@@ -4450,7 +4499,20 @@ static void bridge_NtDuplicateObject(void)
+         g_eax = 0xC0000001u;   /* STATUS_UNSUCCESSFUL */
+         return;
+     }
+-    bridge_write_handle(target_va, dup);
++    unsigned char optical = 0;
++    if ((source_token & 0xff000000u) == BRIDGE_HANDLE_TAG
++        && (source_token & BRIDGE_HANDLE_MASK) < BRIDGE_HANDLE_MAX)
++        optical = s_handle_optical_device[source_token & BRIDGE_HANDLE_MASK];
++    if (opts & DUPLICATE_CLOSE_SOURCE)
++        bridge_take_handle(source_token); /* native source ref already closed */
++    uint32_t target_token = bridge_handle_token(dup);
++    if (!target_token) {
++        CloseHandle(dup);
++        g_eax = 0xC000009Au; /* STATUS_INSUFFICIENT_RESOURCES */
++        return;
++    }
++    s_handle_optical_device[target_token & BRIDGE_HANDLE_MASK] = optical;
++    BRIDGE_MEM32(target_va) = target_token;
+     g_eax = 0;
+ }
+ 
 diff --git a/src/kernel/kernel_file.c b/src/kernel/kernel_file.c
-index eaa98a4..80861d0 100644
+index eaa98a4..aedfa7b 100644
 --- a/src/kernel/kernel_file.c
 +++ b/src/kernel/kernel_file.c
 @@ -29,6 +29,21 @@
@@ -88,7 +236,7 @@ index eaa98a4..80861d0 100644
  NTSTATUS __stdcall xbox_NtCreateFile(
      PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
      PXBOX_OBJECT_ATTRIBUTES ObjectAttributes, PXBOX_IO_STATUS_BLOCK IoStatusBlock,
-@@ -753,6 +758,7 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+@@ -753,13 +758,15 @@ NTSTATUS __stdcall xbox_NtCreateFile(
      ULONG CreateDisposition, ULONG CreateOptions)
  {
      char host_path[MAX_PATH];
@@ -96,7 +244,16 @@ index eaa98a4..80861d0 100644
      (void)AllocationSize; (void)FileAttributes; (void)ShareAccess;
  
      if (!FileHandle || !ObjectAttributes)
-@@ -775,6 +781,7 @@ NTSTATUS __stdcall xbox_NtCreateFile(
+         return STATUS_INVALID_PARAMETER;
+ 
+     const char* xbox_path = get_xbox_path(ObjectAttributes);
+-    if (!xbox_path || !xbox_translate_path(xbox_path, host_path, MAX_PATH)) {
++    if (!xbox_path || !xbox_translate_path_for_open(xbox_path, host_path, MAX_PATH,
++                                       (CreateOptions & XBOX_FILE_DIRECTORY_FILE) != 0)) {
+         xbox_log(XBOX_LOG_ERROR, XBOX_LOG_FILE, "NtCreateFile: path translation failed");
+         return STATUS_OBJECT_PATH_NOT_FOUND;
+     }
+@@ -775,6 +782,7 @@ NTSTATUS __stdcall xbox_NtCreateFile(
  
      if (fd < 0) {
          int e = errno;
@@ -105,20 +262,231 @@ index eaa98a4..80861d0 100644
          if (IoStatusBlock) {
              IoStatusBlock->Status = STATUS_OBJECT_NAME_NOT_FOUND;
 diff --git a/src/kernel/kernel_path.c b/src/kernel/kernel_path.c
-index b2a6bf1..3dfcefe 100644
+index b2a6bf1..4015777 100644
 --- a/src/kernel/kernel_path.c
 +++ b/src/kernel/kernel_path.c
-@@ -529,6 +529,9 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
+@@ -33,6 +33,16 @@ static int match_prefix(const char* path, const char* prefix)
+     return i;
+ }
+ 
++/* Device rules without a trailing separator match only that device or a
++ * child path, never a longer device name (CdRom0 versus CdRom01). Other
++ * match_prefix callers deliberately match partial names such as Partition. */
++static int match_path_rule(const char *path, const char *prefix)
++{
++    int n = match_prefix(path, prefix);
++    if (n && prefix[n - 1] != '\\' && path[n] && path[n] != '\\') return 0;
++    return n;
++}
++
+ /* A device-path translation rule, shared by both backends. */
+ typedef struct {
+     const char* prefix;     /* Xbox path prefix (backslash form)         */
+@@ -41,43 +51,34 @@ typedef struct {
+     const char* sub_posix;  /* sub-directory, POSIX slash form           */
+ } path_rule;
+ 
++/* Retail disc mounting: D: is read-only game content; HDD namespaces are
++ * save storage. Dynamic title-specific T:/U: links still resolve first. */
+ static const path_rule s_rules[] = {
+-    { "\\Device\\CdRom0\\",                   0, NULL,         NULL          },
+-    { "\\Device\\Harddisk0\\Partition1\\",    0, NULL,         NULL          },
+-    /* The rest of the disk. Partition 0 is the whole raw device, 2 holds
+-     * system data, and 3-5 are the per-title caches behind X:, Y: and Z:.
+-     * Without these the path layer reported "Unrecognized Xbox path" and
+-     * NtOpenFile returned STATUS_OBJECT_PATH_NOT_FOUND; DSTEAL_JP probes
+-     * partition0 at startup and treats the failure as fatal.
+-     *
+-     * No trailing separator: the probe opens the device itself, with nothing
+-     * after it. Listed after Partition1 so that keeps its own mapping. */
+-    /* Partition2 is C:, the system partition. On a console that is where the
+-     * dashboard and its own assets live, and the dashboard opens them by
+-     * device path as well as through Y:, so a path *under* partition2 is an
+-     * ordinary asset read and belongs in the game dir -- the same place Y:
+-     * already goes. Only the bare device keeps the system-data image, which
+-     * is why this rule carries the trailing separator and is listed first. */
+-    { "\\Device\\Harddisk0\\Partition2\\",    0, NULL,         NULL          },
+-    { "C:\\",                                 0, NULL,         NULL          },
+-    { "\\??\\C:\\",                           0, NULL,         NULL          },
+-    { "\\Device\\Harddisk0\\Partition2",     1, "\\SystemData", "/SystemData" },
+-    { "\\Device\\Harddisk0\\Partition3",     1, "\\Cache",   "/Cache"      },
+-    { "\\Device\\Harddisk0\\Partition4",     1, "\\Cache",   "/Cache"      },
+-    { "\\Device\\Harddisk0\\Partition5",     1, "\\Cache",   "/Cache"      },
+-    { "D:\\",                                 0, NULL,         NULL          },
+-    { "d:\\",                                 0, NULL,         NULL          },
+-    /* Y: is the Xbox dashboard partition; the dashboard opens its assets
+-     * (e.g. "Y:\default.xip") from there. Map it to the game dir. */
+-    { "Y:\\",                                 0, NULL,         NULL          },
+-    { "y:\\",                                 0, NULL,         NULL          },
+-    { "T:\\",                                 1, "\\TitleData","/TitleData"  },
+-    { "U:\\",                                 1, "\\UserData", "/UserData"   },
+-    { "Z:\\",                                 1, "\\Cache",    "/Cache"      },
+-    { "\\??\\D:\\",                           0, NULL,         NULL          },
+-    { "\\??\\Y:\\",                           0, NULL,         NULL          },
+-    { "\\??\\y:\\",                           0, NULL,         NULL          },
+-    { "\\??\\T:\\",                           1, "\\TitleData","/TitleData"  },
++    { "\\Device\\CdRom0\\", 0, NULL, NULL },
++    { "\\Device\\CdRom0", 0, NULL, NULL },
++    { "\\Device\\Harddisk0\\Partition1\\", 1, NULL, NULL },
++    { "\\Device\\Harddisk0\\Partition1", 1, NULL, NULL },
++    { "\\Device\\Harddisk0\\Partition2\\", 1, "\\SystemData", "/SystemData" },
++    { "\\Device\\Harddisk0\\Partition2", 1, "\\SystemData", "/SystemData" },
++    { "\\Device\\Harddisk0\\Partition3", 1, "\\Cache\\Partition3", "/Cache/Partition3" },
++    { "\\Device\\Harddisk0\\Partition4", 1, "\\Cache\\Partition4", "/Cache/Partition4" },
++    { "\\Device\\Harddisk0\\Partition5", 1, "\\Cache\\Partition5", "/Cache/Partition5" },
++    { "D:\\", 0, NULL, NULL },
++    { "\\??\\D:\\", 0, NULL, NULL },
++    { "E:\\", 1, NULL, NULL },
++    { "\\??\\E:\\", 1, NULL, NULL },
++    { "C:\\", 1, "\\SystemData", "/SystemData" },
++    { "\\??\\C:\\", 1, "\\SystemData", "/SystemData" },
++    { "X:\\", 1, "\\Cache\\Partition3", "/Cache/Partition3" },
++    { "\\??\\X:\\", 1, "\\Cache\\Partition3", "/Cache/Partition3" },
++    { "Y:\\", 1, "\\Cache\\Partition4", "/Cache/Partition4" },
++    { "\\??\\Y:\\", 1, "\\Cache\\Partition4", "/Cache/Partition4" },
++    { "Z:\\", 1, "\\Cache\\Partition5", "/Cache/Partition5" },
++    { "\\??\\Z:\\", 1, "\\Cache\\Partition5", "/Cache/Partition5" },
++    { "T:\\", 1, "\\TDATA", "/TDATA" },
++    { "\\??\\T:\\", 1, "\\TDATA", "/TDATA" },
++    { "U:\\", 1, "\\UDATA", "/UDATA" },
++    { "\\??\\U:\\", 1, "\\UDATA", "/UDATA" },
+ };
+ #define PATH_RULE_COUNT ((int)(sizeof(s_rules) / sizeof(s_rules[0])))
+ 
+@@ -146,7 +147,7 @@ static int resolve_symlink(const char* xbox_path, char* out, size_t out_size)
+     out[tlen + rlen] = '\0';
+ 
+     for (i = 0; i < PATH_RULE_COUNT; i++) {
+-        if (match_prefix(out, s_rules[i].prefix))
++        if (match_path_rule(out, s_rules[i].prefix))
+             return 1;           /* the target is somewhere we can place */
+     }
+     return 0;
+@@ -372,7 +373,7 @@ const wchar_t *xbox_LastHostPath(void)
+ }
+ 
+ 
+-BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size)
++static BOOL xbox_translate_path_mode(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size, BOOL directory)
+ {
+     const char*  remainder = NULL;
+     const WCHAR* base_dir  = NULL;
+@@ -388,17 +389,17 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+     {
+         char linked[512];
+         if (resolve_symlink(xbox_path, linked, sizeof(linked)))
+-            return xbox_translate_path(linked, host_path_buf, buf_size);
++            return xbox_translate_path_mode(linked, host_path_buf, buf_size, directory);
+     }
+ 
+-    if (xbox_partition_device_path(xbox_path, host_path_buf, buf_size)) {
++    if (!directory && xbox_partition_device_path(xbox_path, host_path_buf, buf_size)) {
+         fprintf(stderr, "  [PATH] %s -> partition image\n", xbox_path);
+         fflush(stderr);
+         return TRUE;
+     }
+ 
+     for (int i = 0; i < PATH_RULE_COUNT; i++) {
+-        skip = match_prefix(xbox_path, s_rules[i].prefix);
++        skip = match_path_rule(xbox_path, s_rules[i].prefix);
+         if (skip) {
+             remainder = xbox_path + skip;
+             base_dir  = s_rules[i].to_save ? s_save_dir : s_game_dir;
+@@ -461,6 +462,7 @@ translate:
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <errno.h>
++#include <fcntl.h>
+ 
+ static char s_game_dir[MAX_PATH];
+ static char s_save_dir[MAX_PATH];
+@@ -495,6 +497,47 @@ static void mkdir_p(const char* path)
+         xbox_log(XBOX_LOG_WARN, XBOX_LOG_PATH, "mkdir %s: %s", tmp, strerror(errno));
+ }
+ 
++/* Raw device access stays separate from native filesystem paths. Retail
++ * Partition0 is the 512 KB configuration area, including XAPI's writable
++ * cache-ownership record at sector four. Empty storage lets XAPI initialise
++ * that record itself; never overwrite it with a guessed partition table.
++ * Sizes: https://xboxdevwiki.net/Hard_Drive#Partitions . */
++static BOOL xbox_posix_partition_device_path(const char *path, char *out, DWORD n)
++{
++    static const char *prefix = "\\Device\\Harddisk0\\Partition";
++    static const uint64_t sizes[] = {
++        UINT64_C(0x00080000), UINT64_C(0x131f00000), UINT64_C(0x1f400000),
++        UINT64_C(0x2ee00000), UINT64_C(0x2ee00000), UINT64_C(0x2ee00000)
++    };
++    int len = match_prefix(path, prefix);
++    if (!len || path[len] < '0' || path[len] > '5') return FALSE;
++    const char *rest = path + len + 1;
++    if (*rest == '\\' || *rest == '/') rest++;
++    if (*rest) return FALSE;
++    unsigned part = (unsigned)(path[len] - '0');
++    int written = snprintf(out, n, "%s/Partition%u.img", s_save_dir, part);
++    if (written < 0 || (DWORD)written >= n) return FALSE;
++    mkdir_p(s_save_dir);
++    int fd = open(out, O_RDWR | O_CREAT | O_EXCL, 0600);
++    if (fd >= 0) {
++        /* ftruncate extends sparsely: logical size costs no physical pages.
++         * Only initialise a new image; preserve guest metadata across boots. */
++        int result = ftruncate(fd, (off_t)sizes[part]);
++        int saved_errno = errno;
++        close(fd);
++        if (result != 0) {
++            unlink(out);
++            errno = saved_errno;
++            return FALSE;
++        }
++        fprintf(stderr, "  [DISK] created sparse Partition%u (%llu bytes)\n",
++                part, (unsigned long long)sizes[part]);
++    } else if (errno != EEXIST) {
++        return FALSE;
++    }
++    return TRUE;
++}
++
+ void xbox_path_init(const char* game_dir, const char* save_dir)
+ {
+     if (game_dir) {
+@@ -523,13 +566,17 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
+ 
+     strip_trailing_slash(s_game_dir);
+     strip_trailing_slash(s_save_dir);
++    mkdir_p(s_save_dir);
+ 
+     s_initialized = TRUE;
+     xbox_log(XBOX_LOG_INFO, XBOX_LOG_PATH, "Path init: game=%s, save=%s",
               s_game_dir, s_save_dir);
  }
  
+-BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size)
 +static _Thread_local char s_last_host_path[MAX_PATH];
 +const xbox_host_char *xbox_LastHostPath(void) { return s_last_host_path; }
 +
- BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size)
++static BOOL xbox_translate_path_mode(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size, BOOL directory)
  {
      const char* remainder = NULL;
-@@ -563,6 +566,7 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+     const char* base_dir  = NULL;
+@@ -545,11 +592,16 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
+     {
+         char linked[512];
+         if (resolve_symlink(xbox_path, linked, sizeof(linked)))
+-            return xbox_translate_path(linked, host_path_buf, buf_size);
++            return xbox_translate_path_mode(linked, host_path_buf, buf_size, directory);
++    }
++
++    if (!directory && xbox_posix_partition_device_path(xbox_path, host_path_buf, buf_size)) {
++        snprintf(s_last_host_path, sizeof(s_last_host_path), "%s", host_path_buf);
++        return TRUE;
+     }
+ 
+     for (int i = 0; i < PATH_RULE_COUNT; i++) {
+-        skip = match_prefix(xbox_path, s_rules[i].prefix);
++        skip = match_path_rule(xbox_path, s_rules[i].prefix);
+         if (skip) {
+             remainder = xbox_path + skip;
+             base_dir  = s_rules[i].to_save ? s_save_dir : s_game_dir;
+@@ -563,6 +615,7 @@ BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, D
      snprintf(host_path_buf, buf_size, "%s", xbox_path);
      for (char* p = host_path_buf; *p; p++)
          if (*p == '\\') *p = '/';
@@ -126,7 +494,7 @@ index b2a6bf1..3dfcefe 100644
      return TRUE;
  
  translate:
-@@ -592,6 +596,7 @@ translate:
+@@ -592,9 +645,22 @@ translate:
                  host_path_buf[--n] = '\0';
          }
  
@@ -134,6 +502,21 @@ index b2a6bf1..3dfcefe 100644
          XBOX_TRACE(XBOX_LOG_PATH, "%s -> %s", xbox_path, host_path_buf);
          return TRUE;
      }
+ }
+ 
+ #endif /* _WIN32 */
++
++/* A bare partition opened as a directory means its mounted filesystem root;
++ * ordinary device opens retain byte-addressable metadata storage. */
++BOOL xbox_translate_path_for_open(const char *path, xbox_host_char *out, DWORD size, BOOL directory)
++{
++    return xbox_translate_path_mode(path, out, size, directory);
++}
++
++BOOL xbox_translate_path(const char *path, xbox_host_char *out, DWORD size)
++{
++    return xbox_translate_path_mode(path, out, size, FALSE);
++}
 diff --git a/src/kernel/nv2a_pb_scan.c b/src/kernel/nv2a_pb_scan.c
 index e9b6344..4bec709 100644
 --- a/src/kernel/nv2a_pb_scan.c
@@ -147,7 +530,7 @@ index e9b6344..4bec709 100644
  #include <stdint.h>
  #include <stdlib.h>
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index fe24fdc..d24d983 100644
+index fe24fdc..eb968ed 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -15,6 +15,14 @@
@@ -165,7 +548,28 @@ index fe24fdc..d24d983 100644
  #include <string.h>
  #include <setjmp.h>
  
-@@ -1033,6 +1041,16 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -37,6 +45,9 @@
+ 
+ static void *g_memory_base = NULL;
+ static size_t g_memory_size = 0;
++XboxRuntimeLayout g_xbox_runtime_layout;
++static uint32_t g_heap_next;
++static void xbox_reset_allocators(void);
+ static ptrdiff_t g_memory_offset = 0;  /* actual_base - XBOX_BASE_ADDRESS */
+ 
+ /* Actual mapped RAM for this run; see the header. Default retail 64 MB. */
+@@ -648,7 +659,9 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+         *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
+                                + g_memory_offset) = GetTickCount();
+ 
+-        Sleep(0);  /* yield; the waiter is spinning on another core */
++        /* Millisecond polling services startup handshakes without keeping an
++         * extra host core busy continuously on the fanless MacBook Air. */
++        Sleep(1);
+     }
+     return 0;
+ }
+@@ -1033,6 +1046,16 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       * Windows 11 where low addresses are often reserved), try page-aligned
       * addresses upward until we find a free region.
       */
@@ -182,7 +586,7 @@ index fe24fdc..d24d983 100644
      {
          static const uintptr_t try_bases[] = {
              XBOX_BASE_ADDRESS,      /* 0x00010000 - original Xbox address */
-@@ -1043,7 +1061,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1043,7 +1066,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
              0,                      /* sentinel - let OS choose */
          };
  
@@ -191,7 +595,7 @@ index fe24fdc..d24d983 100644
              LPVOID hint = try_bases[i] ? (LPVOID)try_bases[i] : NULL;
              g_memory_base = MapViewOfFileEx(
                  g_mapping_handle,
-@@ -1064,6 +1082,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1064,6 +1087,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          }
      }
  
@@ -200,7 +604,88 @@ index fe24fdc..d24d983 100644
      if (!g_memory_base) {
          fprintf(stderr, "xbox_MemoryLayoutInit: failed to map base view (%zu KB)\n",
                  g_memory_size / 1024);
-@@ -1855,6 +1875,15 @@ void xbox_MemoryLayoutShutdown(void)
+@@ -1229,6 +1254,44 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+                 sections_loaded, num_sections, total_bytes);
+     }
+ 
++    /* Reserve compatibility storage only after every image section and the
++     * image's declared virtual extent. The former fixed 7MB area overlapped
++     * this title's .data/BSS, TLS writes and stack frames silently corrupted it.
++     * Determine TLS capacity before assigning any runtime-owned addresses. */
++    {
++        uint64_t declared_end = (uint64_t)*(const uint32_t *)(xbe + 0x104)
++                              + *(const uint32_t *)(xbe + 0x10c);
++        uint64_t image_end = declared_end > g_xbox_image_hi ? declared_end : g_xbox_image_hi;
++        uint32_t tls_dir_va = *(const uint32_t *)(xbe + XBE_TLS_ADDR_OFFSET);
++        uint64_t tls_total = 0;
++        if (tls_dir_va) {
++            if (g_memory_size < 24 || tls_dir_va > g_memory_size - 24) goto bad_runtime_layout;
++            const uint32_t *tls = (const uint32_t *)XBOX_VA(tls_dir_va);
++            if (tls[1] < tls[0] || tls[1] > g_memory_size) goto bad_runtime_layout;
++            tls_total = (((uint64_t)(tls[1] - tls[0]) + tls[4] + 15u)
++                         & ~UINT64_C(15)) + 4u;
++        }
++        if (image_end > UINT32_MAX || tls_total > UINT32_MAX || g_memory_size > UINT32_MAX
++            || !xbox_plan_runtime_layout((uint32_t)image_end, (uint32_t)tls_total,
++                                         (uint32_t)g_memory_size, &g_xbox_runtime_layout))
++            goto bad_runtime_layout;
++        g_fs_base = XBOX_TIB_MAIN;
++        g_tls_total = 0;
++        g_tls_template_va = 0;
++        xbox_reset_allocators();
++        fprintf(stderr, "  Runtime storage after image end 0x%08X: RW=0x%08X "
++                        "kernel=0x%08X TLS=0x%08X stack=0x%08X heap=0x%08X\n",
++                (uint32_t)image_end, g_xbox_runtime_layout.rw_data,
++                XBOX_KERNEL_DATA_BASE, g_xbox_runtime_layout.tls_block,
++                XBOX_STACK_BASE, XBOX_HEAP_BASE);
++        goto runtime_layout_ready;
++    bad_runtime_layout:
++        fprintf(stderr, "xbox_MemoryLayoutInit: image/TLS/stack do not fit mapped RAM\n");
++        xbox_MemoryLayoutShutdown();
++        return FALSE;
++    runtime_layout_ready: ;
++    }
++
+     /*
+      * Parse the kernel thunk table address from the XBE header.
+      * The XBE stores KernelImageThunkAddress at offset 0x0158, XOR-encrypted.
+@@ -1338,7 +1401,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+          * only worked while page zero was mapped. Pointing at real zeroed
+          * memory says the same thing to the title and survives that page being
+          * unmapped, which is what makes a genuine null dereference visible. */
+-        #define FAKE_PRCB_VA 0x00761000  /* zeroed KPCR Prcb stand-in */
++        #define FAKE_PRCB_VA (g_xbox_runtime_layout.prcb)
+         memset(XBOX_VA(FAKE_PRCB_VA), 0, 0x400);
+         MEM32_INIT(XBOX_FS_BASE + 0x20, FAKE_PRCB_VA);
+         #undef FAKE_PRCB_VA
+@@ -1346,11 +1409,11 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+         /*
+          * fs:[0x28] - Thread local storage / RW engine context.
+          * The RW engine reads [fs:[0x28] + 0x28] to get a pointer
+-         * to its data area. We allocate a fake structure at 0x00760000
+-         * (in the BSS area) and a data buffer at 0x00700000.
++         * to its data area. Both compatibility allocations follow the complete
++         * image, so they cannot overwrite a title's BSS.
+          */
+-        #define FAKE_TLS_VA     0x00760000  /* Fake TLS structure (in BSS) */
+-        #define FAKE_RWDATA_VA  0x00700000  /* RW engine data area (in BSS) */
++        #define FAKE_TLS_VA     (g_xbox_runtime_layout.tls_struct)
++        #define FAKE_RWDATA_VA  (g_xbox_runtime_layout.rw_data)
+ 
+         MEM32_INIT(XBOX_FS_BASE + 0x28, FAKE_TLS_VA);
+         /* TLS[0x28] = pointer to RW data area */
+@@ -1384,8 +1447,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+          * Every guest thread therefore shares LastError. Give this a per-thread
+          * allocation when a title is observed to care.
+          */
+-        #define FAKE_TLS_BLOCK_VA  0x00770000  /* image TLS data          */
+-        #define FAKE_TLS_THREAD_VA 0x00770200  /* what slot 0 points at   */
++        #define FAKE_TLS_BLOCK_VA  (g_xbox_runtime_layout.tls_block)
++        #define FAKE_TLS_THREAD_VA (g_xbox_runtime_layout.tls_thread)
+         {
+             DWORD tls_dir_va = *(const DWORD *)(xbe + XBE_TLS_ADDR_OFFSET);
+ 
+@@ -1855,6 +1918,15 @@ void xbox_MemoryLayoutShutdown(void)
          CloseHandle(g_mapping_handle);
          g_mapping_handle = NULL;
      }
@@ -216,8 +701,162 @@ index fe24fdc..d24d983 100644
      fprintf(stderr, "xbox_MemoryLayoutShutdown: released\n");
  }
  
+@@ -1921,7 +1993,7 @@ ptrdiff_t xbox_GetMemoryOffset(void)
+  * Returns Xbox VAs within the mapped region so MEM32() works correctly.
+  * No free support (bump-only for now).
+  */
+-static uint32_t g_heap_next = XBOX_HEAP_BASE;
++/* g_heap_next is initialised from the image-derived layout before use. */
+ 
+ static int g_heap_alloc_count = 0;
+ 
+@@ -1950,6 +2022,15 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment);
+ 
+ static int g_thread_stacks_used = 0;
+ 
++static void xbox_reset_allocators(void)
++{
++    g_heap_next = XBOX_HEAP_BASE;
++    g_heap_alloc_count = 0;
++    g_heap_block_count = 0;
++    g_thread_stacks_used = 0;
++}
++
++
+ /* A TIB and TLS block for a newly spawned guest thread.
+  *
+  * A TIB is per-thread on the console and was per-process here: one address,
+diff --git a/src/kernel/xbox_memory_layout.h b/src/kernel/xbox_memory_layout.h
+index fd83afb..2565ce3 100644
+--- a/src/kernel/xbox_memory_layout.h
++++ b/src/kernel/xbox_memory_layout.h
+@@ -24,6 +24,7 @@
+ 
+ #include "platform/xbox_winnt.h"
+ #include <stdint.h>
++#include "xbox_runtime_layout.h"
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -228,7 +229,8 @@ void xbox_WatchdogStart(void);
+ /** Base VA for kernel data exports (XboxHardwareInfo, XboxKrnlVersion, etc.)
+  *  These are kernel exports that are DATA, not functions. The game reads
+  *  their thunk entries and dereferences them to access the data. */
+-#define XBOX_KERNEL_DATA_BASE   0x00740000
++extern XboxRuntimeLayout g_xbox_runtime_layout;
++#define XBOX_KERNEL_DATA_BASE   (g_xbox_runtime_layout.kernel_data)
+ #define XBOX_KERNEL_DATA_SIZE   4096   /* 4 KB - plenty for all data exports */
+ 
+ /* Offsets within the kernel data area */
+@@ -342,7 +344,7 @@ typedef union RecompXmm {
+ extern RECOMP_TLS uint32_t g_fs_base;
+ #define XBOX_FS_BASE        g_fs_base
+ 
+-#define XBOX_STACK_BASE     0x00780000
++#define XBOX_STACK_BASE     (g_xbox_runtime_layout.stack_base)
+ 
+ /** Initial ESP value (top of stack, 16-byte aligned). */
+ #define XBOX_STACK_TOP      (XBOX_STACK_BASE + XBOX_STACK_SIZE - 16)
+@@ -368,7 +370,7 @@ extern RECOMP_TLS uint32_t g_fs_base;
+  * adding it changes nothing for them.
+  */
+ #define XBOX_WORKER_STACK_SIZE   (256 * 1024)
+-#define XBOX_WORKER_STACK_BASE   XBOX_STACK_BASE             /* 0x00780000 */
++#define XBOX_WORKER_STACK_BASE   XBOX_STACK_BASE
+ #define XBOX_WORKER_STACK_COUNT  16                          /* 4 MB total */
+ #define XBOX_WORKER_STACK_END    (XBOX_WORKER_STACK_BASE + \
+                                   XBOX_WORKER_STACK_SIZE * XBOX_WORKER_STACK_COUNT)
+@@ -382,7 +384,7 @@ extern RECOMP_TLS uint32_t g_fs_base;
+  * ================================================================ */
+ 
+ /** Base VA of the dynamic heap area (above stack). */
+-#define XBOX_HEAP_BASE      (XBOX_STACK_BASE + XBOX_STACK_SIZE)  /* 0x00F80000 */
++#define XBOX_HEAP_BASE      (g_xbox_runtime_layout.heap_base)
+ 
+ /** Exclusive top of the dynamic heap: the end of RAM for this run. Runtime,
+  *  not a macro, because RAM size is now configurable (retail 64 MB vs devkit
+diff --git a/src/kernel/xbox_optical_mode.h b/src/kernel/xbox_optical_mode.h
+new file mode 100644
+index 0000000..ef0b6fe
+--- /dev/null
++++ b/src/kernel/xbox_optical_mode.h
+@@ -0,0 +1,36 @@
++#ifndef XBOX_OPTICAL_MODE_H
++#define XBOX_OPTICAL_MODE_H
++#include <stdint.h>
++#include <stddef.h>
++#include <string.h>
++
++/* Read-only media status for a mounted, accessible Xbox game image. This is
++ * MODE SENSE(10)'s eight-byte header plus Xbox's twenty-byte page 0x3e, as
++ * documented at https://xboxdevwiki.net/DVD_Drive#MODE_SENSE_and_MODE_SELECT.
++ * No optical-drive challenge, MODE SELECT or arbitrary SCSI command is
++ * implemented. The supplied image's Xbox partition is already accessible.
++ */
++static inline uint32_t xbox_optical_mode_sense(const uint8_t *cdb, size_t cdb_len,
++                                               uint8_t *data, size_t capacity,
++                                               size_t *written)
++{
++    if (written) *written = 0;
++    if (!cdb || cdb_len < 10 || !written) return 0xC000000Du;
++    if (cdb[0] != 0x5a || (cdb[1] & ~8u) || cdb[2] != 0x3e || cdb[3]
++        || cdb[4] || cdb[5] || cdb[6] || cdb[9]) return 0xC00000BBu;
++    size_t allocation = ((size_t)cdb[7] << 8) | cdb[8];
++    if (!data || capacity < 28 || allocation < 28) return 0xC0000023u;
++    uint8_t response[28] = {0};
++    response[1] = 26;       /* Mode data length excludes its own two bytes. */
++    response[3] = 0x80;     /* Read-only mounted optical media. */
++    response[8] = 0x3e;
++    response[9] = 18;
++    response[10] = 1;       /* Xbox partition selected. */
++    response[11] = 1;       /* Xbox game disc type. */
++    response[12] = 1;       /* Mounted partition already accessible. */
++    response[13] = 0xd0;    /* Xbox book type. */
++    memcpy(data, response, sizeof(response));
++    *written = sizeof(response);
++    return 0;
++}
++#endif
+diff --git a/src/kernel/xbox_runtime_layout.h b/src/kernel/xbox_runtime_layout.h
+new file mode 100644
+index 0000000..a15ceea
+--- /dev/null
++++ b/src/kernel/xbox_runtime_layout.h
+@@ -0,0 +1,32 @@
++#ifndef XBOX_RUNTIME_LAYOUT_H
++#define XBOX_RUNTIME_LAYOUT_H
++#include <stdint.h>
++
++/* Runtime-owned Xbox VAs sit after the entire supplied image, including BSS.
++ * The image keeps its original VAs. Only compatibility storage moves. */
++typedef struct XboxRuntimeLayout {
++    uint32_t rw_data, kernel_data, tls_struct, prcb;
++    uint32_t tls_block, tls_thread, stack_base, heap_base;
++} XboxRuntimeLayout;
++
++static inline int xbox_plan_runtime_layout(uint32_t image_end, uint32_t tls_bytes,
++                                           uint32_t mapped_size,
++                                           XboxRuntimeLayout *layout)
++{
++    uint64_t base = ((uint64_t)image_end + 0xffffu) & ~UINT64_C(0xffff);
++    uint64_t tls_block = base + 0x70000u;
++    uint64_t tls_thread = (tls_block + tls_bytes + 63u) & ~UINT64_C(63);
++    uint64_t stack = (tls_thread + 64u + 0xffffu) & ~UINT64_C(0xffff);
++    uint64_t heap = stack + (8u * 1024u * 1024u);
++    if (!layout || image_end < 0x10000u || heap >= mapped_size) return 0;
++    layout->rw_data = (uint32_t)base;
++    layout->kernel_data = (uint32_t)(base + 0x40000u);
++    layout->tls_struct = (uint32_t)(base + 0x60000u);
++    layout->prcb = (uint32_t)(base + 0x61000u);
++    layout->tls_block = (uint32_t)tls_block;
++    layout->tls_thread = (uint32_t)tls_thread;
++    layout->stack_base = (uint32_t)stack;
++    layout->heap_base = (uint32_t)heap;
++    return 1;
++}
++#endif
 diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
-index 1d37f3e..df52ab4 100644
+index 1d37f3e..82d4393 100644
 --- a/src/platform/win32_compat.c
 +++ b/src/platform/win32_compat.c
 @@ -15,6 +15,10 @@
@@ -260,7 +899,102 @@ index 1d37f3e..df52ab4 100644
  LONG InterlockedIncrement(volatile LONG *p)        { return __atomic_add_fetch(p, 1, __ATOMIC_SEQ_CST); }
  LONG InterlockedDecrement(volatile LONG *p)        { return __atomic_sub_fetch(p, 1, __ATOMIC_SEQ_CST); }
  LONG InterlockedExchange(volatile LONG *p, LONG v) { return __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST); }
-@@ -897,33 +923,69 @@ static int prot_from_page(DWORD protect)
+@@ -243,7 +269,7 @@ DWORD GetCurrentThreadId(void)
+ }
+ 
+ DWORD GetCurrentProcessId(void) { return (DWORD)getpid(); }
+-HANDLE GetCurrentThread(void)   { return t_self_obj ? (HANDLE)t_self_obj : PSEUDO_CURRENT_THREAD; }
++HANDLE GetCurrentThread(void)   { return PSEUDO_CURRENT_THREAD; }
+ HANDLE GetCurrentProcess(void)  { return PSEUDO_CURRENT_PROCESS; }
+ 
+ static w32_object *obj_alloc(w32_kind kind)
+@@ -273,6 +299,49 @@ static void obj_release(w32_object *o)
+     free(o);
+ }
+ 
++/* Threads entered from main()/pthread_create() still need real waitable
++ * objects when a current-thread pseudohandle is duplicated. Keep one lifetime
++ * reference until pthread exit; each duplicate owns an additional reference. */
++static pthread_key_t s_external_thread_key;
++static pthread_once_t s_external_thread_once = PTHREAD_ONCE_INIT;
++static __thread int t_external_thread_object;
++
++static void external_thread_exit(void *value)
++{
++    w32_object *o = (w32_object *)value;
++    pthread_mutex_lock(&o->lock);
++    o->exit_code = 0;
++    o->exited = o->signaled = 1;
++    pthread_cond_broadcast(&o->cond);
++    pthread_mutex_unlock(&o->lock);
++    t_self_obj = NULL;
++    t_external_thread_object = 0;
++    obj_release(o);
++}
++
++static void make_external_thread_key(void)
++{
++    pthread_key_create(&s_external_thread_key, external_thread_exit);
++}
++
++static w32_object *current_thread_object(void)
++{
++    if (t_self_obj) return t_self_obj;
++    pthread_once(&s_external_thread_once, make_external_thread_key);
++    w32_object *o = obj_alloc(K_THREAD);
++    o->thread = pthread_self();
++    o->tid = GetCurrentThreadId();
++    o->exit_code = STILL_ACTIVE;
++    if (pthread_setspecific(s_external_thread_key, o) != 0) {
++        obj_release(o);
++        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
++        return NULL;
++    }
++    t_external_thread_object = 1;
++    t_self_obj = o;
++    return o;
++}
++
+ /* ---- fd-backed file handle (for the file-I/O HLE) -------------------- */
+ HANDLE w32_open_handle(int fd, const char *host_path)
+ {
+@@ -307,14 +376,19 @@ BOOL DuplicateHandle(HANDLE srcProc, HANDLE src, HANDLE dstProc, PHANDLE dst,
+                      DWORD access, BOOL inherit, DWORD options)
+ {
+     (void)srcProc; (void)dstProc; (void)access; (void)inherit;
+-    if (!dst) return FALSE;
+-    if (src == PSEUDO_CURRENT_THREAD)  src = GetCurrentThread();
++    if (!dst) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
++    *dst = NULL;
++    /* A 32-bit NT caller may have widened these bit patterns unsigned. */
++    if ((uintptr_t)src == UINT32_C(0xfffffffe)) src = PSEUDO_CURRENT_THREAD;
++    if ((uintptr_t)src == UINT32_C(0xffffffff)) src = PSEUDO_CURRENT_PROCESS;
++    int pseudo = src == PSEUDO_CURRENT_THREAD || src == PSEUDO_CURRENT_PROCESS;
++    if (src == PSEUDO_CURRENT_THREAD) src = (HANDLE)current_thread_object();
+     if (src == PSEUDO_CURRENT_PROCESS) { *dst = src; return TRUE; }
+-    if (src == PSEUDO_CURRENT_THREAD || !src) { *dst = src; return TRUE; }
++    if (!src) { SetLastError(ERROR_INVALID_HANDLE); return FALSE; }
+     w32_object *o = (w32_object *)src;
+     InterlockedIncrement(&o->refcount);
+     *dst = src;
+-    if (options & DUPLICATE_CLOSE_SOURCE)
++    if ((options & DUPLICATE_CLOSE_SOURCE) && !pseudo)
+         obj_release(o);
+     return TRUE;
+ }
+@@ -640,6 +714,11 @@ VOID ExitThread(DWORD exitCode)
+         o->signaled  = 1;
+         pthread_cond_broadcast(&o->cond);
+         pthread_mutex_unlock(&o->lock);
++        if (t_external_thread_object) {
++            pthread_setspecific(s_external_thread_key, NULL);
++            t_external_thread_object = 0;
++        }
++        t_self_obj = NULL;
+         obj_release(o);
+     }
+     pthread_exit(NULL);
+@@ -897,33 +976,69 @@ static int prot_from_page(DWORD protect)
      }
  }
  
@@ -348,7 +1082,7 @@ index 1d37f3e..df52ab4 100644
      return p;
  }
  
-@@ -933,6 +995,9 @@ BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD freeType)
+@@ -933,6 +1048,9 @@ BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD freeType)
          /* Win32 MEM_RELEASE passes size 0; we can't know the length, so this
           * path is only safe when callers pass the real size. */
          if (size == 0) return TRUE;
@@ -358,7 +1092,7 @@ index 1d37f3e..df52ab4 100644
          return munmap(address, size) == 0;
      }
      if (freeType & MEM_DECOMMIT)
-@@ -1139,6 +1204,17 @@ DWORD GetFileSize(HANDLE h, LPDWORD high)
+@@ -1139,6 +1257,17 @@ DWORD GetFileSize(HANDLE h, LPDWORD high)
      return (DWORD)(st.st_size & 0xFFFFFFFFu);
  }
  
@@ -376,7 +1110,7 @@ index 1d37f3e..df52ab4 100644
  BOOL FlushFileBuffers(HANDLE h)
  {
      int fd = w32_handle_fd(h);
-@@ -1296,8 +1372,14 @@ static size_t view_take(const void *addr)
+@@ -1296,8 +1425,14 @@ static size_t view_take(const void *addr)
  static int anon_map_fd(const char *name)
  {
  #if defined(__APPLE__)
@@ -393,7 +1127,7 @@ index 1d37f3e..df52ab4 100644
  #else
      return memfd_create(name ? name : "xbox_map", 0);
  #endif
-@@ -1340,10 +1422,22 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
+@@ -1340,10 +1475,22 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
      off_t  off = ((off_t)offHigh << 32) | offLow;
      SIZE_T len = count ? count : (o->map_size - (SIZE_T)off);
      int prot   = PROT_READ | ((access != FILE_MAP_READ) ? PROT_WRITE : 0);
@@ -418,7 +1152,7 @@ index 1d37f3e..df52ab4 100644
      view_register(p, len);
      return p;
  }
-@@ -1357,6 +1451,11 @@ BOOL UnmapViewOfFile(LPCVOID baseAddr)
+@@ -1357,6 +1504,11 @@ BOOL UnmapViewOfFile(LPCVOID baseAddr)
  {
      size_t len = view_take(baseAddr);
      if (len == 0) return FALSE;

@@ -32,11 +32,11 @@ preserved. All stage logs go into `local/reports/`.
 ## Diagnose startup
 
 ```sh
-WRATH_BOOT_TIMEOUT=15 RECOMP_WATCHDOG_SECS=5 lldb --batch \
-  -o run -o 'thread backtrace all' -o quit -- build/native/wrath_native local/assets
+python3 tools/boot.py boot-next
 ```
 
-The timeout bounds development runs. It is not a playable launcher. Reaching
+The helper captures crash backtraces in `local/reports/boot-next.log` and bounds
+development runs. It is not a playable launcher. Reaching
 missing generated code deliberately stops with the original Xbox address; it must
 be fixed before claiming functional behavior.
 
