@@ -58,10 +58,15 @@ static void source_reg(Emit *e, const uint32_t *w, unsigned s, char out[96])
         snprintf(base,sizeof(base),"v%u",v);
     } else if (mux == 3) {
         unsigned c=bits(w[1],13,8);
-        if (bits(w[3],1,1)) { fail(e,"relative constant addressing is not implemented"); return; }
-        if (c>=192) { fail(e,"constant c%u is outside physical c0..c191",c); return; }
-        e->info.constant_mask[c/64] |= (uint64_t)1 << (c%64);
-        snprintf(base,sizeof(base),"u_vconstants[%u]",c);
+        if (bits(w[3],1,1)) {
+            e->info.relative_constants = 1;
+            for (unsigned i=0;i<3;i++) e->info.constant_mask[i]=UINT64_MAX;
+            snprintf(base,sizeof(base),"nv_constant(a0+%u.0)",c);
+        } else {
+            if (c>=192) { fail(e,"constant c%u is outside physical c0..c191",c); return; }
+            e->info.constant_mask[c/64] |= (uint64_t)1 << (c%64);
+            snprintf(base,sizeof(base),"u_vconstants[%u]",c);
+        }
     } else { fail(e,"source %c has reserved register mux 0",'A'+s); return; }
     snprintf(out,96,"%s%s.%c%c%c%c",neg?"-":"",base,
              "xyzw"[swz>>6&3],"xyzw"[swz>>4&3],"xyzw"[swz>>2&3],"xyzw"[swz&3]);
@@ -78,11 +83,11 @@ static void instruction(Emit *e,const uint32_t *w)
     unsigned mm=bits(w[3],24,4), im=bits(w[3],16,4), om=bits(w[3],12,4);
     unsigned dst=bits(w[3],20,4), mux=bits(w[3],2,1);
     char a[96]="vec4(0.0)", b[96]="vec4(0.0)", c[96]="vec4(0.0)";
-    if (mac>=13) { fail(e,"unsupported MAC opcode %u (ARL/reserved)",mac); return; }
+    if (mac>=14) { fail(e,"unsupported MAC opcode %u (reserved)",mac); return; }
     if (ilu>=5) { fail(e,"unsupported ILU opcode %u (EXP/LOG/LIT)",ilu); return; }
-    if (dst>12 && ((mac&&mm)||(ilu&&im&&!mac))) { fail(e,"destination R%u is invalid",dst); return; }
+    if (dst>12 && ((mac&&mac!=13&&mm)||(ilu&&im&&!mac))) { fail(e,"destination R%u is invalid",dst); return; }
     if (mac) source_reg(e,w,0,a);
-    if (mac>=2 && mac!=3) source_reg(e,w,1,b);
+    if (mac>=2 && mac!=3 && mac!=13) source_reg(e,w,1,b);
     if (ilu || mac==3 || mac==4) source_reg(e,w,2,c);
     if (e->failed) return;
     emit(e,"  // slot %zu: MAC %u ILU %u\n  { vec4 A=%s; vec4 B=%s; vec4 C=%s;\n",e->slot,mac,ilu,a,b,c);
@@ -91,10 +96,11 @@ static void instruction(Emit *e,const uint32_t *w)
     const char *mac_expr[]={"vec4(0.0)","A","nv_mul(A,B)","A+C","nv_mul(A,B)+C",
         "vec4(dot(A.xyz,B.xyz))","vec4(dot(A.xyz,B.xyz)+B.w)","vec4(dot(A,B))",
         "vec4(1.0,A.y*B.y,A.z,B.w)","min(A,B)","max(A,B)",
-        "vec4(lessThan(A,B))","vec4(greaterThanEqual(A,B))"};
+        "vec4(lessThan(A,B))","vec4(greaterThanEqual(A,B))","vec4(0.0)"};
     const char *ilu_expr[]={"vec4(0.0)","C","vec4(1.0/C.x)","vec4(nv_clamp(1.0/C.x))","vec4(inversesqrt(abs(C.x)))"};
     emit(e,"  vec4 M=%s; vec4 I=%s;\n",mac_expr[mac],ilu_expr[ilu]);
     if (om) {
+        if (mac==13 && !mux) { fail(e,"ARL routed to vector output is not implemented"); return; }
         if (!(mux?ilu:mac)) { fail(e,"output mux selects NOP operation"); return; }
         if (!bits(w[3],11,1)) { fail(e,"writable constant/state shaders are not implemented"); return; }
         unsigned o=bits(w[3],3,8)&15;
@@ -113,10 +119,13 @@ static void instruction(Emit *e,const uint32_t *w)
         char d[16]; snprintf(d,sizeof(d),idst==12?"o[0]":"r[%u]",idst);
         store_mask(e,d,im,"I");
     }
-    if (mac && mm && !(ilu && dst==1)) {
+    if (mac && mac!=13 && mm && !(ilu && dst==1)) {
         char d[16]; snprintf(d,sizeof(d),dst==12?"o[0]":"r[%u]",dst);
         store_mask(e,d,mm,"M");
     }
+    /* ARL writes its own address register irrespective of the vector mask.
+     * A/B/C above snapshot old A0, including a paired ILU constant read. */
+    if (mac==13) emit(e,"  a0=floor(A.x);\n");
     emit(e,"  }\n");
 }
 int nv2a_vertex_generate(const uint32_t *words,size_t count,char *out,size_t cap,
@@ -136,7 +145,8 @@ int nv2a_vertex_generate(const uint32_t *words,size_t count,char *out,size_t cap
          "out vec4 vD0,vD1,vT0,vT1,vT2,vT3;\nout float vFog;\n"
          "float nv_clamp(float x) { float a=clamp(abs(x),uintBitsToFloat(0x1f800000u),uintBitsToFloat(0x5f800000u)); return (floatBitsToUint(x)&0x80000000u)!=0u ? -a:a; }\n"
          "vec4 nv_mul(vec4 a,vec4 b) { vec4 p=a*b; for(int j=0;j<4;j++) if(a[j]==0.0||b[j]==0.0)p[j]=0.0; return p; }\n"
-         "void main() {\n  vec4 r[12]; vec4 o[13];\n"
+         "vec4 nv_constant(float index) { if(index>=0.0 && index<192.0) return u_vconstants[int(index)]; return vec4(0.0); }\n"
+         "void main() {\n  vec4 r[12]; vec4 o[13]; float a0=0.0;\n"
          "  for(int j=0;j<12;j++)r[j]=vec4(0.0);\n"
          "  for(int j=0;j<13;j++)o[j]=vec4(0.0,0.0,0.0,1.0);\n");
     int final=0;

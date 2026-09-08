@@ -7,7 +7,8 @@ typedef struct Nv2aVertexInfo {
     unsigned instruction_count;
     uint16_t input_mask;
     uint16_t output_mask;
-    uint64_t constant_mask[3]; /* Physical c0..c191, not signed SDK indices. */
+    uint64_t constant_mask[3]; /* Physical c0..c191; all bits for relative reads. */
+    unsigned relative_constants; /* Program uses A0-relative constant reads. */
 } Nv2aVertexInfo;
 
 /* Input consists of count four-DWORD NV2A instructions, without upload packet

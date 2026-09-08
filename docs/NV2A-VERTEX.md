@@ -70,8 +70,9 @@ registers are 0=position, 3/4=front colors, 5=fog, 6=point size, 9..12=texcoords
 Fog uses the most significant masked source component as its scalar value.
 
 Supported MAC instructions: NOP, MOV, MUL, ADD, MAD, DP3, DPH, DP4, DST, MIN,
-MAX, SLT, SGE. Supported ILU: NOP, MOV, RCP, RCC, RSQ. Relative addressing,
-ARL, EXP/LOG/LIT, writable constant/state shaders and backface-color outputs are
+MAX, SLT, SGE, ARL. Physical constant reads may use A0-relative addressing;
+see [ARL and relative constants](NV2A-VERTEX-RELATIVE.md) for its bounds and tests.
+Supported ILU: NOP, MOV, RCP, RCC, RSQ. EXP/LOG/LIT, writable constant/state shaders and backface-color outputs are
 explicitly rejected. These can be implemented when a real program requires
 them. GPU floating-point results are not claimed bit-identical for every NaN,
 denormal or precision corner case. Multiplication preserves observed zero times
@@ -156,7 +157,8 @@ validate the corrected range before uploading to the native shader.
 `tools/tests/nv2a_vertex.c` uses synthetic instructions and native GPU transform
 feedback to check numeric paired MOV/MAD/ADD results, swizzles/masks, R12 alias,
 constant upload, viewport/depth conversion and W preservation. It also rejects
-malformed opcodes, relative addressing, missing FINAL and undersized buffers.
+malformed opcodes, missing FINAL and undersized buffers. ARL and relative reads
+have additional numeric GPU regressions documented in the linked followup.
 The optional ignored real object fixture compiled successfully on this M3's
 OpenGL 4.1 context. Output: `local/reports/nv2a-vertex-test.log`.
 
