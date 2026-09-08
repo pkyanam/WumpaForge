@@ -12,10 +12,10 @@ index caef326..4e7bb06 100644
  endif()
  
 diff --git a/src/input/README.md b/src/input/README.md
-index dc20ffd..b0f5e67 100644
+index dc20ffd..13a7c6c 100644
 --- a/src/input/README.md
 +++ b/src/input/README.md
-@@ -1,137 +1,42 @@
+@@ -1,137 +1,61 @@
 -# xbox_input — Xbox Gamepad to XInput
 -
 -Maps the Xbox controller API to Windows XInput. The original Xbox used `XInputGetState` with a slightly different structure layout than the XInput API on Windows. This layer translates between them.
@@ -195,8 +195,91 @@ index dc20ffd..b0f5e67 100644
 +extended virtual-device API and therefore requires SDL2 2.24 or newer. Virtual
 +tests validate the compatibility mapping, not hardware Bluetooth transport,
 +physical latency, or game-side integration.
++
++## Focused keyboard and mouse
++
++SDL hosts expose keyboard/mouse as a persistent port-0 source by default, merged
++with the first mapped controller. `WRATH_KEYBOARD=0` disables this source at input
++initialization. Keyboard requires an SDL window with keyboard focus; mouse also
++requires the same window's mouse focus. Command shortcuts contribute no desktop
++input. No global event tap, mouse grab, cursor warp, or relative mode is used.
++
++WASD maps to the left stick (diagonals normalized); arrows to D-pad; Space to A;
++X/left mouse to X; C/right mouse to B; E to Y; Return/keypad Enter/Escape to Start;
++Backspace to Back; Q/R to White/Black; Shift/Ctrl to LT/RT; Z/V to stick clicks.
++Middle-button drag maps window-local cursor deltas to the right stick, which is
++only meaningful in game modes that use that stick. Releasing it or losing focus
++clears desktop motion. Desktop directions override the corresponding physical
++axis only while nonzero; opposite desktop keys cancel. Other physical buttons
++and axes are retained. Keyboard-only vibration reports ERROR_NOT_SUPPORTED and
++zero motor capabilities. Bluetooth disconnect does not invalidate port0 while
++keyboard is enabled; its released state increments the packet number.
+diff --git a/src/input/desktop_input.h b/src/input/desktop_input.h
+new file mode 100644
+index 0000000..8311b3a
+--- /dev/null
++++ b/src/input/desktop_input.h
+@@ -0,0 +1,58 @@
++/* Focus-scoped desktop -> original Xbox controls. No host event injection. */
++#ifndef XBOX_DESKTOP_INPUT_H
++#define XBOX_DESKTOP_INPUT_H
++#include <SDL.h>
++#include "xinput_xbox.h"
++
++typedef struct XboxDesktopSnapshot {
++    const Uint8 *keys;
++    int key_count, keyboard_focus, mouse_focus;
++    Uint32 mouse_buttons;
++    int mouse_dx, mouse_dy;
++} XboxDesktopSnapshot;
++
++static int desktop_key(const XboxDesktopSnapshot *s, SDL_Scancode key)
++{
++    return s->keys && (int)key < s->key_count && s->keys[key];
++}
++static SHORT desktop_mouse_axis(int delta)
++{
++    /* Saturate before scaling, including arbitrarily large cursor jumps. */
++    return delta > 32 ? 32767 : delta < -32 ? -32767 : (SHORT)(delta * 1023);
++}
++static void xbox_DesktopMerge(XBOX_GAMEPAD *p, const XboxDesktopSnapshot *s)
++{
++    if (!s->keyboard_focus) return;
++#define KEY(k) desktop_key(s, SDL_SCANCODE_##k)
++    if (KEY(LGUI) || KEY(RGUI)) return; /* macOS shortcuts must not activate gameplay. */
++    if (KEY(UP)) p->wButtons |= XBOX_GAMEPAD_DPAD_UP;
++    if (KEY(DOWN)) p->wButtons |= XBOX_GAMEPAD_DPAD_DOWN;
++    if (KEY(LEFT)) p->wButtons |= XBOX_GAMEPAD_DPAD_LEFT;
++    if (KEY(RIGHT)) p->wButtons |= XBOX_GAMEPAD_DPAD_RIGHT;
++    if (KEY(RETURN) || KEY(KP_ENTER) || KEY(ESCAPE)) p->wButtons |= XBOX_GAMEPAD_START;
++    if (KEY(BACKSPACE)) p->wButtons |= XBOX_GAMEPAD_BACK;
++    if (KEY(Z)) p->wButtons |= XBOX_GAMEPAD_LEFT_THUMB;
++    if (KEY(V)) p->wButtons |= XBOX_GAMEPAD_RIGHT_THUMB;
++    if (KEY(SPACE)) p->bAnalogButtons[XBOX_BUTTON_A] = 255;
++    if (KEY(C)) p->bAnalogButtons[XBOX_BUTTON_B] = 255;
++    if (KEY(X)) p->bAnalogButtons[XBOX_BUTTON_X] = 255;
++    if (KEY(E)) p->bAnalogButtons[XBOX_BUTTON_Y] = 255;
++    if (KEY(Q)) p->bAnalogButtons[XBOX_BUTTON_WHITE] = 255;
++    if (KEY(R)) p->bAnalogButtons[XBOX_BUTTON_BLACK] = 255;
++    if (KEY(LSHIFT) || KEY(RSHIFT)) p->bAnalogButtons[XBOX_BUTTON_LTRIGGER] = 255;
++    if (KEY(LCTRL) || KEY(RCTRL)) p->bAnalogButtons[XBOX_BUTTON_RTRIGGER] = 255;
++    /* Opposite desktop directions cancel without masking a physical stick. */
++    int x = KEY(D) - KEY(A), y = KEY(W) - KEY(S);
++    if (x) p->sThumbLX = (SHORT)(x * (y ? 23170 : 32767));
++    if (y) p->sThumbLY = (SHORT)(y * (x ? 23170 : 32767));
++    if (s->mouse_focus) {
++        if (s->mouse_buttons & SDL_BUTTON_LMASK) p->bAnalogButtons[XBOX_BUTTON_X] = 255;
++        if (s->mouse_buttons & SDL_BUTTON_RMASK) p->bAnalogButtons[XBOX_BUTTON_B] = 255;
++        if (s->mouse_buttons & SDL_BUTTON_MMASK) {
++            if (s->mouse_dx) p->sThumbRX = desktop_mouse_axis(s->mouse_dx);
++            if (s->mouse_dy) p->sThumbRY = (SHORT)-desktop_mouse_axis(s->mouse_dy);
++        }
++    }
++#undef KEY
++}
++#endif
 diff --git a/src/input/xinput_device.c b/src/input/xinput_device.c
-index 1a662a8..e421848 100644
+index 1a662a8..28d5a03 100644
 --- a/src/input/xinput_device.c
 +++ b/src/input/xinput_device.c
 @@ -33,6 +33,15 @@ void xbox_InputInit(void)
@@ -227,20 +310,45 @@ index 1a662a8..e421848 100644
      pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] = xi_state.Gamepad.bLeftTrigger;
      pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] = xi_state.Gamepad.bRightTrigger;
  
-@@ -121,29 +130,104 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
+@@ -119,31 +128,136 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
+ /* ======================================================================== */
+ 
  #include <SDL.h>
++#include "desktop_input.h"
  
  static SDL_GameController *g_pads[XBOX_MAX_CONTROLLERS];
 -static BOOL  g_controller_connected[XBOX_MAX_CONTROLLERS];
  static DWORD g_packet[XBOX_MAX_CONTROLLERS];
--
--/* Open up to XBOX_MAX_CONTROLLERS attached game controllers. */
--static void open_controllers(void)
 +static XBOX_GAMEPAD g_previous[XBOX_MAX_CONTROLLERS];
 +static XBOX_VIBRATION g_vibration[XBOX_MAX_CONTROLLERS];
 +static Uint32 g_rumble_tick[XBOX_MAX_CONTROLLERS];
 +static BOOL g_initialized;
++static BOOL g_desktop_enabled;
++static Uint32 g_mouse_window;
++static int g_mouse_x, g_mouse_y, g_mouse_drag;
 +
++static void merge_desktop(XBOX_GAMEPAD *pad)
++{
++    SDL_Window *keyboard = SDL_GetKeyboardFocus(), *mouse = SDL_GetMouseFocus();
++    XboxDesktopSnapshot snapshot = {0};
++    snapshot.keyboard_focus = keyboard != NULL;
++    snapshot.mouse_focus = keyboard && keyboard == mouse;
++    snapshot.keys = SDL_GetKeyboardState(&snapshot.key_count);
++    int x = 0, y = 0;
++    snapshot.mouse_buttons = SDL_GetMouseState(&x, &y);
++    Uint32 window = keyboard ? SDL_GetWindowID(keyboard) : 0;
++    int drag = snapshot.mouse_focus && (snapshot.mouse_buttons & SDL_BUTTON_MMASK);
++    if (drag && g_mouse_drag && window == g_mouse_window) {
++        snapshot.mouse_dx = x - g_mouse_x;
++        snapshot.mouse_dy = y - g_mouse_y;
++    }
++    g_mouse_x = x; g_mouse_y = y;
++    g_mouse_window = window; g_mouse_drag = drag;
++    xbox_DesktopMerge(pad, &snapshot);
++}
+ 
+-/* Open up to XBOX_MAX_CONTROLLERS attached game controllers. */
+-static void open_controllers(void)
 +/* Called on the SDL/main thread. Pump without consuming window/quit events.
 + * Instance IDs, unlike device indices, survive another controller detaching. */
 +static void refresh_controllers(void)
@@ -258,6 +366,7 @@ index 1a662a8..e421848 100644
 +        if (g_pads[slot] && !SDL_GameControllerGetAttached(g_pads[slot])) {
 +            SDL_GameControllerClose(g_pads[slot]);
 +            g_pads[slot] = NULL;
++            ++g_packet[slot]; /* Desktop port survives; expose released pad state. */
 +            memset(&g_previous[slot], 0, sizeof(g_previous[slot]));
 +            memset(&g_vibration[slot], 0, sizeof(g_vibration[slot]));
 +        }
@@ -314,6 +423,8 @@ index 1a662a8..e421848 100644
 +            SDL_LogError(SDL_LOG_CATEGORY_INPUT, "Controller initialization: %s", SDL_GetError());
 +            return;
 +        }
++        const char *desktop = SDL_getenv("WRATH_KEYBOARD");
++        g_desktop_enabled = !desktop || SDL_strcmp(desktop, "0") != 0;
 +        g_initialized = TRUE;
 +    }
 +    refresh_controllers();
@@ -334,6 +445,9 @@ index 1a662a8..e421848 100644
 +    memset(g_vibration, 0, sizeof(g_vibration));
 +    SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
 +    g_initialized = FALSE;
++    g_desktop_enabled = FALSE;
++    g_mouse_window = 0;
++    g_mouse_drag = 0;
 +}
 +
 +static SHORT invert_y(Sint16 value)
@@ -347,55 +461,105 @@ index 1a662a8..e421848 100644
  }
  
  DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
-@@ -151,17 +235,13 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+@@ -151,57 +265,61 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
      if (dwPort >= XBOX_MAX_CONTROLLERS || !pState)
          return ERROR_DEVICE_NOT_CONNECTED;
  
 +    xbox_InputInit();
      SDL_GameController *c = g_pads[dwPort];
-     if (!c || !SDL_GameControllerGetAttached(c)) {
+-    if (!c || !SDL_GameControllerGetAttached(c)) {
 -        g_controller_connected[dwPort] = FALSE;
++    if ((!c || !SDL_GameControllerGetAttached(c)) && !(dwPort == 0 && g_desktop_enabled))
          return ERROR_DEVICE_NOT_CONNECTED;
-     }
- 
+-    }
+-
 -    SDL_GameControllerUpdate();
 -    g_controller_connected[dwPort] = TRUE;
--
+ 
      memset(pState, 0, sizeof(XBOX_INPUT_STATE));
 -    pState->dwPacketNumber = ++g_packet[dwPort];
+-
+-    WORD btn = 0;
+-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_UP))    btn |= XBOX_GAMEPAD_DPAD_UP;
+-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_DOWN))  btn |= XBOX_GAMEPAD_DPAD_DOWN;
+-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_LEFT))  btn |= XBOX_GAMEPAD_DPAD_LEFT;
+-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) btn |= XBOX_GAMEPAD_DPAD_RIGHT;
+-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_START))      btn |= XBOX_GAMEPAD_START;
+-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_BACK))       btn |= XBOX_GAMEPAD_BACK;
+-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_LEFTSTICK))  btn |= XBOX_GAMEPAD_LEFT_THUMB;
+-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSTICK)) btn |= XBOX_GAMEPAD_RIGHT_THUMB;
+-    pState->Gamepad.wButtons = btn;
  
-     WORD btn = 0;
-     if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_UP))    btn |= XBOX_GAMEPAD_DPAD_UP;
-@@ -183,25 +263,30 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
-     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y] =
-         SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_Y) ? 255 : 0;
-     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK] =
+-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_A] =
+-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_A) ? 255 : 0;
+-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_B] =
+-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_B) ? 255 : 0;
+-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_X] =
+-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_X) ? 255 : 0;
+-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y] =
+-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_Y) ? 255 : 0;
+-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK] =
 -        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) ? 255 : 0;
 -    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] =
-         SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) ? 255 : 0;
-+    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] =
-+        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) ? 255 : 0;
- 
-     /* SDL trigger axes are 0..32767 -> Xbox analog button 0..255 */
-     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] =
+-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) ? 255 : 0;
+-
+-    /* SDL trigger axes are 0..32767 -> Xbox analog button 0..255 */
+-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] =
 -        (BYTE)(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) >> 7);
-+        trigger_pressure(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT));
-     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] =
+-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] =
 -        (BYTE)(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) >> 7);
-+        trigger_pressure(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT));
- 
-     /* SDL Y axis points down; the Xbox Y axis points up -- invert.
+-
+-    /* SDL Y axis points down; the Xbox Y axis points up -- invert.
 -     * Use (-1 - v) so v = -32768 does not overflow SHORT. */
-+     * Saturate the negative endpoint while keeping centered sticks at zero. */
-     pState->Gamepad.sThumbLX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX);
-     pState->Gamepad.sThumbLY =
+-    pState->Gamepad.sThumbLX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX);
+-    pState->Gamepad.sThumbLY =
 -        (SHORT)(-1 - SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY));
-+        invert_y(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY));
-     pState->Gamepad.sThumbRX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTX);
-     pState->Gamepad.sThumbRY =
+-    pState->Gamepad.sThumbRX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTX);
+-    pState->Gamepad.sThumbRY =
 -        (SHORT)(-1 - SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY));
-+        invert_y(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY));
++    if (c && SDL_GameControllerGetAttached(c)) {
++        WORD btn = 0;
++        if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_UP))    btn |= XBOX_GAMEPAD_DPAD_UP;
++        if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_DOWN))  btn |= XBOX_GAMEPAD_DPAD_DOWN;
++        if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_LEFT))  btn |= XBOX_GAMEPAD_DPAD_LEFT;
++        if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) btn |= XBOX_GAMEPAD_DPAD_RIGHT;
++        if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_START))      btn |= XBOX_GAMEPAD_START;
++        if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_BACK))       btn |= XBOX_GAMEPAD_BACK;
++        if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_LEFTSTICK))  btn |= XBOX_GAMEPAD_LEFT_THUMB;
++        if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSTICK)) btn |= XBOX_GAMEPAD_RIGHT_THUMB;
++        pState->Gamepad.wButtons = btn;
++
++        pState->Gamepad.bAnalogButtons[XBOX_BUTTON_A] =
++            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_A) ? 255 : 0;
++        pState->Gamepad.bAnalogButtons[XBOX_BUTTON_B] =
++            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_B) ? 255 : 0;
++        pState->Gamepad.bAnalogButtons[XBOX_BUTTON_X] =
++            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_X) ? 255 : 0;
++        pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y] =
++            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_Y) ? 255 : 0;
++        pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK] =
++            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) ? 255 : 0;
++        pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] =
++            SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) ? 255 : 0;
++
++        /* SDL trigger axes are 0..32767 -> Xbox analog button 0..255 */
++        pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] =
++            trigger_pressure(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT));
++        pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] =
++            trigger_pressure(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT));
++
++        /* SDL Y axis points down; the Xbox Y axis points up -- invert.
++         * Saturate the negative endpoint while keeping centered sticks at zero. */
++        pState->Gamepad.sThumbLX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX);
++        pState->Gamepad.sThumbLY =
++            invert_y(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY));
++        pState->Gamepad.sThumbRX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTX);
++        pState->Gamepad.sThumbRY =
++            invert_y(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY));
  
++    }
++    if (dwPort == 0 && g_desktop_enabled) merge_desktop(&pState->Gamepad);
++
 +    if (memcmp(&pState->Gamepad, &g_previous[dwPort], sizeof(XBOX_GAMEPAD)) != 0) {
 +        ++g_packet[dwPort];
 +        g_previous[dwPort] = pState->Gamepad;
@@ -404,19 +568,21 @@ index 1a662a8..e421848 100644
      return ERROR_SUCCESS;
  }
  
-@@ -210,20 +295,23 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+@@ -210,20 +328,24 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
      if (dwPort >= XBOX_MAX_CONTROLLERS || !pVibration)
          return ERROR_DEVICE_NOT_CONNECTED;
  
 +    xbox_InputInit();
      SDL_GameController *c = g_pads[dwPort];
 -    if (!c) return ERROR_DEVICE_NOT_CONNECTED;
-+    if (!c || !SDL_GameControllerGetAttached(c)) return ERROR_DEVICE_NOT_CONNECTED;
- 
+-
 -    /* SDL rumble needs a duration; refresh for ~1s on each call (the game
 -     * polls vibration continuously). */
 -    SDL_GameControllerRumble(c, pVibration->wLeftMotorSpeed,
 -                             pVibration->wRightMotorSpeed, 1000);
++    if (!c || !SDL_GameControllerGetAttached(c))
++        return dwPort == 0 && g_desktop_enabled ? 50 : ERROR_DEVICE_NOT_CONNECTED;
++
 +    if (SDL_GameControllerRumble(c, pVibration->wLeftMotorSpeed,
 +                                 pVibration->wRightMotorSpeed, 1000) != 0)
 +        return 50; /* Win32 ERROR_NOT_SUPPORTED, absent from portable header. */
@@ -430,19 +596,20 @@ index 1a662a8..e421848 100644
      if (dwPort >= XBOX_MAX_CONTROLLERS) return FALSE;
 -    return g_controller_connected[dwPort];
 +    xbox_InputInit();
-+    return g_pads[dwPort] != NULL;
++    return g_pads[dwPort] != NULL || (dwPort == 0 && g_desktop_enabled);
  }
  
  DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILITIES *pCaps)
-@@ -231,6 +319,7 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
+@@ -231,13 +353,22 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
      (void)dwFlags;
      if (dwPort >= XBOX_MAX_CONTROLLERS || !pCaps)
          return ERROR_DEVICE_NOT_CONNECTED;
+-    if (!g_pads[dwPort])
 +    xbox_InputInit();
-     if (!g_pads[dwPort])
++    if (!g_pads[dwPort] && !(dwPort == 0 && g_desktop_enabled))
          return ERROR_DEVICE_NOT_CONNECTED;
  
-@@ -238,6 +327,14 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
+     memset(pCaps, 0, sizeof(XBOX_INPUT_CAPABILITIES));
      pCaps->Type    = 1;   /* XINPUT_DEVTYPE_GAMEPAD */
      pCaps->SubType = 1;   /* XINPUT_DEVSUBTYPE_GAMEPAD */
      pCaps->Flags   = 0;
@@ -450,7 +617,7 @@ index 1a662a8..e421848 100644
 +    memset(pCaps->Gamepad.bAnalogButtons, 255, sizeof(pCaps->Gamepad.bAnalogButtons));
 +    pCaps->Gamepad.sThumbLX = pCaps->Gamepad.sThumbLY =
 +        pCaps->Gamepad.sThumbRX = pCaps->Gamepad.sThumbRY = 32767;
-+    if (SDL_GameControllerHasRumble(g_pads[dwPort])) {
++    if (g_pads[dwPort] && SDL_GameControllerHasRumble(g_pads[dwPort])) {
 +        pCaps->Vibration.wLeftMotorSpeed = 65535;
 +        pCaps->Vibration.wRightMotorSpeed = 65535;
 +    }

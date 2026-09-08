@@ -1,0 +1,80 @@
+# Native controls
+
+Keyboard/mouse and the first SDL gamepad both feed original Xbox port 0. Pair an
+Xbox One/Series controller or DualSense in macOS Bluetooth settings, then focus
+the game window. Keyboard remains available if that controller disconnects.
+Additional attached controllers retain ports 1–3; this title normally uses port0.
+
+| Action / original button | Keyboard / mouse | Xbox One / Series | DualSense |
+|---|---|---|---|
+| Move / left stick | WASD | Left stick | Left stick |
+| Menu direction / D-pad | Arrow keys | D-pad | D-pad |
+| Jump, confirm / A | Space | A | Cross |
+| Spin / X | X or left mouse | X | Square |
+| Crouch, slide / B | C or right mouse | B | Circle |
+| Status / Y | E | Y | Triangle |
+| Begin, pause / Start | Enter or Escape | Menu | Options |
+| Back | Backspace | View | Create |
+| White / Black | Q / R | LB / RB | L1 / R1 |
+| Left / right trigger | Shift / Ctrl | LT / RT | L2 / R2 |
+| Left / right stick click | Z / V | Stick clicks | L3 / R3 |
+| Right stick | Middle-button drag | Right stick | Right stick |
+
+Story movies can be skipped with Space or Enter (A or Start). Release the button
+between presses: the original game acts on rising edges. Mouse motion only affects
+modes that actually consume the right stick; it does not invent free-camera
+controls. There is no pointer-controlled menu. Keyboard diagonals stay within the
+stick's circular range. Modern face buttons are digital; triggers remain analog.
+
+Desktop input is neutral whenever the game window loses keyboard focus. Mouse
+also requires that same window's mouse focus; Cmd shortcuts do not contribute
+input. The cursor is never captured or warped. Keyboard and mouse poll current
+SDL state, so a press/release entirely between game polls may be missed. Physical
+gamepad focus/background behavior remains SDL's policy. `WRATH_KEYBOARD=0` disables
+the desktop source at startup, useful for controller-only diagnostics.
+
+## Original evidence
+
+The [publisher's Xbox manual, pp3–4](https://manuals.plus/m/e0300ac0aaf55f791f92f31ecd0414829621ee726044faf434892b60c88f7e29)
+confirms the basic actions above. The supplied XBE itself confirms the input path:
+`363AB` calls native XInputGetState; `365D3` maps A pressure above32 to game bit40;
+`3662A` maps Start to800. `36635–3663F` computes rising edges into controller+D0.
+The original story loop at`2DB67` tests mask840 there and requests movie completion
+at`2DB73`. Another original skip test is`2C8A5`. No game flags or scene state are
+patched to manufacture these actions. The native bridge preserves its exact
+22-byte Xbox input packet (see INPUT-INTEGRATION.md).
+
+SDL documents [keyboard snapshots](https://wiki.libsdl.org/SDL2/SDL_GetKeyboardState),
+[keyboard focus](https://wiki.libsdl.org/SDL2/SDL_GetKeyboardFocus),
+[mouse snapshots](https://wiki.libsdl.org/SDL2/SDL_GetMouseState) and
+[standard controller buttons](https://wiki.libsdl.org/SDL2/SDL_GameControllerButton).
+Implementation is in the input-only toolkit patch; the pure desktop snapshot
+helper is `src/input/desktop_input.h` in that checkout. Input calls remain on the
+SDL/main thread. No renderer or translated game code changes are needed.
+
+## Validation and limits
+
+2026-09-08 native arm64 focused tests passed, each built with one compiler job:
+
+```
+clang -std=c11 -Wall -Wextra -Werror -Ithird_party/xboxrecomp/src $(pkg-config --cflags sdl2) tools/tests/desktop_input.c third_party/xboxrecomp/src/input/xinput_device.c $(pkg-config --libs sdl2) -o build/test_desktop_input
+build/test_desktop_input
+clang -std=c11 -Wall -Wextra -Werror -Ithird_party/xboxrecomp/src $(pkg-config --cflags sdl2) tools/test_input.c third_party/xboxrecomp/src/input/xinput_device.c $(pkg-config --libs sdl2) -o build/test_input
+build/test_input
+clang -std=c11 -Wall -Wextra -Werror -Ithird_party/xboxrecomp/src $(pkg-config --cflags sdl2) tools/tests/input_bridge.c third_party/xboxrecomp/src/input/xinput_device.c $(pkg-config --libs sdl2) -o build/test_input_bridge
+build/test_input_bridge
+```
+
+Logs: `local/reports/desktop-input-test.log`, `input-controller-test.log`, and
+`input-bridge-test.log`. Desktop tests cover focus/Command suppression, keys,
+mouse signs/saturation, opposing directions/diagonals, merge preservation,
+keyboard-only capabilities, and physical detach releasing buttons while the
+logical port stays connected. Controller tests cover all six digital analog-button
+channels and eight original digital buttons on both virtual families, stick
+endpoints/Y inversion, trigger pressure, packets, hotplug and rumble. Bridge tests
+cover original addresses, guest ABI, generation handles and event completion.
+
+These are snapshot/virtual-device tests, not physical Bluetooth transport or
+real macOS focus-transition/gameplay tests. No controllers were assumed connected.
+Parent integration testing must confirm actual menu/skip/movement with the game
+window and both real wireless controller families when available.

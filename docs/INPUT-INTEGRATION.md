@@ -133,3 +133,11 @@ Bluetooth connectivity, game-thread placement, game input and actual event
 completion still require end-to-end validation. Replacement between two polls
 without an observed disconnected state cannot currently be distinguished from
 continued attachment through the backend's boolean connection API.
+
+## Desktop and Bluetooth controls update
+
+See [CONTROLS.md](CONTROLS.md) for default keyboard/mouse controls, exact original
+A/Start story-skip evidence, focus policy, and current regression commands.
+Port0 now remains present as a keyboard source unless `WRATH_KEYBOARD=0`; existing
+controller-only tests explicitly disable it. All guest layouts/SDK addresses are
+unchanged. Physical controllers are merged into their existing SDL port mappings.

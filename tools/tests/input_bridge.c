@@ -56,6 +56,7 @@ static SDL_Joystick *attach(void)
 }
 int main(void)
 {
+    SDL_setenv("WRATH_KEYBOARD", "0", 1); /* Isolate physical-port semantics. */
     assert(SDL_Init(SDL_INIT_GAMECONTROLLER)==0);
     if (SDL_NumJoysticks()) {puts("SKIP: physical device present");return 77;}
     SDL_version version;SDL_GetVersion(&version);

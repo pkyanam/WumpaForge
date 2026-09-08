@@ -53,6 +53,7 @@ static void detach(SDL_Joystick *joy)
 
 int main(void)
 {
+    SDL_setenv("WRATH_KEYBOARD", "0", 1); /* Isolate physical-port semantics. */
     SDL_version version;
     SDL_GetVersion(&version);
     /* sdl2-compat 2.32.70 forwards an SDL2 int callback directly to an SDL3
@@ -107,6 +108,42 @@ int main(void)
     assert(xbox_InputGetState(1, &state) == 0);
     assert(state.Gamepad.bAnalogButtons[XBOX_BUTTON_X] == 255);
     assert(state.Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] == 255);
+    /* Exercise every standardized original button separately on both families. */
+    const SDL_GameControllerButton analog[] = {
+        SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_X,
+        SDL_CONTROLLER_BUTTON_Y, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER,
+        SDL_CONTROLLER_BUTTON_LEFTSHOULDER};
+    const SDL_GameControllerButton digital[] = {
+        SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+        SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
+        SDL_CONTROLLER_BUTTON_START, SDL_CONTROLLER_BUTTON_BACK,
+        SDL_CONTROLLER_BUTTON_LEFTSTICK, SDL_CONTROLLER_BUTTON_RIGHTSTICK};
+    SDL_Joystick *devices[] = {xbox, ps5};
+    for (unsigned port = 0; port < 2; ++port) {
+        for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; ++b)
+            SDL_JoystickSetVirtualButton(devices[port], b, 0);
+        for (unsigned b = 0; b < 6; ++b) {
+            SDL_JoystickSetVirtualButton(devices[port], analog[b], 1);
+            assert(xbox_InputGetState(port, &state) == 0);
+            for (unsigned other = 0; other < 6; ++other)
+                assert(state.Gamepad.bAnalogButtons[other] == (other == b ? 255 : 0));
+            SDL_JoystickSetVirtualButton(devices[port], analog[b], 0);
+        }
+        for (unsigned b = 0; b < 8; ++b) {
+            SDL_JoystickSetVirtualButton(devices[port], digital[b], 1);
+            assert(xbox_InputGetState(port, &state) == 0);
+            assert(state.Gamepad.wButtons == (1u << b));
+            SDL_JoystickSetVirtualButton(devices[port], digital[b], 0);
+        }
+        SDL_JoystickSetVirtualAxis(devices[port], SDL_CONTROLLER_AXIS_LEFTX, -32768);
+        SDL_JoystickSetVirtualAxis(devices[port], SDL_CONTROLLER_AXIS_RIGHTX, 32767);
+        SDL_JoystickSetVirtualAxis(devices[port], SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 0);
+        assert(xbox_InputGetState(port, &state) == 0);
+        assert(state.Gamepad.sThumbLX == -32768 && state.Gamepad.sThumbRX == 32767);
+        assert(state.Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] >= 126 &&
+               state.Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] <= 128);
+    }
+    SDL_JoystickSetVirtualButton(ps5, SDL_CONTROLLER_BUTTON_X, 1);
     XBOX_INPUT_CAPABILITIES caps;
     assert(xbox_InputGetCapabilities(1, 0, &caps) == 0);
     assert(caps.Vibration.wLeftMotorSpeed == 65535);
