@@ -12,8 +12,8 @@ Boot43 produced all three requested files. Frames900 and1800 visibly verify the
 Traveller's Tales logo and Crash title/menu after the viewport fix. Captures and
 format-converted PNGs stay ignored under local/reports.
 
-`tools/boot.py` permits bounded runs up to180seconds so the title's original
-attract transition can be observed. A debugger exit0 is never proof of success;
+`tools/boot.py` permits bounded runs up to600seconds so the complete six-minute
+backstory and the title's original attract transition can be observed. A debugger exit0 is never proof of success;
 inspect its stop and actual game state.
 
 For interactive UI testing, run `python3 tools/package.py` after a successful

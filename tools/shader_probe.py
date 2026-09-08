@@ -47,6 +47,9 @@ def dump(debugger, destination):
             value("s_vertex_constants").GetLoadAddress() - base, 192 * 4),
         "texture_states": [words(0x10EC18 + stage * 128, 32)
                            for stage in range(4)],
+        "stream_records": [dict(zip(("stride", "offset", "handle"),
+                                    words(0x10F280 + stream * 12, 3)))
+                           for stream in range(16)],
         "game_state": {"level": words(0x19C068, 1)[0],
                        "demo": words(0x23B750, 1)[0],
                        "cutmovie": words(1556068, 1)[0],
@@ -88,6 +91,10 @@ def dump(debugger, destination):
             mesh["pool"].append(record)
         out["mesh"] = mesh
     filename = process.ReadMemory(base + 0x561740, 256, error)
+    for stream in out["stream_records"]:
+        handle = stream["handle"]
+        if 0x1000 <= handle <= 0x4000000 - 24:
+            stream["header"] = words(handle, 6)
     if error.Success():
         out["game_state"]["level_filename"] = filename.split(b"\0", 1)[0].decode("utf-8", "replace")
     # Read allocated native metadata pages in bulk; no getter or game code runs.

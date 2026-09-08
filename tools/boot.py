@@ -14,6 +14,8 @@ def main():
     parser.add_argument("--break-at", action="append", default=[])
     parser.add_argument("--on-stop", action="append", default=[],
                         help="Additional LLDB inspection command at the diagnostic stop")
+    parser.add_argument("--probe-story", action="store_true",
+                        help="Read-only sparse original backstory boundary snapshots")
     parser.add_argument("--probe-intro", action="store_true",
                         help="Read-only matched intro and first draw snapshots")
     parser.add_argument("--probe-shader", action="store_true",
@@ -21,8 +23,8 @@ def main():
     parser.add_argument("--app", action="store_true",
                         help="Debug the packaged Mac app for Computer Use testing (package first)")
     args = parser.parse_args()
-    if Path(args.name).name != args.name or not 1 <= args.seconds <= 180:
-        parser.error("Use a plain log name and a duration from 1 to 180 seconds")
+    if Path(args.name).name != args.name or not 1 <= args.seconds <= 600:
+        parser.error("Use a plain log name and a duration from 1 to 600 seconds")
     reports = ROOT / "local/reports"
     reports.mkdir(parents=True, exist_ok=True)
     log = reports / f"{args.name}.log"
@@ -32,6 +34,9 @@ def main():
         command += ["-o", f"command script import {ROOT / 'tools/shader_probe.py'}",
                     "-o", "breakpoint set -n shader_error"]
         shader_dump = [f"script shader_probe.dump(lldb.debugger, {str(reports / (args.name + '-shader.json'))!r})"]
+    if args.probe_story:
+        command += ["-o", f"command script import {ROOT / 'tools/story_probe.py'}",
+                    "-o", "script story_probe.install(lldb.debugger)"]
     if args.probe_intro:
         command += ["-o", f"command script import {ROOT / 'tools/intro_probe.py'}",
                     "-o", "script intro_probe.install(lldb.debugger)"]
