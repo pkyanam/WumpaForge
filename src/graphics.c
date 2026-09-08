@@ -553,6 +553,8 @@ extern void xbox_HeapFree(uint32_t address);
 #define RESOURCE_SURFACE 3
 #define RESOURCE_DEPTH_SURFACE 4
 #define RESOURCE_CUBE_TEXTURE 5
+#define RESOURCE_PALETTE 6
+#define RESOURCE_INDEX_BUFFER 7
 static struct Resource {
     uint32_t handle, data, bytes, width, height, levels, format, pitch, owner;
     uint32_t offsets[13], pitches[13], sizes[13];
@@ -560,12 +562,18 @@ static struct Resource {
     GLenum framebuffer;
     GLuint target_fbo, target_texture;
     GLuint cube_gl;
+    GLuint palette_gl[3]; /* P8 stage0 uses the native texture; other stages vary. */
+    uint64_t palette_revision, p8_revision;
+    uint64_t p8_uploaded[4], p8_palette_revision[4];
+    uint32_t p8_palette_handle[4];
     uint32_t face_stride;
     int linear, dirty;
     IDirect3DTexture8 *texture;
     IDirect3DVertexBuffer8 *vertex_buffer;
 } s_resources[RESOURCE_LIMIT];
 static uint32_t s_texture_handles[4], s_stream_handle, s_stream_stride, s_fvf;
+static uint32_t s_palette_handles[4];
+static uint64_t s_palette_revision;
 
 static struct Resource *resource(uint32_t handle)
 {
@@ -582,6 +590,8 @@ static struct Resource *new_resource(void)
 static void update_common(struct Resource *r)
 {
     uint32_t kind = (r->type == RESOURCE_TEXTURE || r->type == RESOURCE_CUBE_TEXTURE) ? 0x40000 : (r->type == RESOURCE_SURFACE || r->type == RESOURCE_DEPTH_SURFACE) ? 0x50000 : 0;
+    if (r->type == RESOURCE_INDEX_BUFFER) kind = 0x10000;
+    if (r->type == RESOURCE_PALETTE) kind = 0x30000 | (r->format << 30);
     write32(r->handle, 0x1000000 | kind | (r->references & 0xFFFF) | (r->bindings << 19));
 }
 static void release_resource(struct Resource *r)
@@ -590,10 +600,11 @@ static void release_resource(struct Resource *r)
     if (r->target_fbo) glDeleteFramebuffers(1, &r->target_fbo);
     if (r->target_texture) glDeleteTextures(1, &r->target_texture);
     if (r->cube_gl) glDeleteTextures(1, &r->cube_gl);
+    glDeleteTextures(3, r->palette_gl);
     if (r->texture) r->texture->lpVtbl->Release(r->texture);
     if (r->vertex_buffer) r->vertex_buffer->lpVtbl->Release(r->vertex_buffer);
     uint32_t owner = r->owner;
-    if (!owner) xbox_HeapFree(r->data);
+    if (!owner && r->type != RESOURCE_INDEX_BUFFER) xbox_HeapFree(r->data);
     xbox_HeapFree(r->handle);
     memset(r, 0, sizeof(*r));
     if (owner) {
@@ -614,7 +625,7 @@ static int format_info(uint32_t format, int *linear)
     case 0x20: *linear = 1; return 2;
     case 6: case 7: return 4;
     case 2: case 3: case 4: case 5: case 0x1A: return 2;
-    case 0: case 0x19: return 1;
+    case 0: case 0x19: case 0x0B: return 1;
     case 0x0C: case 0x0E: case 0x0F: return 0; /* Block compressed. */
     default: return -1;
     }
@@ -691,9 +702,18 @@ static uint32_t dxt_color(const uint8_t *block, unsigned pixel, uint32_t format)
 /* Cube faces are stored in Xbox face order (+X,-X,+Y,-Y,+Z,-Z), with each
  * complete mip chain padded to 128 bytes. Pixel data remains guest-owned. */
 extern GLuint xbox_D3D8GLTextureName(IDirect3DTexture8 *texture);
-static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint name, unsigned faces)
+static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint name, unsigned faces,
+                                     const uint32_t *colors, unsigned color_count)
 {
     if (!r || !name || !graphics_thread()) return D3DERR_INVALIDCALL;
+    if (r->format == 0x0B && (!colors || !color_count)) return D3DERR_INVALIDCALL;
+    if (r->format == 0x0B) {
+        for (unsigned level = 0; level < r->levels; ++level) {
+            const uint8_t *indices = guest_ptr(r->data + r->offsets[level]);
+            for (uint32_t i = 0; i < r->sizes[level]; ++i)
+                if (indices[i] >= color_count) return D3DERR_INVALIDCALL;
+        }
+    }
     if (!r->dirty) return 0;
     uint32_t *pixels = malloc((size_t)r->width * r->height * 4);
     if (!pixels) return (HRESULT)0x8007000E;
@@ -725,7 +745,7 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
                 uint32_t packed = 0;
                 uint32_t offset = linear ? y * r->pitches[level] + x * bpp : morton_index(x, y, width, height) * bpp;
                 memcpy(&packed, source + offset, (size_t)bpp);
-                color = uncompressed_color(packed, r->format);
+                color = r->format == 0x0B ? colors[packed] : uncompressed_color(packed, r->format);
             }
             pixels[y * width + x] = color;
         }
@@ -757,7 +777,7 @@ static HRESULT upload_cube_texture(struct Resource *r)
 {
     if (!r || r->type != RESOURCE_CUBE_TEXTURE || !graphics_thread()) return D3DERR_INVALIDCALL;
     if (!r->cube_gl) glGenTextures(1, &r->cube_gl);
-    return upload_texture_images(r, GL_TEXTURE_CUBE_MAP, r->cube_gl, 6);
+    return upload_texture_images(r, GL_TEXTURE_CUBE_MAP, r->cube_gl, 6, NULL, 0);
 }
 void sub_000FE9F0(void) /* CreateCubeTexture(edge,levels,usage,format,pool,out) */
 {
@@ -823,7 +843,91 @@ void sub_00103CB0(void) /* GetCubeMapSurface(texture,face,level,out) */
 static HRESULT upload_texture(struct Resource *r)
 {
     if (!r || r->type != RESOURCE_TEXTURE || !r->texture) return D3DERR_INVALIDCALL;
-    return upload_texture_images(r, GL_TEXTURE_2D, xbox_D3D8GLTextureName(r->texture), 1);
+    return upload_texture_images(r, GL_TEXTURE_2D, xbox_D3D8GLTextureName(r->texture), 1, NULL, 0);
+}
+
+/* An indexed image may be simultaneously bound to multiple stages with
+ * different palettes. Expand each actual stage to its own RGBA texture before
+ * native filtering; never interpolate integer palette indices. */
+static GLuint texture_gl_name(struct Resource *r, unsigned stage)
+{
+    if (!r || !r->texture || stage >= 4) return 0;
+    if (r->format == 0x0B && stage) {
+        if (!r->palette_gl[stage - 1]) glGenTextures(1, &r->palette_gl[stage - 1]);
+        return r->palette_gl[stage - 1];
+    }
+    return xbox_D3D8GLTextureName(r->texture);
+}
+static HRESULT upload_texture_stage(struct Resource *r, unsigned stage)
+{
+    if (!r || stage >= 4) return D3DERR_INVALIDCALL;
+    if (r->format != 0x0B) return upload_texture(r);
+    struct Resource *palette = resource(s_palette_handles[stage]);
+    if (!palette || palette->type != RESOURCE_PALETTE) {
+        fprintf(stderr, "[wrath graphics] P8 texture 0x%X has no palette at stage %u\n", r->handle, stage);
+        return D3DERR_INVALIDCALL;
+    }
+    if (r->dirty) { ++r->p8_revision; r->dirty = 0; }
+    if (r->p8_uploaded[stage] == r->p8_revision &&
+        r->p8_palette_handle[stage] == palette->handle &&
+        r->p8_palette_revision[stage] == palette->palette_revision) return 0;
+    r->dirty = 1;
+    HRESULT result = upload_texture_images(r, GL_TEXTURE_2D, texture_gl_name(r, stage), 1,
+                                          guest_ptr(palette->data), palette->bytes / 4);
+    if (result >= 0) {
+        r->p8_uploaded[stage] = r->p8_revision;
+        r->p8_palette_handle[stage] = palette->handle;
+        r->p8_palette_revision[stage] = palette->palette_revision;
+    }
+    return result;
+}
+
+void sub_00100E30(void) /* CreatePalette(sizeEnum,out), ret8. */
+{
+    uint32_t size = arg(0), out = arg(1);
+    struct Resource *r = new_resource();
+    if (!s_device || !r || size > 3 || !out) { finish(8, (uint32_t)D3DERR_INVALIDCALL); return; }
+    write32(out, 0);
+    r->bytes = 1024u >> size;
+    r->handle = xbox_HeapAlloc(12, 16); r->data = xbox_HeapAlloc(r->bytes, 64);
+    if (!r->handle || !r->data) {
+        if (r->handle) xbox_HeapFree(r->handle);
+        if (r->data) xbox_HeapFree(r->data);
+        memset(r, 0, sizeof(*r)); finish(8, 0x8007000E); return;
+    }
+    r->type = RESOURCE_PALETTE; r->format = size; r->references = 1; r->palette_revision = ++s_palette_revision;
+    memset(guest_ptr(r->data), 0, r->bytes);
+    update_common(r); write32(r->handle + 4, r->data); write32(r->handle + 8, 0);
+    write32(out, r->handle); finish(8, 0);
+}
+void sub_00100D40(void) /* Shared palette/index-buffer Lock(handle,out,flags), ret12. */
+{
+    uint32_t handle = arg(0), out = arg(1);
+    struct Resource *r = resource(handle);
+    if (!r || !out || (r->type != RESOURCE_PALETTE && r->type != RESOURCE_INDEX_BUFFER)) {
+        finish(12, (uint32_t)D3DERR_INVALIDCALL); return;
+    }
+    /* Native draws copy guest bytes while holding the device lock, so no
+     * outstanding hardware read requires the original resource-idle wait. */
+    if (r->type == RESOURCE_PALETTE) r->palette_revision = ++s_palette_revision;
+    write32(out, r->data); finish(12, 0);
+}
+void sub_000FFE10(void) /* SetPalette(stage,handle), ret8. */
+{
+    uint32_t stage = arg(0), handle = arg(1);
+    struct Resource *r = resource(handle);
+    if (!s_device || stage >= 4 || (handle && (!r || r->type != RESOURCE_PALETTE))) {
+        finish(8, (uint32_t)D3DERR_INVALIDCALL); return;
+    }
+    if (r) r->palette_revision = ++s_palette_revision;
+    if (handle != s_palette_handles[stage]) {
+        if (r) { ++r->bindings; update_common(r); }
+        struct Resource *old = resource(s_palette_handles[stage]);
+        if (old) { --old->bindings; release_resource(old); }
+        s_palette_handles[stage] = handle;
+    }
+    write32(GUEST_DEVICE + 0xA88 + stage * 4, handle);
+    finish(8, 0);
 }
 
 void sub_000FE9C0(void) /* CreateTexture(w,h,levels,usage,format,pool,out), ret28 */
@@ -949,7 +1053,7 @@ void sub_000FFC90(void)
         finish(8, (uint32_t)D3DERR_INVALIDCALL); return;
     }
     HRESULT result = 0;
-    if (r) { r->dirty = 1; result = r->type==RESOURCE_CUBE_TEXTURE ? upload_cube_texture(r) : upload_texture(r); }
+    if (r) { r->dirty = 1; if (r->format != 0x0B) result = r->type==RESOURCE_CUBE_TEXTURE ? upload_cube_texture(r) : upload_texture(r); }
     if (result >= 0) result = s_device->lpVtbl->SetTexture(s_device, stage,
                                    r && r->type==RESOURCE_TEXTURE ? (IDirect3DBaseTexture8 *)r->texture : NULL);
     if (result >= 0 && handle != s_texture_handles[stage]) {
@@ -1051,10 +1155,10 @@ void sub_00102940(void) /* SetVertexShader: even FVF codes vs odd program handle
     s_fvf = fvf;
     finish(4, (uint32_t)s_device->lpVtbl->SetVertexShader(s_device, fvf));
 }
-static HRESULT draw_vertices(uint32_t type, uint32_t count, uint32_t data, uint32_t stride)
+static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *vertices, uint32_t stride)
 {
     if (!count) return 0;
-    if (!s_device || !graphics_thread() || !data || !stride || stride > 1024 || count > 1024 * 1024 || (uint64_t)count * stride > 64 * 1024 * 1024 || !s_fvf)
+    if (!s_device || !graphics_thread() || !vertices || !stride || stride > 1024 || count > 1024 * 1024 || (uint64_t)count * stride > 64 * 1024 * 1024 || !s_fvf)
         return D3DERR_INVALIDCALL;
     D3DPRIMITIVETYPE native; unsigned primitives; int quads = 0;
     switch (type) {
@@ -1069,9 +1173,9 @@ static HRESULT draw_vertices(uint32_t type, uint32_t count, uint32_t data, uint3
     }
     for (unsigned i = 0; i < 4; ++i) {
         struct Resource *r = resource(s_texture_handles[i]);
-        if (r) { HRESULT result = r->type==RESOURCE_CUBE_TEXTURE ? upload_cube_texture(r) : upload_texture(r); if (result < 0) return result; }
+        if (r) { HRESULT result = r->type==RESOURCE_CUBE_TEXTURE ? upload_cube_texture(r) : upload_texture_stage(r,i); if (result < 0) return result; }
     }
-    const void *vertices = guest_ptr(data); void *converted = NULL;
+    void *converted = NULL;
     if (quads) {
         uint32_t output_count = count / 4 * 6;
         converted = malloc((size_t)output_count * stride);
@@ -1087,6 +1191,13 @@ static HRESULT draw_vertices(uint32_t type, uint32_t count, uint32_t data, uint3
         GLenum primitive=type==1?GL_POINTS:type==2?GL_LINES:type==3?GL_LINE_STRIP:type==6?GL_TRIANGLE_STRIP:type==7?GL_TRIANGLE_FAN:GL_TRIANGLES;
         HRESULT result=shader_draw(primitive,count,vertices,stride);
         free(converted); return result;
+    }
+    for (unsigned stage=1; stage<4; ++stage) {
+        struct Resource *r=resource(s_texture_handles[stage]);
+        if (r && r->format==0x0B) {
+            fprintf(stderr,"[wrath graphics] fixed pipeline P8 stage%u requires multistage binding\n",stage);
+            free(converted); return D3DERR_INVALIDCALL;
+        }
     }
     if ((s_fvf & 0xE) == D3DFVF_XYZRHW) {
         if (stride < 16 || !s_viewport.Width || !s_viewport.Height) { free(converted); return D3DERR_INVALIDCALL; }
@@ -1110,13 +1221,19 @@ static HRESULT draw_vertices(uint32_t type, uint32_t count, uint32_t data, uint3
     HRESULT result = s_device->lpVtbl->DrawPrimitiveUP(s_device, native, primitives, vertices, stride);
     free(converted); return result;
 }
+static HRESULT draw_vertices(uint32_t type, uint32_t count, uint32_t data, uint32_t stride)
+{
+    if (count && (!data || (uint64_t)data + (uint64_t)count * stride > 64u * 1024 * 1024))
+        return D3DERR_INVALIDCALL;
+    return draw_vertices_data(type, count, data ? guest_ptr(data) : NULL, stride);
+}
 void sub_001019C0(void) /* DrawVerticesUP(type,vertexCount,data,stride) */
 {
     finish(16, (uint32_t)draw_vertices(arg(0), arg(1), arg(2), arg(3)));
 }
 void sub_00101B20(void) /* DrawVertices(type,startVertex,vertexCount) */
 {
-    struct Resource *r = resource(s_stream_handle); uint32_t start = arg(1), count = arg(2);
+    uint32_t start = arg(1), count = arg(2); struct Resource *r = resource(s_stream_handle);
     if (!r || !s_stream_stride || (uint64_t)(start + (uint64_t)count) * s_stream_stride > r->bytes) {
         finish(12, (uint32_t)D3DERR_INVALIDCALL); return;
     }
@@ -1435,6 +1552,8 @@ void sub_000FF580(void) /* CopyRects(source,rectangles,count,destination,points)
     free(pixels); finish(20, (uint32_t)result);
 }
 
+#include "index_bridge.inc"
+
 recomp_func_t wrath_graphics_lookup(uint32_t address)
 {
     switch (address) {
@@ -1458,6 +1577,12 @@ recomp_func_t wrath_graphics_lookup(uint32_t address)
     case 0x000FF860: return sub_000FF860;
     case 0x00100EA0: return sub_00100EA0;
     case 0x00100C40: return sub_00100C40;
+    case 0x00100D00: return sub_00100D00;
+    case 0x00100D40: return sub_00100D40;
+    case 0x00100E30: return sub_00100E30;
+    case 0x000FFE10: return sub_000FFE10;
+    case 0x000FFEA0: return sub_000FFEA0;
+    case 0x00101BC0: return sub_00101BC0;
     case 0x000FE9C0: return sub_000FE9C0;
     case 0x00103C80: return sub_00103C80;
     case 0x00103C20: return sub_00103C20;
@@ -1507,6 +1632,8 @@ static void test_state(uint32_t method, uint32_t value)
     g_ecx=0x40000|method; g_edx=value; call(0xFD830,NULL,0);
     assert(g_eax==0);
 }
+#include "../tools/test_index_bridge.inc"
+
 static void test_cube_resources(void)
 {
     uint32_t create_cube[] = {4,3,0,0x0F,0,0x9000};
@@ -1584,6 +1711,71 @@ static void test_cube_resources(void)
     }
     release[0]=mip_handle; call(0x103AD0,release,1); assert(!resource(mip_handle));
     assert(glGetError()==GL_NO_ERROR);
+}
+static void test_palette_resources(void)
+{
+    uint32_t palettes[2];
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        uint32_t create[] = {stage ? 3u : 0u, 0xB100};
+        call(0x100E30, create, 2); assert(g_eax == 0);
+        palettes[stage] = read32(0xB100);
+        assert(read32(palettes[stage]) == (0x01030001u | (create[0] << 30)));
+        uint32_t lock[] = {palettes[stage], 0xB104, 0xA0};
+        call(0x100D40, lock, 3); assert(g_eax == 0);
+        uint32_t data = read32(0xB104);
+        for (unsigned i = 0; i < (stage ? 32u : 256u); ++i)
+            write32(data + i * 4, (stage ? 0x90200000u : 0xF0400000u) | (i << 8) | (31u - (i & 31)));
+        uint32_t bind[] = {stage, palettes[stage]}; call(0xFFE10, bind, 2); assert(g_eax == 0);
+        assert(read32(GUEST_DEVICE + 0xA88 + stage * 4) == palettes[stage]);
+    }
+    uint32_t create[] = {8, 4, 0, 0, 0x0B, 0, 0xB108};
+    call(0xFE9C0, create, 7); assert(g_eax == 0);
+    uint32_t handle = read32(0xB108); struct Resource *r = resource(handle);
+    assert(r && r->bytes == 43 && r->levels == 4 && r->pitch == 8);
+    for (unsigned level = 0; level < r->levels; ++level) {
+        unsigned w = r->width >> level, h = r->height >> level;
+        if (!w) w = 1; if (!h) h = 1;
+        uint8_t *data = guest_ptr(r->data + r->offsets[level]);
+        for (unsigned y = 0; y < h; ++y) for (unsigned x = 0; x < w; ++x)
+            data[morton_index(x, y, w, h)] = (uint8_t)((x + y * w + level) & 31);
+    }
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        uint32_t bind[] = {stage, handle}; call(0xFFC90, bind, 2); assert(g_eax == 0);
+    }
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        assert(upload_texture_stage(r, stage) == 0);
+        glBindTexture(GL_TEXTURE_2D, texture_gl_name(r, stage));
+        for (unsigned level = 0; level < r->levels; ++level) {
+            unsigned w = r->width >> level, h = r->height >> level;
+            if (!w) w = 1; if (!h) h = 1;
+            uint32_t actual[32] = {0};
+            glGetTexImage(GL_TEXTURE_2D, level, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, actual);
+            for (unsigned y = 0; y < h; ++y) for (unsigned x = 0; x < w; ++x) {
+                unsigned i = (x + y * w + level) & 31;
+                assert(actual[y*w+x] == ((stage ? 0x90200000u : 0xF0400000u) | (i << 8) | (31-i)));
+            }
+        }
+    }
+    assert(texture_gl_name(r, 0) != texture_gl_name(r, 1));
+    uint64_t uploaded = r->p8_uploaded[0], palette_revision = r->p8_palette_revision[0];
+    assert(upload_texture_stage(r, 0) == 0 && r->p8_uploaded[0] == uploaded && r->p8_palette_revision[0] == palette_revision);
+    uint32_t lock[] = {palettes[0], 0xB104, 0}; call(0x100D40, lock, 3);
+    write32(read32(0xB104), 0x12345678);
+    assert(upload_texture_stage(r, 0) == 0 && r->p8_palette_revision[0] != palette_revision);
+    glBindTexture(GL_TEXTURE_2D, texture_gl_name(r, 0));
+    uint32_t actual[32]; glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, actual);
+    assert(actual[0] == 0x12345678);
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        uint32_t release[] = {palettes[stage]}; call(0x103AD0, release, 1);
+        assert(resource(palettes[stage])); /* Device binding keeps palette alive. */
+        uint32_t unbind[] = {stage, 0}; call(0xFFE10, unbind, 2);
+        assert(!resource(palettes[stage]));
+        call(0xFFC90, unbind, 2);
+    }
+    GLuint variant = r->palette_gl[0];
+    uint32_t release[] = {handle}; call(0x103AD0, release, 1);
+    assert(!resource(handle) && !glIsTexture(variant));
+    assert(glGetError() == GL_NO_ERROR);
 }
 static void test_shader_bridge(void)
 {
@@ -1927,6 +2119,8 @@ int main(void)
     assert(glGetError() == GL_NO_ERROR);
     assert(wrath_graphics_lookup(0xDEADBEEF) == NULL);
     test_cube_resources();
+    test_palette_resources();
+    test_index_bridge();
     test_shader_bridge();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();

@@ -910,3 +910,52 @@ build/input/test_graphics_threads
 The cumulative `patches/xboxrecomp-graphics.patch` includes this backend change,
 the Apple OpenGL framework dependency in toolkit D3D CMake, and all previous
 graphics changes. Reverse-apply check passes against the local toolkit checkout.
+
+## Palette resources and P8 textures (boot21)
+
+Boot21 loads actual 32x32, 8x64, 64x64, 16x16, 64x16, and 32x16 images with Xbox
+format `0x0B` (P8). Native texture creation previously rejected these. The guest
+SDK bodies and game callers establish three boundaries, now implemented:
+
+| Guest entry | Actual arguments / return | Evidence |
+| --- | --- | --- |
+| `100E30` CreatePalette | `(sizeEnum,out)`; HRESULT, ret8 | Calls `3CE9B`, `3DD02`; allocates 12-byte resource; table `10B1A8` supplies allocation size; `100E7E` shifts size enum30 bits and `100E8D` ORs Common `01030001`. |
+| `100D40` Palette/IndexBuffer Lock | `(resource,outData,flags)`; ret12 | Calls `3CECD`, `3DD42`; flags `0xA0` control the old resource wait; helper `103960` returns the resource Data through its cached alias. |
+| `FFE10` SetPalette | `(stage,handle)`; ret8 | Wrapper `3AC40` calls at `3AC4A`; `FFE1D/FFE55` read/write device `+A88+4*stage`; increments/decrements binding refs `80000`; emits palette method `41B20+64*stage`. |
+
+Size enums 0,1,2,3 mean 256,128,64,32 entries, each an ARGB32 color. The palette
+Common retains its size in bits30..31 across AddRef/Release/binding updates.
+Native resource type6 is the palette; type7 remains the separate index buffer.
+Lock accepts both resource types and returns a valid guest pointer to their data.
+Native draws copy guest bytes under the shared device lock, so the old pending
+GPU resource-read wait has no outstanding guest-memory read to wait for.
+
+Public confirmation comes from the pinned
+[XbSymbolDatabase 3911 CreatePalette and Palette Lock signatures](https://github.com/Cxbx-Reloaded/XbSymbolDatabase/blob/20eced544726f5558c5a408458f38a086cc4e543/src/OOVPADatabase/D3D8/3911.inl),
+whose tested offsets match this executable's corresponding instructions. The
+SetPalette address uses this executable's full function body; older signatures
+have different device-member offsets and are not treated as address aliases.
+[Cxbx Xbox resource types](https://github.com/Cxbx-Reloaded/Cxbx-Reloaded/blob/585c49a50af1255ab155099e06f24505f9c5a800/src/core/hle/D3D8/XbD3D8Types.h)
+define palette type3, the high-bit size mask, and the four palette sizes.
+
+P8 guest storage now uses one Morton-swizzled index byte per texel and the actual
+mip chain sizes. `upload_texture_stage(resource,stage)` expands indices through
+the palette bound at that stage into RGBA8 before native texture filtering.
+`texture_gl_name(resource,stage)` selects the corresponding GL texture: stage0
+uses the existing native object; other stages lazily allocate independent
+variants. This preserves distinct colors when one P8 image is simultaneously
+bound with different palettes. Cache keys include texture content revision and
+globally increasing palette revisions, so Lock/rebinding invalidates affected
+uploads, including guest handle reuse. SetTexture defers P8 upload until draw,
+allowing the game to bind the palette afterward. Palette bindings retain their
+resources; texture destruction releases all native variants.
+
+The combined native graphics smoke verifies all four mips of a rectangular8x4
+P8 image, 256/32-color palettes with distinct alpha, simultaneous stage0/stage1
+GPU texture readbacks, palette mutation, cache reuse, serialized guest headers,
+binding lifetime, and GL variant deletion. The full combined smoke also passes
+existing indexed drawing and shader tests. This is a compatibility regression,
+not evidence that the actual game menu has rendered yet. P8 cube textures,
+indices outside a smaller bound palette, and P8 use on fixed-pipeline stages
+beyond stage0 remain explicit unsupported cases; actual programmed shader stage
+binding uses the implemented variants.

@@ -225,10 +225,10 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
         GLenum target=r->type==RESOURCE_CUBE_TEXTURE?GL_TEXTURE_CUBE_MAP:GL_TEXTURE_2D;
         if (p->pixel.sampler_dimension[i]==3 || ((p->pixel.sampler_dimension[i]==4)!=(target==GL_TEXTURE_CUBE_MAP)))
             shader_error("texture","sampler dimension mismatch");
-        HRESULT upload=r->type==RESOURCE_CUBE_TEXTURE?upload_cube_texture(r):upload_texture(r);
+        HRESULT upload=r->type==RESOURCE_CUBE_TEXTURE?upload_cube_texture(r):upload_texture_stage(r,i);
         if (upload<0) shader_error("texture","native upload failed");
         glActiveTexture(GL_TEXTURE0+i);
-        glBindTexture(target,r->type==RESOURCE_CUBE_TEXTURE?r->cube_gl:xbox_D3D8GLTextureName(r->texture));
+        glBindTexture(target,r->type==RESOURCE_CUBE_TEXTURE?r->cube_gl:texture_gl_name(r,i));
         uint32_t state=0x10EC18+i*128;
         uint32_t mag=read32(state+12),min=read32(state+16),mip=read32(state+20);
         if (mag<1||mag>2||min<1||min>2||mip>2) shader_error("texture filtering","unsupported filter");
