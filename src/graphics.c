@@ -48,6 +48,7 @@ static IDirect3DDevice8 *s_device;
 static UINT s_width, s_height, s_target_width, s_target_height;
 static int s_depth_available;
 static HRESULT initialize_depth_surface(uint32_t format);
+static void initialize_render_defaults(void);
 static D3DVIEWPORT8 s_viewport;
 
 static void *guest_ptr(uint32_t address)
@@ -179,6 +180,7 @@ void sub_000FD6E0(void)
     if (s_depth_available && initialize_depth_surface(in.depth_format)<0) {
         fprintf(stderr,"[wrath graphics] failed native depth surface initialization\n"); abort();
     }
+    initialize_render_defaults();
     write32(output, GUEST_DEVICE);
     wrath_vblank_set_refresh(in.refresh_hz);
     fprintf(stderr, "[wrath graphics] native device %ux%u, guest handle 0x%08X\n",
@@ -228,6 +230,37 @@ static GLenum s_stencil_fail = GL_KEEP, s_stencil_zfail = GL_KEEP, s_stencil_pas
 static GLenum s_stencil_func = GL_ALWAYS;
 static uint32_t s_stencil_ref, s_stencil_mask = ~0u;
 static float s_offset_scale, s_offset_bias;
+/* Original 4361 initializer104330 copies states57..145 from10BDC0,
+ * except the two reserved slots, then derives ZENABLE from its depth surface.
+ * Copy the guest cache without executing unsupported hardware-writing setters.
+ * Only synchronize native state whose semantics this bridge already supports. */
+static void initialize_render_defaults(void)
+{
+    for (unsigned state=57; state<=145; ++state) {
+        if (state==116 || state==135) continue;
+        uint32_t value=state==124 ? (uint32_t)(s_depth_available!=0) :
+            read32(0x10BDC0+(state-57)*4);
+        write32(0x10EE18+state*4,value);
+    }
+    uint32_t zfunc=read32(0x10EEFC), afunc=read32(0x10EF00);
+    uint32_t src=read32(0x10EF10), dst=read32(0x10EF14);
+    if (!compare_valid(zfunc) || !compare_valid(afunc) ||
+        !blend_factor(src) || !blend_factor(dst)) state_error(0x10BDC0,zfunc);
+    native_state(D3DRS_ZFUNC,zfunc-GL_NEVER+1);
+    native_state(D3DRS_ALPHAFUNC,afunc-GL_NEVER+1);
+    native_state(D3DRS_SRCBLEND,blend_factor(src));
+    native_state(D3DRS_DESTBLEND,blend_factor(dst));
+    native_state(D3DRS_ZENABLE,s_depth_available!=0);
+    native_state(D3DRS_TEXTUREFACTOR,read32(0x10F01C));
+    glDepthFunc(zfunc);
+    gl_toggle(GL_DEPTH_TEST,s_depth_available!=0);
+    glBlendFunc(src,dst);
+    gl_toggle(GL_DITHER,read32(0x10EF1C));
+    /* Other native defaults already agree (write mask, disabled blending,
+     * alpha/stencil tests, LEQUAL, smooth fill). Preserve measured cull winding:
+     * guest CULLMODE=GL_CCW maps to native D3DCULL_CCW with GL_FRONTFACE=GL_CW.
+     * Guest lighting/material defaults are mirrored, not claimed implemented. */
+}
 void sub_000FD830(void)
 {
     uint32_t packet = g_ecx, value = g_edx, method = packet & 0xFFFF;
@@ -1913,6 +1946,21 @@ int main(void)
         1,1,2,1,1,0,0,0,0,0,0,0,0,0,0,0
     };
     memcpy(guest_ptr(0x10BD9C), defaults, sizeof(defaults));
+    /* Semantic render defaults needed by this fixture; production reads the XBE.
+     * Nonzero reserved canaries prove the initializer skips rather than clears. */
+    const struct { unsigned state; uint32_t value; } render_defaults[] = {
+        {57,GL_LEQUAL},{58,GL_ALWAYS},{62,GL_ONE},{64,1},{66,GL_SMOOTH},
+        {67,0x01010101},{68,GL_KEEP},{69,GL_KEEP},{70,GL_ALWAYS},
+        {72,~0u},{73,~0u},{74,GL_FUNC_ADD},{85,0x3F800000},{86,0x3F800000},
+        {92,1},{94,1},{95,1},{96,2},{97,1},{100,2},{101,1},
+        {116,0xDEADBEEF},{120,GL_FILL},{121,GL_FILL},{124,2},{126,GL_KEEP},
+        {127,GL_CW},{128,GL_CCW},{129,~0u},{135,0xDEADBEEF}
+    };
+    for (unsigned i=0;i<sizeof(render_defaults)/sizeof(render_defaults[0]);++i)
+        write32(0x10BDC0+(render_defaults[i].state-57)*4,render_defaults[i].value);
+    write32(0x10EE18+116*4,0x12345678);
+    write32(0x10EE18+135*4,0x89ABCDEF);
+
     GuestPresentation pp = {0};
     pp.width = 320; pp.height = 240; pp.format = 6; pp.buffer_count = 2;
     pp.multisample = 0x11; pp.swap_effect = 1; pp.depth_enabled = 1;
@@ -1922,6 +1970,33 @@ int main(void)
     call(0xFD6E0, create, 6);
     assert(g_eax == 0 && read32(0x3000) == GUEST_DEVICE);
     assert(read32(GUEST_DEVICE_GLOBAL) == GUEST_DEVICE);
+    assert(read32(0x10EE18+116*4)==0x12345678);
+    assert(read32(0x10EE18+135*4)==0x89ABCDEF);
+    assert(read32(0x10F01C)==0xFFFFFFFF && read32(0x10EF00)==GL_ALWAYS);
+    assert(read32(0x10EF24)==0x01010101 && read32(0x10F014)==GL_CW);
+    assert(read32(0x10F008)==1 && glIsEnabled(GL_DEPTH_TEST));
+    assert(!glIsEnabled(GL_DITHER));
+    GLint gl_value; DWORD native_value;
+    glGetIntegerv(GL_BLEND_SRC_RGB,&gl_value); assert(gl_value==GL_ONE);
+    glGetIntegerv(GL_BLEND_DST_RGB,&gl_value); assert(gl_value==GL_ZERO);
+    s_device->lpVtbl->GetRenderState(s_device,D3DRS_SRCBLEND,&native_value);
+    assert(native_value==D3DBLEND_ONE);
+    s_device->lpVtbl->GetRenderState(s_device,D3DRS_DESTBLEND,&native_value);
+    assert(native_value==D3DBLEND_ZERO);
+    s_device->lpVtbl->GetRenderState(s_device,D3DRS_ALPHAFUNC,&native_value);
+    assert(native_value==D3DCMP_ALWAYS);
+    s_device->lpVtbl->GetRenderState(s_device,D3DRS_TEXTUREFACTOR,&native_value);
+    assert(native_value==0xFFFFFFFF);
+    /* Exercise the same initialization boundary without a depth attachment.
+     * The table's W-buffer value2 must never leak to the guest or native cache. */
+    s_depth_available=0; initialize_render_defaults();
+    assert(read32(0x10F008)==0 && !glIsEnabled(GL_DEPTH_TEST));
+    s_device->lpVtbl->GetRenderState(s_device,D3DRS_ZENABLE,&native_value);
+    assert(native_value==0);
+    s_depth_available=1; initialize_render_defaults();
+    assert(read32(0x10F008)==1 && glIsEnabled(GL_DEPTH_TEST));
+    assert(glGetError()==GL_NO_ERROR);
+
     for (unsigned stage=0; stage<4; ++stage) {
         assert(read32(0x10EC18+stage*128+16*4)==(stage ? 1u : 2u));
         assert(read32(0x10EC18+stage*128+12*4)==(stage ? 1u : 4u));
