@@ -53,3 +53,22 @@ The first startup-only run survived its15-second watchdog. Its probe initially
 failed because Apple LLDB does not expose upstream SetExecutionPolicy. The option
 setup now uses the verified host API and sits inside per-field error handling.
 No audio failure was reproduced by that run.
+
+## Healthy native capture
+
+The second15-second startup run also survived and successfully saved
+`local/reports/audio-startup-02.json` using the installed Apple LLDB. The original
+wrapper0 sound pointer is `010FF430`, matching native `s_streams[0].guest` with a
+nonzero native object pointer. Its first DWORD is `16B70C`; all seven captured
+vtable methods exactly match the XBE, including GetStatus `1363D6` at offset0C.
+Wrapper0 is feeding logos audio172 from the real contiguous address80000000;
+all three packet status words are PENDING8000000A. The other five wrappers have
+null object pointers, matching their inactive state. Capture errors are empty.
+
+This stop selected `xbox_watchdog_thread`, not the guest audio worker, so its
+zero-valued guest TLS registers describe that watchdog thread. They do not
+establish worker register correctness. At a recurrence of the unresolved call,
+the selected faulting worker's TLS and object state must be compared instead.
+Two short runs without the fault establish successful capture and healthy
+startup examples, not resolution of the intermittent story13 failure. Continue
+the primary gameplay work and retain this probe for a naturally recurring stop.
