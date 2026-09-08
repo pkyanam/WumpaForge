@@ -12,7 +12,7 @@ index 4cf3d79..7437e9a 100644
  /* MSVC's __forceinline -> gcc/clang equivalent on POSIX. */
  #if !defined(_MSC_VER) && !defined(__forceinline)
 diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
-index 468312d..5dce73f 100644
+index 468312d..aa76089 100644
 --- a/tools/recomp/lifter.py
 +++ b/tools/recomp/lifter.py
 @@ -1290,7 +1290,7 @@ class Lifter:
@@ -134,11 +134,81 @@ index 468312d..5dce73f 100644
              return [f"/* {m} {insn.op_str} */"]
  
          if m in ("fadd", "faddp", "fsub", "fsubp", "fsubr", "fsubrp",
+@@ -3018,6 +3044,35 @@ class Lifter:
+         return [f"/* FPU: {m} {insn.op_str} */"]
+ 
+ 
++
++def merge_flag_states(states):
++    """Meet known predecessor states without discarding compatible snapshots.
++
++    CMP/TEST already write runtime operand snapshots on every incoming path.
++    The operands' identities therefore need not agree, only operation and width
++    (SF conditions still select a width-specific cast). Do not merge different
++    flag semantics, absent states, or other setters that re-read operands.
++    """
++    if not states or any(state is None for state in states):
++        return None
++    first = states[0]
++    if all(state == first for state in states[1:]):
++        return first
++
++    def snapshot_signature(state):
++        kind, ops = state
++        if kind not in ("cmp", "test") or len(ops) != 2:
++            return None
++        width = _operand_width(ops[0]) or _operand_width(ops[1]) or 4
++        return kind, width
++
++    signature = snapshot_signature(first)
++    if signature is not None and all(snapshot_signature(state) == signature
++                                     for state in states[1:]):
++        return first
++    return None
++
++
+ def lift_basic_block(lifter, bb, flag_state=None):
+     """
+     Lift a basic block to C statements.
 diff --git a/tools/recomp/translator.py b/tools/recomp/translator.py
-index 978b319..0741926 100644
+index 978b319..922d46b 100644
 --- a/tools/recomp/translator.py
 +++ b/tools/recomp/translator.py
-@@ -1378,7 +1378,7 @@ class BatchTranslator:
+@@ -22,7 +22,7 @@ import struct
+ from .config import va_to_file_offset, is_code_address
+ from . import config as _config
+ from .disasm import Disassembler
+-from .lifter import (Lifter, lift_basic_block, detect_seh_helpers,
++from .lifter import (Lifter, lift_basic_block, merge_flag_states, detect_seh_helpers,
+                      detect_setjmp_helpers)
+ 
+ 
+@@ -937,20 +937,16 @@ class FunctionTranslator:
+                 # compile. The null statement costs nothing and is always valid.
+                 lines.append(f"loc_{bb.start:08X}: ;")
+ 
+-            # Inherit the flag state only when every predecessor agrees on it.
++            # Inherit only when every predecessor has compatible flag semantics.
++            # CMP/TEST snapshot operands at runtime, so identities may differ.
+             # Blocks are walked in address order, so a back edge's predecessor
+             # may not be computed yet -- treat that as unknown rather than
+-            # guessing, which costs a fallback condition and never a wrong one.
++            # guessing. Existing unknown-flag fallbacks remain a separate gap.
+             sources = preds[bb.start]
+             if bb.start == start or not sources:
+                 incoming = None
+             elif all(p in out_state for p in sources):
+-                states = [out_state[p] for p in sources]
+-                incoming = states[0]
+-                for other in states[1:]:
+-                    if other != incoming:
+-                        incoming = None
+-                        break
++                incoming = merge_flag_states([out_state[p] for p in sources])
+             else:
+                 incoming = None
+ 
+@@ -1378,7 +1374,7 @@ class BatchTranslator:
              "/**",
              f" * {_config.banner_name(getattr(self, 'title', None))}"
              f" - Recompiled Function Declarations",
@@ -147,7 +217,7 @@ index 978b319..0741926 100644
              " */",
              "",
              "#ifndef RECOMP_FUNCS_H",
-@@ -1387,23 +1387,15 @@ class BatchTranslator:
+@@ -1387,23 +1383,15 @@ class BatchTranslator:
              '#include "recomp_types.h"',
              "",
          ]
@@ -177,7 +247,7 @@ index 978b319..0741926 100644
          header_lines.extend(["", "#endif /* RECOMP_FUNCS_H */", ""])
  
          with open(header_path, "w", encoding="utf-8") as f:
-@@ -1461,8 +1453,12 @@ class BatchTranslator:
+@@ -1461,8 +1449,12 @@ class BatchTranslator:
  
          # Split translations into chunks and write .c files
          generated_files = [header_path]
@@ -192,7 +262,7 @@ index 978b319..0741926 100644
  
          # Remove chunk files a previous, larger run left behind. Projects glob
          # gen/*.c into their build, so a stale chunk keeps compiling: it still
-@@ -1485,8 +1481,8 @@ class BatchTranslator:
+@@ -1485,8 +1477,8 @@ class BatchTranslator:
                  "/**",
                  f" * {_config.banner_name(getattr(self, 'title', None))}"
                  f" - Recompiled code chunk {ci}",
@@ -203,7 +273,7 @@ index 978b319..0741926 100644
                  " */",
                  "",
                  "#define RECOMP_GENERATED_CODE",
-@@ -1541,7 +1537,7 @@ class BatchTranslator:
+@@ -1541,7 +1533,7 @@ class BatchTranslator:
                  popped = self.translator._stub_ret_bytes(addr)
                  note = (f"ret {popped}" if popped else "not detected")
                  stub_lines.append(
