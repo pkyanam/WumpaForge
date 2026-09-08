@@ -3,7 +3,33 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot26, intro/cutscene renders black; research pause
+## Latest checkpoint: boot28, research complete and intro hold measured
+- Research completed in bcd1249; docs/research/README.md links four primary-source
+  audits. Graphics implementation before the pause is86b9630. Decision: continue
+  current AOT/native SDK route with targeted decomp references, no wholesale pivot.
+- Post-research boot27/28 read-only LLDB probes prove fade255→0 after32 intro
+  updates, then stays0 through watchdog (~539 swaps in boot28). Animation position
+  stays300 with increment0; intro0, scene0, audio gate1, pause0. Frame120 boot27
+  captured/viewed still black. These runs used the existing build, no behavior edits.
+- Boot28 early channel4 index−1/kind0 and intro_mode2 later become index0/kind2
+  and mode255; cut_audio172 throughout. Audio investigator traces original stream
+  status5D4B0 because the initial mode2 gate clears but animation remains held.
+  Stream wrapper for index0 is431ED8, relevant byte+24 and COM pointer+4. Do not
+  force animation to advance or label missing stream creation as proven until traced.
+- First8 post-fade draws captured in local/reports/boot-28-intro-draw.log: native
+  color mask15 and cull NONE; guest color-mask cache0 is not proof writes are off.
+  Actual fixed FVF152 geometry and142 immediate quads, matrices/vertices/stages are
+  recorded. Draw2 has disabled texture stages and black diffuse, depth enabled/write;
+  later sprites have white diffuse and alpha GREATER247. Several transformed sprite
+  vertices fall inside clip bounds. Need actual fragment/target/depth evidence to
+  explain black output; missing fixed combiners alone is not yet its proven cause.
+- tools/intro_probe.py provides reproducible bounded snapshots; invoke through
+  `python3 tools/boot.py NAME --seconds 18 --probe-intro`. It
+  alters debugger timing, so logged wall time is not a performance measurement.
+  Boot27/28 exited; no game intentionally left running. Next: finish stream-status
+  trace and actual rendering ledger, then fix a reproduced contract.
+
+## Implementation state through boot26
 - Original XBE CPU code executes as AOT-compiled ARM64. Universal splash/fade
   verified; actual green loading object frame40 was captured and viewed at
   `local/reports/game-frame-40-boot23.png`. No verified Crash title/menu/gameplay.
@@ -29,9 +55,9 @@ Run the supplied game natively on Apple Silicon without emulation. **Native star
 - Audio initializes and original worker5DA30 runs; game sound is not heard/verified.
   DSP effects/HRTF/spatial features remain unsupported. Guest workers must stop
   before audio teardown and guest-memory unmap; clean exit remains incomplete.
-- User requested a research pause. Three agents audit existing decomp projects,
-  Xbox graphics contracts and startup/runtime behavior; root audits ARM64/AOT.
-  Reports live in docs/research. No new game launch during that research pause.
+- Three agents audited existing decomp projects, Xbox graphics contracts and
+  startup/runtime behavior; root audited ARM64/AOT. Reports live in docs/research.
+  No new game launch occurred during that research pause; probes followed it.
 - Startup audit establishes fade255 decreases by8 per intro update, independent of
   wall-clock queries. Next diagnostic should pair exact fade/animation/selector
   state with actual draw state and pixels. Do not speculate that black means timing.

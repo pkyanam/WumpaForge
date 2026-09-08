@@ -12,6 +12,8 @@ def main():
     parser.add_argument("name", help="Diagnostic log name, e.g. boot-08")
     parser.add_argument("--seconds", type=int, default=10)
     parser.add_argument("--break-at", action="append", default=[])
+    parser.add_argument("--probe-intro", action="store_true",
+                        help="Read-only matched intro and first draw snapshots")
     args = parser.parse_args()
     if Path(args.name).name != args.name or not 1 <= args.seconds <= 60:
         parser.error("Use a plain log name and a duration from 1 to 60 seconds")
@@ -19,11 +21,14 @@ def main():
     reports.mkdir(parents=True, exist_ok=True)
     log = reports / f"{args.name}.log"
     command = ["lldb", "--batch", "-o", "breakpoint set -n bridge_HalReturnToFirmware"]
+    if args.probe_intro:
+        command += ["-o", f"command script import {ROOT / 'tools/intro_probe.py'}",
+                    "-o", "script intro_probe.install(lldb.debugger)"]
     # Stop after the watchdog sleep, before it exits the process. A live loading
     # stall needs all native thread stacks; an exit alone loses that evidence.
     watchdog_source = ROOT / "third_party/xboxrecomp/src/kernel/xbox_memory_layout.c"
     for line_number, line in enumerate(watchdog_source.read_text().splitlines(), 1):
-        if 'fprintf(stderr, "[WATCHDOG]' in line:
+        if 'fprintf(stderr, "[WATCHDOG]' in line and not args.probe_intro:
             command += ["-o", f"breakpoint set -f xbox_memory_layout.c -l {line_number}"]
             break
     for symbol in args.break_at:
