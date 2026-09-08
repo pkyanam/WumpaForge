@@ -1,5 +1,43 @@
 # Status — 2026-09-08
 
+## Active user demo — leave it running
+- User requested another demo to show their dad. Standalone frozen copy launched
+  as PID94972 from build/demo/wrath_native with local/assets. Verified running,
+  Mach-O arm64, native640x480 GL4.1 Metal device and audio packets playing.
+  Log local/reports/dad-demo.log; PID file local/reports/dad-demo.pid.
+- All watchdog/profile/trace/capture environment options were removed. Do not
+  terminate or replace this demo, or start another game alongside it, while the
+  user is showing it. Continue source/research work without interfering. The copy
+  permits development builds to change independently. Await user steering or its
+  natural exit before another game launch.
+- Boot42 diagnostic was stopped deliberately to make room for this demo;
+  session81225 exited. User called the prior closure a crash, but boot41 ended at
+  the configured watchdog breakpoint, not a new game failure.
+
+## Latest implementation checkpoint: boot41, cache improvement and live scene1
+- 4c06da8 adds exact encoded-byte texture/palette snapshots, capped64MiB with
+  correct direct-write detection, release and uncached fallback. Actual GPU tests
+  cover unchanged reuse and mutations to base/mip/cube/index/palette data.
+- 56430ef proves the unbound v6 input has only exact-zero-multiply uses at live
+  c122=0. Rechecks each draw; nonzero/relative/other uses remain errors. Full build41
+  passes, boot41 crosses the previous stream failure and runs to45s watchdog.
+- Texture optimization is substantial but not uniformly60fps: heaviest matched
+  intro windows20→39fps, decode/upload37.56→4.59ms/frame (~88% reduction).
+  Earlier assistant commentary saying the previously slow section runs60fps was
+  too broad. Later scene1 windows are mostly60fps; earlier intro still accumulates
+  ~3.6s animation lag over1260updates. User's sync concern remains unresolved.
+- Slow residual windows have~24–25ms work wall versus~10ms thread CPU, with
+  Present1–2ms and no software pacing sleep. Context/driver waits within SDK work
+  are next profiling target; do not remove locks/pacing based only on inference.
+  Up to175draws and245texture binds per frame in later intro windows.
+- Actual frame1300 capture viewed: local/reports/game-frame-1300-boot41.png shows
+  stars/nebula during transition. Scene1 loops animation0..100 at near60fps after
+  that, but Crash title/menu pixels are not yet visually verified. Boot42 was
+  intended to capture frame1800; inspect its files before claiming that artifact.
+- All agents completed/frozen. Source tree committed except any later root docs.
+  Goal remains active; physical controllers, full-speed sync, title/menu/gameplay,
+  save/load and clean shutdown verification remain. Preserve the live dad demo.
+
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
