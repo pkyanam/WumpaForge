@@ -50,6 +50,16 @@ static void test_texture_snapshot(void)
         bind[0]=stage;call(0xFFC90,bind,2);assert(upload_texture_stage(r,stage)==0);
     }
     assert(r->upload_serial==serial);
+    /* Retail rendering repeatedly binds/locks the same palette per object.
+     * Neither operation may defeat exact-byte reuse when no colors changed. */
+    for(unsigned iteration=0;iteration<20;++iteration) for(unsigned stage=0;stage<2;++stage) {
+        struct Resource *p=resource(pal[stage]);uint64_t revision=p->palette_revision;
+        uint32_t bp[]={stage,pal[stage]},lock[]={pal[stage],0xB204,0};
+        call(0xFFE10,bp,2);assert(g_eax==0);
+        call(0x100D40,lock,3);assert(g_eax==0 && read32(0xB204)==p->data);
+        bind[0]=stage;call(0xFFC90,bind,2);assert(upload_texture_stage(r,stage)==0);
+        assert(p->palette_revision==revision && r->upload_serial==serial);
+    }
     *(uint8_t *)guest_ptr(r->data)=1; /* no Lock, index revision must propagate */
     for(unsigned stage=0;stage<2;++stage) {
         assert(upload_texture_stage(r,stage)==0);
@@ -61,6 +71,16 @@ static void test_texture_snapshot(void)
     write32(resource(pal[0])->data+4,0xFF0000FF); /* no palette Lock either */
     assert(upload_texture_stage(r,0)==0 && r->upload_serial==serial+1);
     assert(upload_texture_stage(r,1)==0 && r->upload_serial==serial+1);
+    glBindTexture(GL_TEXTURE_2D,texture_gl_name(r,0));
+    glGetTexImage(GL_TEXTURE_2D,0,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,actual);assert(actual[0]==0xFF0000FF);
+    /* A different palette binding is still an actual output dependency. */
+    serial=r->upload_serial;
+    uint32_t alternate[]={0,pal[1]};call(0xFFE10,alternate,2);
+    assert(upload_texture_stage(r,0)==0 && r->upload_serial==serial+1);
+    glBindTexture(GL_TEXTURE_2D,texture_gl_name(r,0));
+    glGetTexImage(GL_TEXTURE_2D,0,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,actual);assert(actual[0]==0xFF112233);
+    alternate[1]=pal[0];call(0xFFE10,alternate,2);
+    assert(upload_texture_stage(r,0)==0 && r->upload_serial==serial+2);
     glBindTexture(GL_TEXTURE_2D,texture_gl_name(r,0));
     glGetTexImage(GL_TEXTURE_2D,0,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,actual);assert(actual[0]==0xFF0000FF);
     for(unsigned stage=0;stage<2;++stage) {
@@ -79,5 +99,5 @@ static void test_texture_snapshot(void)
     glGetTexImage(GL_TEXTURE_2D,0,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,actual);assert(actual[0]==0xFFABCDEF);
     s_texture_snapshot_bytes=baseline;release[0]=handle;call(0x103AD0,release,1);
     assert(s_texture_snapshot_bytes==baseline && glGetError()==GL_NO_ERROR);
-    puts("PASS: exact texture snapshots, unchanged-bind reuse, direct CPU writes, mips/cube/P8 variants, release and budget fallback");
+    puts("PASS: exact texture snapshots, unchanged texture/palette bind/lock reuse, direct CPU writes, mips/cube/P8 variants, release and budget fallback");
 }

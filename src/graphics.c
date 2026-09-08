@@ -343,6 +343,14 @@ void sub_000FD830(void)
     write32(0x10EE18+guest_state*4,value);
     finish(0,0);
 }
+void sub_000FDA80(void) /* SetRenderState_FogColor(ARGB), ret4, state119. */
+{
+    uint32_t color = arg(0);
+    /* Original FDA80 emits NV097_SET_FOG_COLOR (ABGR) and caches the input
+     * ARGB at10EFF4. Native shaders consume that cache without a push buffer. */
+    write32(0x10EFF4, color);
+    finish(4, 0);
+}
 void sub_000FDAD0(void) /* SetRenderState_CullMode(value), Xbox 0 / GL_CW / GL_CCW. */
 {
     uint32_t value=arg(0);
@@ -1084,7 +1092,8 @@ void sub_00100D40(void) /* Shared palette/index-buffer Lock(handle,out,flags), r
     }
     /* Native draws copy guest bytes while holding the device lock, so no
      * outstanding hardware read requires the original resource-idle wait. */
-    if (r->type == RESOURCE_PALETTE) r->palette_revision = ++s_palette_revision;
+    /* Returning an existing pointer does not change colors. Draw-time exact
+     * byte comparison detects writes through this pointer, including later ones. */
     write32(out, r->data); finish(12, 0);
 }
 void sub_000FFE10(void) /* SetPalette(stage,handle), ret8. */
@@ -1094,7 +1103,8 @@ void sub_000FFE10(void) /* SetPalette(stage,handle), ret8. */
     if (!s_device || stage >= 4 || (handle && (!r || r->type != RESOURCE_PALETTE))) {
         finish(8, (uint32_t)D3DERR_INVALIDCALL); return;
     }
-    if (r) r->palette_revision = ++s_palette_revision;
+    /* Binding is not a content mutation. upload_texture_stage advances the
+     * revision only after exact palette-byte inequality, independent of Lock. */
     if (handle != s_palette_handles[stage]) {
         if (r) { ++r->bindings; update_common(r); }
         struct Resource *old = resource(s_palette_handles[stage]);
@@ -1296,24 +1306,32 @@ static void trace_stream_binding(uint32_t stream, uint32_t handle, uint32_t stri
 void sub_00102580(void)
 {
     uint32_t stream = arg(0), handle = arg(1), stride = arg(2); struct Resource *r = resource(handle);
-    if (!s_device || stream != 0 || (handle && (!r || r->type != RESOURCE_VERTEX_BUFFER || !stride))) {
+    if (!s_device || stream >= 16 || stride > 1024 ||
+        (handle && (!r || r->type != RESOURCE_VERTEX_BUFFER))) {
         trace_stream_binding(stream,handle,stride,D3DERR_INVALIDCALL);
         finish(12, (uint32_t)D3DERR_INVALIDCALL); return;
     }
-    HRESULT result = s_device->lpVtbl->SetStreamSource(s_device, 0, r ? r->vertex_buffer : NULL, stride);
+    /* The toolkit fixed path stores one stream. Programmable streams are bound
+     * explicitly below, so secondary binds must not overwrite toolkit stream0. */
+    HRESULT result = stream ? 0 : s_device->lpVtbl->SetStreamSource(s_device, 0, r ? r->vertex_buffer : NULL, stride);
     if (result >= 0) {
-        if (handle != s_stream_handle) {
+        uint32_t record = 0x10F280 + stream*12, previous = read32(record+8);
+        uint32_t previous_stride = read32(record);
+        if (handle != previous) {
             if (r) { ++r->bindings; update_common(r); }
-            struct Resource *old = resource(s_stream_handle);
+            struct Resource *old = resource(previous);
             if (old) { --old->bindings; release_resource(old); }
         }
-        s_stream_handle = handle; s_stream_stride = stride;
-        write32(0x10F280, stride); write32(0x10F288, handle);
-        write32(0x10EC10, read32(0x10EC10) | 0x70);
+        if (!stream) { s_stream_handle = handle; s_stream_stride = stride; }
+        /* Original102580 retains record+4, including explicit stream offsets. */
+        write32(record, stride); write32(record+8, handle);
+        write32(0x10EC10, read32(0x10EC10) | (previous_stride == stride ? 0x40 : 0x70));
     }
     trace_stream_binding(stream,handle,stride,result);
     finish(12, (uint32_t)result);
 }
+
+#include "vertex_fetch.inc"
 
 #include "shader_bridge.inc"
 
@@ -1375,8 +1393,10 @@ static void apply_fixed_transforms(void)
 }
 #include "graphics_probe.inc"
 
-static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *vertices, uint32_t stride)
+static HRESULT draw_vertices_data_fetch(uint32_t type, uint32_t count, const void *vertices, uint32_t stride,
+                                        const struct VertexFetch *source_fetch)
 {
+    struct VertexFetch fetch = source_fetch ? *source_fetch : (struct VertexFetch){0};
     wrath_profile_draw((uint64_t)count*stride);
     if (!count) return 0;
     if (!s_device || !graphics_thread() || !vertices || !stride || stride > 1024 || count > 1024 * 1024 || (uint64_t)count * stride > 64 * 1024 * 1024 || !s_fvf)
@@ -1406,12 +1426,12 @@ static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *ver
             for (unsigned v = 0; v < 6; ++v)
                 memcpy((uint8_t *)converted + (quad * 6 + v) * stride,
                        (const uint8_t *)vertices + (quad * 4 + order[v]) * stride, stride);
-        count = output_count; vertices = converted;
+        count = output_count; vertices = converted; fetch.quads = 1;
     }
     if (s_vertex_handle || s_pixel_handle) {
         GLenum primitive=type==1?GL_POINTS:type==2?GL_LINES:type==3?GL_LINE_STRIP:type==6?GL_TRIANGLE_STRIP:type==7?GL_TRIANGLE_FAN:GL_TRIANGLES;
         unsigned probe=probe_begin();
-        HRESULT result=shader_draw(primitive,count,vertices,stride);
+        HRESULT result=shader_draw(primitive,count,vertices,stride,&fetch);
         probe_end(probe,result);
         free(converted); return result;
     }
@@ -1447,6 +1467,10 @@ static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *ver
     probe_end(probe,result);
     free(converted); return result;
 }
+static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *vertices, uint32_t stride)
+{
+    return draw_vertices_data_fetch(type,count,vertices,stride,NULL);
+}
 static HRESULT draw_vertices(uint32_t type, uint32_t count, uint32_t data, uint32_t stride)
 {
     if (count && (!data || (uint64_t)data + (uint64_t)count * stride > 64u * 1024 * 1024))
@@ -1460,10 +1484,14 @@ void sub_001019C0(void) /* DrawVerticesUP(type,vertexCount,data,stride) */
 void sub_00101B20(void) /* DrawVertices(type,startVertex,vertexCount) */
 {
     uint32_t start = arg(1), count = arg(2); struct Resource *r = resource(s_stream_handle);
-    if (!r || !s_stream_stride || (uint64_t)(start + (uint64_t)count) * s_stream_stride > r->bytes) {
+    uint32_t offset = read32(0x10F284);
+    if (!r || !s_stream_stride || (uint64_t)offset+(start + (uint64_t)count)*s_stream_stride > r->bytes ||
+        (uint64_t)r->data+r->bytes > 0x4000000u) {
         finish(12, (uint32_t)D3DERR_INVALIDCALL); return;
     }
-    finish(12, (uint32_t)draw_vertices(arg(0), count, r->data + start * s_stream_stride, s_stream_stride));
+    struct VertexFetch fetch = {.first=start};
+    const uint8_t *data = guest_ptr(r->data);
+    finish(12, (uint32_t)draw_vertices_data_fetch(arg(0),count,data+offset+(size_t)start*s_stream_stride,s_stream_stride,&fetch));
 }
 
 /* Xbox surfaces can refer to the live native drawable or to guest texture
@@ -1787,6 +1815,7 @@ recomp_func_t wrath_graphics_lookup(uint32_t address)
     switch (address) {
     case 0x000FD6E0: return sub_000FD6E0;
     case 0x000FD830: return sub_000FD830;
+    case 0x000FDA80: return sub_000FDA80;
     case 0x000FDAD0: return sub_000FDAD0;
     case 0x000FDDF0: return sub_000FDDF0;
     case 0x000FDF60: return sub_000FDF60;
@@ -1866,6 +1895,7 @@ static void test_state(uint32_t method, uint32_t value)
 }
 #include "../tools/test_index_bridge.inc"
 #include "../tools/test_resource_pages.inc"
+#include "../tools/test_fog_color.inc"
 #include "../tools/test_immediate_bridge.inc"
 
 static void test_cube_resources(void)
@@ -2078,6 +2108,7 @@ static void test_shader_bridge(void)
     assert(pixel[0]==0x40 && pixel[1]==0x80 && pixel[2]==0);
     GLint sampler_binding;glActiveTexture(GL_TEXTURE0);glGetIntegerv(GL_SAMPLER_BINDING,&sampler_binding);assert(sampler_binding==0);
     glActiveTexture(GL_TEXTURE1);glGetIntegerv(GL_SAMPLER_BINDING,&sampler_binding);assert(sampler_binding==0);
+    test_fog_color(draw,setps);
     bind[0]=1;bind[1]=0;call(0xFFC90,bind,2);bind[0]=0;
     call(0x102BB0,off,1);setvs[0]=D3DFVF_XYZRHW|D3DFVF_DIFFUSE|D3DFVF_TEX1;call(0x102940,setvs,1);
     bind[1]=0;call(0xFFC90,bind,2);uint32_t release[]={texture};call(0x103AD0,release,1);
@@ -2085,6 +2116,7 @@ static void test_shader_bridge(void)
 }
 #include "../tools/test_mixed_shader_bridge.inc"
 #include "../tools/test_viewport_constants.inc"
+#include "../tools/test_multistream.inc"
 #include "../tools/test_texture_snapshot.inc"
 
 int main(void)
@@ -2417,6 +2449,7 @@ int main(void)
     test_shader_bridge();
     test_mixed_shader_bridge();
     test_viewport_constants();
+    test_multistream();
     test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();

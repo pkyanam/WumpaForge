@@ -133,7 +133,7 @@ static struct ShaderProgram {
     Nv2aPixelInfo pixel;
 } s_shader_programs[SHADER_CACHE_LIMIT];
 static uint64_t s_shader_age;
-static GLuint s_shader_vao, s_shader_vbo, s_shader_samplers[4];
+static GLuint s_shader_vao, s_shader_vbo, s_shader_samplers[4], s_shader_attribute_vbo[16];
 static GLuint shader_compile(GLenum type, const char *source)
 {
     GLuint shader=glCreateShader(type);
@@ -203,7 +203,8 @@ static GLenum shader_wrap(uint32_t mode)
     default:shader_error("texture addressing","unsupported mode"); return GL_REPEAT;
     }
 }
-static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertices, uint32_t stride)
+static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertices, uint32_t stride,
+                           const struct VertexFetch *fetch)
 {
     Nv2aPixelDef pixel=s_pixel_definition;
     if (!s_pixel_handle) {
@@ -217,6 +218,11 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
             shader_error("fixed pixel stages",error);
     }
     struct ShaderProgram *p=shader_program(&pixel);
+    uint64_t secondary_bytes=0;
+    for (unsigned i=0;i<16;++i)
+        if ((p->vertex.input_mask&(1u<<i)) && s_vertex_object.slots[i].stream)
+            secondary_bytes+=(uint64_t)count*s_vertex_object.slots[i].byte_count;
+    if (secondary_bytes>64u*1024u*1024u) return D3DERR_INVALIDCALL;
     if (!s_shader_vao) { glGenVertexArrays(1,&s_shader_vao); glGenBuffers(1,&s_shader_vbo); glGenSamplers(4,s_shader_samplers); }
     glBindVertexArray(s_shader_vao); glBindBuffer(GL_ARRAY_BUFFER,s_shader_vbo);
     glBufferData(GL_ARRAY_BUFFER,(size_t)count*stride,vertices,GL_STREAM_DRAW);
@@ -236,7 +242,9 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
             }
             continue;
         }
-        if (slot->stream || slot->offset>stride || slot->byte_count>stride-slot->offset || slot->tessellation_type) {
+        if (slot->stream>=16 || (!slot->stream &&
+            (slot->offset>stride || slot->byte_count>stride-slot->offset)) || slot->tessellation_type ||
+            (slot->stream && !read32(0x10F288+12*slot->stream))) {
             if (getenv("WRATH_TRACE_STREAMS")) {
                 fprintf(stderr,"[wrath streams] error slot%u stream%u offset%u format0x%X bytes%u stride%u primary0x%X inputmask0x%X c122=(%.9g,%.9g,%.9g,%.9g) c114=(%.9g,%.9g,%.9g,%.9g)\n",
                         i,slot->stream,slot->offset,slot->format,slot->byte_count,stride,s_stream_handle,p->vertex.input_mask,
@@ -259,8 +267,23 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
         case NV2A_VERTEX_NONE:continue;
         default:shader_error("vertex format","packed/float2h conversion not yet integrated");return D3DERR_INVALIDCALL;
         }
+        uint32_t attribute_stride = stride, attribute_offset = slot->offset;
+        if (slot->stream) {
+            uint8_t *gathered = NULL;
+            HRESULT result = gather_vertex_attribute(slot->stream,slot->offset,slot->byte_count,count,fetch,&gathered);
+            if (result < 0) {
+                fprintf(stderr,"[wrath streams] rejected attribute%u stream%u count%u: range/allocation error0x%X\n",
+                        i,slot->stream,count,(unsigned)result);
+                return result;
+            }
+            if (!s_shader_attribute_vbo[i]) glGenBuffers(1,&s_shader_attribute_vbo[i]);
+            glBindBuffer(GL_ARRAY_BUFFER,s_shader_attribute_vbo[i]);
+            glBufferData(GL_ARRAY_BUFFER,(size_t)count*slot->byte_count,gathered,GL_STREAM_DRAW);
+            free(gathered);
+            attribute_stride = slot->byte_count; attribute_offset = 0;
+        } else glBindBuffer(GL_ARRAY_BUFFER,s_shader_vbo);
         glEnableVertexAttribArray(i);
-        glVertexAttribPointer(i,components,type,normalize,stride,(const void *)(uintptr_t)slot->offset);
+        glVertexAttribPointer(i,components,type,normalize,attribute_stride,(const void *)(uintptr_t)attribute_offset);
     }
     glUseProgram(p->program);
     glUniform4fv(glGetUniformLocation(p->program,"u_vconstants"),192,&s_vertex_constants[0][0]);
@@ -270,7 +293,8 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
     for (unsigned i=0;i<8;++i) { shader_rgba(pixel.constant0[i],colors[i*2]); shader_rgba(pixel.constant1[i],colors[i*2+1]); }
     shader_rgba(pixel.final_constant0,colors[16]); shader_rgba(pixel.final_constant1,colors[17]);
     glUniform4fv(glGetUniformLocation(p->program,"u_psconstants"),18,&colors[0][0]);
-    glUniform3f(glGetUniformLocation(p->program,"u_fogcolor"),0,0,0);
+    float fog_color[4]; shader_rgba(read32(0x10EFF4),fog_color);
+    glUniform3fv(glGetUniformLocation(p->program,"u_fogcolor"),1,fog_color);
     glUniform1i(glGetUniformLocation(p->program,"u_alpha_enable"),read32(0x10EE18+60*4)!=0);
     glUniform1i(glGetUniformLocation(p->program,"u_alpha_func"),(int)read32(0x10EE18+58*4)-GL_NEVER+1);
     glUniform1f(glGetUniformLocation(p->program,"u_alpha_ref"),(read32(0x10EE18+61*4)&255)/255.0f);

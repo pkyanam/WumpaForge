@@ -54,3 +54,29 @@ render-target resolve/CopyRects, framebuffer, shader, alpha/blend, indexed and
 immediate regressions. One compiler invocation ran component tests only:
 `local/reports/graphics-snapshot-smoke.log`. Parent owns the next full game run and
 measurement; no actual-game speedup is claimed until that result is available.
+
+
+## Story05 palette binding regression
+
+Original backstory station rendering exposed an additional invalidation source.
+While exact byte comparisons were already present, native SetPalette and
+PaletteLock incremented the palette revision unconditionally. Rebinding or
+requesting the same pointer therefore defeated cache reuse even when colors
+were byte-for-byte unchanged. Revisions now advance only when the existing
+exact-byte comparison detects changed palette data (plus initial creation).
+The palette handle remains part of every stage's cache dependency. No memory
+budget, guest writes, timing, or filtering semantics change.
+
+The GPU fixture now repeats SetPalette, PaletteLock and texture binding twenty
+times on both stages and requires zero additional uploads and unchanged color
+revisions. It still checks direct index/palette writes update actual pixels,
+and additionally switches one stage to the other palette and back, requiring
+new uploads and the corresponding distinct colors. Different palettes and
+actual mutations are not suppressed.
+
+Final combined GPU smoke passed with the concurrently completed multistream
+support: `local/reports/palette-rebind-build.log` and
+`local/reports/palette-rebind-smoke.log`. One sequential compiler invocation used
+the same full graphics smoke command as RESOURCE-REGISTRY.md, outputting
+`build/input/test_palette_rebind`. Actual-game performance after this correction
+remains for root's next run; the resource snapshot budget stays64MiB.
