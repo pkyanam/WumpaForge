@@ -12,6 +12,10 @@
     "evidence": "Worker entry pushed at 0x2C03C into CreateThread (0xECC6A) by sub_0002C020. Boot18 PsCreateSystemThreadEx #2 passes it as ctx1 to XAPI thread trampoline0xECBD2, then aborts on missing AOT dispatch. Prior function RET at0x2BF2A followed by five alignment NOPs; entry saves EBX/EBP/ESI/EDI and loops until stop flag0x1BAA90, then calls ExitThread0xECB19."
   },
   {
+    "start": "0x00031E20",
+    "evidence": "Boot30 unresolved original callback at call 0x34A82. Supplied XBE DWORD[0x199C1C] is 0x31E20; sub_00034820 selects this callback table using signed byte[definition+0x20] at 0x348D0/0x348D4 and stores target to pool+0x4A8 at 0x348DF. Original 0x34A80 PUSH EBP, 0x34A81 PUSH EBX, 0x34A82 CALL [EBX+0x4A8], ADD ESP,8 establishes cdecl(pool,definition). Independent entry follows RET 0x31E1D and two NOPs; reserves 12 local bytes, returns record pointer in EAX and restores frame before RET 0x31FC2. Existing tail thunk 0x32730 also jumps directly to 0x31E20."
+  },
+  {
     "start": "0x0005DA30",
     "evidence": "Audio worker entry pushed by sub_000B99D0 for CreateThread; prior function ends in RET8 at 0x5DA24, followed by alignment NOPs."
   }
