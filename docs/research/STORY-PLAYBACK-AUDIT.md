@@ -286,3 +286,51 @@ scene3 transition to sound174 after the graphics blocker is resolved. Existing
 probe boundaries can show whether another similar one-time startup gap occurs.
 An actual additional growing mismatch would justify further investigation;
 current evidence supports retaining original timing and the native audio code.
+
+### Story08: full original animation/audio sequence reaches completion
+
+Build50's story08 reaches final original callback2BC00 at scene10 position1195.
+Elapsed time from the before-StartCutMovie probe is365.153122s, with21884 swaps
+and21896 reported vblanks. All eleven original scene boundaries are observed:
+
+| Scene ending | Elapsed wall seconds | Mixed source seconds | Cumulative SDL underruns |
+|---|---:|---:|---:|
+| 0 station | 3.700811 | INTRO1 3.525322 | 1 |
+| 1 corridor | 10.332879 | INTRO1 10.106633 | 8 |
+| 2 chamber | 137.833779 | EOF; not estimated | 11 |
+| 3 surf | 152.497486 | INTRO2 14.442619 | 13 |
+| 4 sunny | 169.184038 | INTRO2 31.130563 | 13 |
+| 5 storm | 176.200708 | INTRO2 38.149207 | 13 |
+| 6 black | 178.101110 | INTRO2 40.047867 | 13 |
+| 7 washed up | 193.766929 | INTRO2 55.711815 | 13 |
+| 8 mystic | 266.433948 | INTRO2 128.303574 | 25 |
+| 9 house | 325.355537 | INTRO2 187.151378 | 32 |
+| 10 control | 365.153122 | EOF; not estimated | 33 |
+
+The original stop/create/feed change from173 to174 succeeds; the second stream
+uses native voice slot1, mono44100Hz, active/unpaused, volume1. Between scene3
+and4 ends, source advances16.687945s while wall advances16.686552s. At scene8
+end the frame1-origin content sum is128.466667s versus source128.303574s, a
+163ms source lag; no multi-second drift appears in this longer run.
+
+This run has33 cumulative SDL underrun callbacks and0 overflows. For example,
+station→corridor wall6.632069s versus source6.581311s and callback6.576000s occurs
+while underruns increase1→8, contributing approximately51–56ms of extra audio
+lag. These brief gaps must not be described as flawless audio. Sparse debugger
+stops, host scheduling and the very large repeated graphics-error log are present;
+no matched measurement yet isolates their individual contribution. No audio
+rate/queue/timestep change was made.
+
+At EOF the original loaded-byte offset wraps modulo the data length and feeding
+becomes0 (`5D620` onward), while remaining fixed-size native packets may still be
+queued. The ordinary three-pending-packet source estimator intentionally omits
+those endpoints. Final callback reach does not mean every padded file sample has
+already played; original movie cleanup stops its channels normally.
+
+Visual completeness is explicitly **not verified**: this run emits over100,000
+stream1 range/allocation rejections and associated skipped indexed draws. The
+next stop after the story sequence is shader_error for fixed pixel stage0
+COLOROP4/ALPHAOP4 argument/result/binding. Root owns graphics correction and
+actual frame validation. This result proves original story control flow and both
+audio-stream lifecycles progressed to their intended final callback, without an
+automatic skip or replacement movie.
