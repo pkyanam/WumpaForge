@@ -37,6 +37,9 @@ def dump(debugger, destination):
         "vertex_handle": integers(value("s_vertex_handle")),
         "pixel_handle": integers(value("s_pixel_handle")),
         "texture_handles": integers(value("s_texture_handles")),
+        "pixel_definition": {field.GetName(): integers(field)
+                             for field in value("s_pixel_definition")},
+        "pixel_constants": integers(value("s_pixel_constants")),
         "swap_count": words(0x10C110 + 0x2AC4, 1)[0],
         "instruction_count": count,
         "words": integers(obj.GetChildMemberWithName("words"))[:count],
