@@ -3,30 +3,35 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot30, original copyright screen visible
-- Commit174ede7 fixes compatible comparison-state joins. Lift29 corrects actual
-  WAV parser138567 and reduces unknown flag branches70→57. Original parser now
-  reads fmt/data chunks, confirmed in boot29. Native regression tests pass.
-- Commit0a7faa5 adds bounded actual GPU diagnostics. Boot29 draw1 renders stars;
-  draw2 covers all pixels with black and near depth~0.592803. This explained the
-  black frame while the original intro was held, without changing render state.
-- Commit0a16572 connects real packet streaming. Native decode, completion,
-  pause/resume/flush/queue/lifetime tests pass (UBSan and actual producer thread).
-  Full build30 and bootstrap30 passed. Manual exclusions now90.
-- Boot30 clears original audio gate, advances animation300→347.5 at0.5/update,
-  and actual frame180 shows original copyright text over a starfield. Captured
-  and viewed local/reports/game-frame-180-boot30.png. Title/menu/gameplay not yet
-  verified. Sound output quality not heard/verified; debug run reports overloads.
-- New exact stop: unresolved original callback31E20 at34820→34C40→34CA0→79060→
-  7A310→7AB90→7AC40→7ACC0→2D950. Runtime agent audits/adds seed from original
-  emitter callback table199C1C and call34A82. Root owns next analyze/lift/build.
-- No game intentionally left running. Audio/graphics sources frozen; no pending
-  production compile. docs/research/FLAG-FALLBACK-AUDIT.md and CSV inventory57
-  remaining flag branches; some are decoded data/tail aliases, others real gaps.
-  In particular input6E130 has two mixed/back-edge joins needing faithful ZF work.
-- Goal remains active. Next: compile the evidenced callback and re-run through
-  original intro toward menu. Preserve max2 build jobs, native-only CPU and original
-  assets/control flow; later verify undisturbed sound and physical BT controllers.
+## Latest checkpoint: boot31, animated Universal globe; mixed shader pairing next
+- Native ARM64 AOT game code renders original Universal globe/planets/title text
+  over stars at frame600. Actual captured/viewed artifact:
+  local/reports/game-frame-600-boot31.png. This is the original publisher animation,
+  not yet the Crash title menu/gameplay. No synthetic pixels or animation bypass.
+- Commit174ede7 preserves compatible comparison snapshots at CFG joins, fixing
+  WAV parser138567. Native tests pass; generated unknown flag branches70→57.
+  Some57 sites are aliases/data, others real correctness gaps: see research audit.
+- Commit0a16572 adds real bounded native packet streaming and seven verified COM
+  bindings. Decode/queue/completion/pause/flush/lifetime tests pass (UBSan plus actual
+  producer). Full build30 and bootstrap30 passed. Manual exclusions90. Audio gate
+  clears normally, animation advances300→347.5 with original increment0.5.
+- Commitcc99bcb seeds original emitter callback31E20 from table199C1C and call34A82.
+  Analyze/lift/build31 passed; actual game executes through that prior failure.
+- Boot31 without per-frame LLDB probes had zero logged CoreAudio overload messages;
+  audible quality remains unverified. Bounded run stops after614 swaps at
+  shader_program: mixed fixed/programmed stages not implemented, guestreturn3B0B1,
+  indexed26vertices from3B010→A5D40→A8240→9F370→A0990→A8140→2D950.
+- Root boot32 captures exact vertex/pixel handles/FVF/stage state at shader_error;
+  inspect local/reports/boot-32-pairing.log and running session8100 if still live.
+  controller_support owns reached mixed-pair implementation in shader_bridge.inc/
+  nv2a files/tests/docs; root owns graphics.c/integration/build. mac_runtime audits
+  adjacent emitter table extent/missing callbacks, read-only pending evidence.
+- Native GPU probe0a7faa5 explained old black frame: stars rendered, then an
+  original black near-depth quad occluded later geometry while intro waited for
+  sound. Audio startup removed that hold; no graphics-state bypass was needed.
+- Goal active and incomplete. Physical Xbox/DualSense Bluetooth tests, real game
+  menu/input/gameplay/audio-quality verification and clean shutdown remain ahead.
+  Use at most2 compile jobs; preserve original assets and no CPU interpreter/JIT.
 
 ## Previous checkpoint: boot28, research complete and intro hold measured
 - Research completed in bcd1249; docs/research/README.md links four primary-source
