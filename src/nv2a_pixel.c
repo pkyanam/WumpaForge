@@ -291,7 +291,8 @@ int nv2a_pixel_generate(const Nv2aPixelDef *d,const Nv2aPixelOptions *options,
          options->fog_enabled?"clamp(vFog,0.0,1.0)":"1.0");
     for(unsigned i=0;i<4;++i) {
         unsigned mode=(d->texture_modes>>(i*5))&31;
-        if(mode==0 || mode==5)emit(&g,"  vec4 t%u=vec4(0.0);\n",i);
+        if(mode==0)emit(&g,"  vec4 t%u=vec4(0.0,0.0,0.0,1.0);\n",i);
+        else if(mode==5)emit(&g,"  vec4 t%u=vec4(0.0);\n",i);
         else if(mode==1) {
             if(options->rectangle_texture_mask&(1u<<i))
                 emit(&g,"  vec4 t%u=textureProj(tex%u,vec3(vT%u.xy/vec2(textureSize(tex%u,0)),vT%u.w));\n",i,i,i,i,i);

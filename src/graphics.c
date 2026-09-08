@@ -1915,6 +1915,7 @@ static void test_state(uint32_t method, uint32_t value)
 #include "../tools/test_index_bridge.inc"
 #include "../tools/test_resource_pages.inc"
 #include "../tools/test_fog_color.inc"
+#include "../tools/test_inactive_sampler.inc"
 #include "../tools/test_immediate_bridge.inc"
 
 static void test_cube_resources(void)
@@ -2106,6 +2107,7 @@ static void test_shader_bridge(void)
     call(0x1019C0,draw,4);assert(s_shader_age==age+1);
     unsigned programs=0;for(unsigned i=0;i<SHADER_CACHE_LIMIT;++i)programs+=s_shader_programs[i].program!=0;
     assert(programs==1); /* Uniform changes reuse compiled programs. */
+    test_inactive_sampler(draw,setps,&definition,texture);
     /* The same texture on two stages must retain independent repeat/clamp
      * samplers. At u=1.25 stage0 reads red and stage1 reads green; sum is yellow. */
     write32(data,0xFF400000);write32(data+4,0xFF008000);

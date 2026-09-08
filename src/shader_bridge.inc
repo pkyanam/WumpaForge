@@ -128,6 +128,7 @@ struct ShaderKey {
 static struct ShaderProgram {
     struct ShaderKey key;
     GLuint program;
+    GLint sampler_location[4];
     uint64_t age;
     Nv2aVertexInfo vertex;
     Nv2aPixelInfo pixel;
@@ -211,6 +212,10 @@ static struct ShaderProgram *shader_program(const Nv2aPixelDef *pixel)
     }
     if (slot->program) glDeleteProgram(slot->program);
     slot->key=key; slot->program=program; slot->vertex=vi; slot->pixel=pi; slot->age=++s_shader_age;
+    for (unsigned i=0;i<4;++i) {
+        char name[8]; snprintf(name,sizeof(name),"tex%u",i);
+        slot->sampler_location[i]=glGetUniformLocation(program,name);
+    }
     fprintf(stderr,"[wrath shaders] linked native program%u (%u vertex instructions, %u combiners)\n",program,vi.instruction_count,pi.stages);
     return slot;
 }
@@ -227,10 +232,29 @@ static GLenum shader_wrap(uint32_t mode)
     default:shader_error("texture addressing","unsupported mode"); return GL_REPEAT;
     }
 }
+/* Original107CA0 applies PS_ADJUST_TEXTUREMODES (final_constants bit0x100).
+ * Limit this conversion to modes understood by our pixel generator. Unsupported
+ * dependent/bump modes still reach its explicit error instead of being hidden. */
+static void shader_adjust_texture_modes(Nv2aPixelDef *pixel)
+{
+    if (!(pixel->final_constants&0x100)) return;
+    for (unsigned i=0;i<4;++i) {
+        unsigned mode=(pixel->texture_modes>>(i*5))&31;
+        if (mode>5 || mode==4 || mode==5 || !mode) continue;
+        struct Resource *r=resource(s_texture_handles[i]);
+        if (!r) mode=0;
+        else {
+            uint32_t format=read32(r->handle+12),color=(format>>8)&255;
+            mode=(format&4)?3:((format&0xf0)==0x30 || (color>=0x2a && color<=0x31))?2:1;
+        }
+        pixel->texture_modes=(pixel->texture_modes&~(31u<<(i*5)))|(mode<<(i*5));
+    }
+}
 static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertices, uint32_t stride,
                            const struct VertexFetch *fetch)
 {
     Nv2aPixelDef pixel=s_pixel_definition;
+    if (s_pixel_handle) shader_adjust_texture_modes(&pixel);
     if (!s_pixel_handle) {
         uint32_t stages[4][32]; unsigned dimensions[4]; char error[256];
         for (unsigned i=0;i<4;++i) {
@@ -362,7 +386,10 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
     GLint previous_samplers[4];
     for (unsigned i=0;i<4;++i) { glActiveTexture(GL_TEXTURE0+i); glGetIntegerv(GL_SAMPLER_BINDING,&previous_samplers[i]); }
     for (unsigned i=0;i<4;++i) {
-        if (!(p->pixel.texture_mask&(1u<<i))) continue;
+        /* Declared texture modes can be absent from the combiner result.
+         * The linked native shader proves these samplers inactive; no host
+         * resource is required for code that performs no observable sample. */
+        if (!(p->pixel.texture_mask&(1u<<i)) || p->sampler_location[i]<0) continue;
         struct Resource *r=resource(s_texture_handles[i]);
         if (!r) shader_error("texture","shader samples unbound texture");
         GLenum target=r->type==RESOURCE_CUBE_TEXTURE?GL_TEXTURE_CUBE_MAP:GL_TEXTURE_2D;
@@ -384,8 +411,7 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
         float border[4]; shader_rgba(read32(state+0x74),border);
         glSamplerParameterfv(s_shader_samplers[i],GL_TEXTURE_BORDER_COLOR,border);
         glBindSampler(i,s_shader_samplers[i]);
-        char sampler[8]; snprintf(sampler,sizeof(sampler),"tex%u",i);
-        glUniform1i(glGetUniformLocation(p->program,sampler),i);
+        glUniform1i(p->sampler_location[i],i);
     }
     glActiveTexture(GL_TEXTURE0);
     xbox_D3D8GLApplyRenderStates();
