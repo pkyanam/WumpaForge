@@ -13,7 +13,7 @@ from tools.recomp.lifter import merge_flag_states
 from tools.recomp.translator import FunctionTranslator
 
 
-def fixture(name, left, right, jcc):
+def fixture(name, left, right, jcc, backward=False):
     # TEST selector; branch to one of two different CMP/TEST operand sets.
     # Overwrite both source registers with MOV after comparing: the join must
     # consume captured flags, not re-read operands at their new values.
@@ -23,11 +23,15 @@ def fixture(name, left, right, jcc):
         code.append(op); branches.append((len(code), label)); code.append(0)
     emit('85ff'); jump(0x74, 'right')
     emit(left); emit('b800000000'); jump(0xEB, 'join')
-    labels['right'] = len(code)
-    emit(right); emit('bb00000000')
+    if not backward:
+        labels['right'] = len(code)
+        emit(right); emit('bb00000000')
     labels['join'] = len(code)
     jump(jcc, 'yes'); emit('b800000000c3')
     labels['yes'] = len(code); emit('b801000000c3')
+    if backward:
+        labels['right'] = len(code)
+        emit(right); emit('bb00000000'); jump(0xEB, 'join')
     for at, label in branches: code[at] = (labels[label]-at-1) & 255
     raw = bytes(code); start = 0x1000
     info = {'end': start+len(raw), 'name': name}
@@ -46,6 +50,11 @@ class FlagMerge(unittest.TestCase):
             fixture('signed_join', '3d00000000', '39cb', 0x7C),
             fixture('test_join', 'a9ff000000', '85cb', 0x74),
             fixture('byte_sign_join', '3c80', '38cb', 0x78),
+            fixture('mixed_join', '3d07000000', '85db', 0x74),
+            fixture('mixed_back', '3d07000000', '85db', 0x74, True),
+            fixture('menu_back', '39442410', '85db', 0x74, True),
+            fixture('menu_back_edi', '397c2410', '85db', 0x74, True),
+            fixture('mixed_width', '3c80', '6685db', 0x75, True),
         ]
         for function in functions:
             self.assertNotIn('if (_flags', function)
@@ -54,21 +63,24 @@ class FlagMerge(unittest.TestCase):
 #include <assert.h>
 #include <stdio.h>
 static uint32_t eax,ebx,ecx,edi,esp,g_ebp,g_seh_ebp;
-static uint32_t memory[0x5000/4];
+static uint32_t memory[0x9000/4];
 #define MEM32(a) memory[(uint32_t)(a)/4]
 #define LO8(a) ((uint8_t)(a))
+#define LO16(a) ((uint16_t)(a))
+#define SET_LO16(a,v) ((a)=((a)&0xffff0000u)|(uint16_t)(v))
 #define TEST_Z(a,b) (((a)&(b))==0)
 #define CMP_EQ(a,b) ((a)==(b))
 #define CMP_L(a,b) ((a)<(b))
 ''' + '\n'.join(functions) + r'''
 static unsigned run(void (*fn)(void), unsigned selector, uint32_t a, uint32_t b) {
     edi=selector; eax=ebx=a; ecx=b; esp=0x8000;
-    g_ebp=g_seh_ebp=0x4000; MEM32(0x3FFC)=a;
+    g_ebp=g_seh_ebp=0x4000; MEM32(0x3FFC)=a; MEM32(esp+0x10)=b;
     fn(); assert(esp==0x8004); return eax;
 }
 int main(void) {
-    const uint32_t values[]={0,1,0x45564157,0x45564158,0x80000000,0xFFFFFFFF};
-    for(unsigned p=0;p<2;p++) for(unsigned a=0;a<6;a++) for(unsigned b=0;b<6;b++) {
+    const uint32_t values[]={0,1,7,0x80,0x10000,0x45564157,0x45564158,0x80000000,0xFFFFFFFF};
+    const unsigned n=sizeof(values)/sizeof(*values);
+    for(unsigned p=0;p<2;p++) for(unsigned a=0;a<n;a++) for(unsigned b=0;b<n;b++) {
         uint32_t lhs=values[a], rhs=p?0x45564157:values[b];
         assert(run(wave_join,p,lhs,values[b])==(lhs==rhs));
         assert(run(wave_memory_join,p,lhs,values[b])==(lhs==rhs));
@@ -77,11 +89,19 @@ int main(void) {
         rhs=p?255:values[b];
         assert(run(test_join,p,lhs,values[b])==((lhs&rhs)==0));
     }
+    for(unsigned p=0;p<2;p++) for(unsigned a=0;a<n;a++) for(unsigned b=0;b<n;b++) {
+        uint32_t v=values[a];
+        assert(run(mixed_join,p,v,values[b])==(p?(v==7):(v==0)));
+        assert(run(mixed_back,p,v,values[b])==(p?(v==7):(v==0)));
+        assert(run(menu_back,p,v,values[b])==(p?(values[b]==v):(v==0)));
+        assert(run(menu_back_edi,p,v,values[b])==(p?(values[b]==p):(v==0)));
+        assert(run(mixed_width,p,v,values[b])==(p?((v&255)!=128):((v&65535)!=0)));
+    }
     for(unsigned p=0;p<2;p++) for(unsigned a=0;a<256;a++) for(unsigned b=0;b<256;b++) {
         unsigned rhs=p?128:b;
         assert(run(byte_sign_join,p,a,b)==(((a-rhs)&128)!=0));
     }
-    puts("PASS: native CMP/TEST CFG merges, both paths, changed operands, signed32 and exhaustive byte SF");
+    puts("PASS: native CMP/TEST CFG merges, backward mixed-ZF menu paths, changed operands/widths, signed32 and exhaustive byte SF");
 }
 '''
         with tempfile.TemporaryDirectory() as temporary:
@@ -96,14 +116,18 @@ int main(void) {
         byte=Operand('reg',reg='al'); imm=Operand('imm',imm=7)
         cmp=('cmp',[a,imm]); other=('cmp',[b,imm])
         self.assertEqual(merge_flag_states([cmp,other]),cmp)
-        self.assertIsNone(merge_flag_states([cmp,('test',[b,imm])]))
-        self.assertIsNone(merge_flag_states([cmp,('cmp',[byte,imm])]))
+        self.assertEqual(merge_flag_states([cmp,('test',[b,imm])]), ("snapshot_zf", []))
+        self.assertEqual(merge_flag_states([cmp,('cmp',[byte,imm])]), ("snapshot_zf", []))
         self.assertIsNone(merge_flag_states([cmp,None]))
         self.assertIsNone(merge_flag_states([]))
         self.assertIsNone(merge_flag_states([('sub',[a,imm]),('sub',[b,imm])]))
         self.assertEqual(merge_flag_states([cmp,cmp]),cmp)
-        # Actual translator must retain its unknown fallback for mixed semantics.
-        mixed=fixture('mixed_join','3d07000000','85cb',0x74)
+        # The mixed meet provides only ZF. Signed conditions remain unresolved.
+        mixed=fixture('mixed_join','3d07000000','85cb',0x7C)
         self.assertIn('if (_flags',mixed)
+        unknown=fixture('unknown_join','3d07000000','0f31',0x74,True)
+        self.assertIn('if (_flags',unknown)
+        call=fixture('call_join','3d07000000','e800000000',0x74,True)
+        self.assertIn('if (_flags',call)
 
 if __name__=='__main__': unittest.main()

@@ -1,7 +1,7 @@
 # Remaining conditional-flag fallbacks after lift29
 
-Read-only audit, 2026-09-08. No production changes, compilation, game lifting or
-launches. Full per-site inventory is [FLAG-FALLBACK-INVENTORY.csv](FLAG-FALLBACK-INVENTORY.csv);
+Original read-only audit, 2026-09-08; counts below describe lift29. The later
+menu fix and its validation are recorded at the end. Full per-site inventory is [FLAG-FALLBACK-INVENTORY.csv](FLAG-FALLBACK-INVENTORY.csv);
 expanded assignment evidence is in `local/reports/flag-fallbacks-after-lift29.json`.
 Addresses in the CSV's block column identify the nearest generated basic-block
 label, not necessarily the exact branch instruction when data follows a jump.
@@ -109,3 +109,45 @@ missing CPU behavior or claim unsupported byte streams are valid code. Keep the
 static inventory distinct from runtime hits, and record source ownership/table
 provenance before deciding between a lifter fix, recovered function boundary or
 native SDK compatibility helper. Root owns the implementation decision and STATUS.
+
+
+## Implemented: captured mixed zero flags and backward predecessors
+
+A later focused audit reconfirmed original6ECA4 and7012A. Their CMP predecessors
+compare the local atESP+10 against a register proven zero (EAX at6EC36, EDI at700AE).
+The backward predecessors TEST that same local. Its final assignment at6E2DA is
+debounced input bits masked with120. Both branches must skip a menu transition
+when that back/cancel input is zero. Original menu switch70B7C maps menu0D to
+6F094, menu0F to6EC36, menu25 to700A3;7012A also serves cancellation paths from
+menus16,19,1D. This proves the semantics, not a specific in-game branch hit.
+
+The implementation improves AOT analysis generally; it contains no title-address
+or menu predicate override:
+
+- A shared pure instruction flag-transfer function establishes terminal setters
+  before code emission and propagates preserving-block state to a fixed point.
+  Backward predecessors are therefore independent of source address order.
+  The CFG includes known switch destinations. Unknown entry, clobber and call
+  paths remain unknown; circular preservation does not create an initial value.
+  CALL and POPFD no longer inherit an unverified caller flag state. This can
+  reveal additional unresolved legacy paths after a full lift; no arbitrary
+  interprocedural EFLAGS-return contract is assumed.
+- Compatible same-kind/width snapshots retain their existing comparisons. A join
+  of known CMP/TEST states with different semantics or widths meets at ZF only.
+  JE/JNE and corresponding equality SETcc/CMOVcc can consume that bit; other
+  mixed condition bits remain unresolved.
+- Only functions containing such joins materialize a dedicated `_zf` at each
+  original CMP/TEST, using its already width-masked captured operands. Later
+  MOV/register/memory mutation cannot change the recorded condition. The bit
+  is separate from the legacy string-loop `_flags` temporary.
+
+`tools/test_flag_merge.py` executes generated ARM64 C under UBSan: both incoming
+paths, backward TEST, the two original stack-memory CMP forms, source register
+mutation after the setter, equal/non-equal and zero/nonzero inputs, byte/word
+widths, and unknown/clobber rejection. Existing signed32 and exhaustive byte-SF
+regressions pass. Lifter diagnostics, incremental chunks and x87 rounding tests
+also pass. Translating only original6E130 to ignored
+`local/reports/menu-flags-fixed.c` confirms both branches now use `_zf` and that
+function has no remaining `if (_flags` conditions. No whole-game lift/build/run
+was performed for this handoff; aggregate fallback counts and actual controller
+menu behavior await root integration and validation.

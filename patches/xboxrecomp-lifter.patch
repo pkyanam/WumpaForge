@@ -12,10 +12,21 @@ index 4cf3d79..7437e9a 100644
  /* MSVC's __forceinline -> gcc/clang equivalent on POSIX. */
  #if !defined(_MSC_VER) && !defined(__forceinline)
 diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
-index 468312d..aa76089 100644
+index 468312d..c1fdbd0 100644
 --- a/tools/recomp/lifter.py
 +++ b/tools/recomp/lifter.py
-@@ -1290,7 +1290,7 @@ class Lifter:
+@@ -342,6 +342,10 @@ def _make_condition(jcc, flag_setter, flag_ops):
+     if not cond_info:
+         return None
+     cmp_macro, test_macro, desc = cond_info
++    if flag_setter == "snapshot_zf":
++        if jcc in ("je", "jz"): return "_zf", desc
++        if jcc in ("jne", "jnz"): return "!_zf", desc
++        return None  # The meet proves ZF only, not CF/SF/OF.
+ 
+     # A cmp/test that is not fused with its jcc snapshots its operands into
+     # _fa/_fb (zero-extended) and _fas/_fbs (sign-extended) at the point the
+@@ -1290,7 +1294,7 @@ class Lifter:
          if m in ("bsf", "bsr"):
              if len(ops) < 2:
                  self.unimplemented.setdefault(m, []).append(insn.address)
@@ -24,7 +35,7 @@ index 468312d..aa76089 100644
              dst = _fmt_operand_read(ops[0])
              src = _fmt_operand_read(ops[1])
              width = (_operand_width(ops[1]) or 4) * 8
-@@ -1359,11 +1359,14 @@ class Lifter:
+@@ -1359,11 +1363,14 @@ class Lifter:
          #
          # Recorded, not merely commented -- see self.unimplemented.
          self.unimplemented.setdefault(m, []).append(insn.address)
@@ -40,7 +51,17 @@ index 468312d..aa76089 100644
          if nops := len(ops) < 2:
              return [f"/* mov: bad operands */"]
          src = _fmt_operand_read(ops[1])
-@@ -2277,7 +2280,7 @@ class Lifter:
+@@ -1681,6 +1688,9 @@ class Lifter:
+             f"_fas = (int32_t){sx}(_fa); _fbs = (int32_t){sx}(_fb);"
+             f" /* {kind} {lhs}, {rhs} ({size*8}-bit) */",
+         ]
++        if getattr(self, "needs_zf_snapshot", False):
++            out.append("_zf = (_fa == _fb);" if kind == "cmp"
++                       else "_zf = ((_fa & _fb) == 0);")
+         # A cmp sets the carry flag too, and sbb/adc/setc/rcl read it directly
+         # rather than through _fa/_fb. Leaving CF alone here let those pick up
+         # whatever an earlier instruction had left in it.
+@@ -2277,7 +2287,7 @@ class Lifter:
          if m in self._MMX_BINARY and len(ops) >= 2:
              a, b = src(dst), src(ops[1])
              if a is None or b is None:
@@ -49,7 +70,7 @@ index 468312d..aa76089 100644
              if is_mm(dst):
                  return [f"{dst.reg} = {self._MMX_BINARY[m]}({a}, {b}); /* {m} */"]
              return [f"/* TODO: {m} {insn.op_str} (dst not mm) */"]
-@@ -2291,7 +2294,7 @@ class Lifter:
+@@ -2291,7 +2301,7 @@ class Lifter:
              elif count.type == "mem":
                  cnt = f"MMX_MEM({_fmt_mem(count)}).q"
              else:
@@ -58,7 +79,7 @@ index 468312d..aa76089 100644
              return [f"{dst.reg} = {self._MMX_SHIFT[m]}({dst.reg}, {cnt}); /* {m} */"]
  
          # cvtps2pi / cvttps2pi: two singles in, two dwords out. The source is
-@@ -2306,20 +2309,20 @@ class Lifter:
+@@ -2306,20 +2316,20 @@ class Lifter:
                  addr = _fmt_mem(s_op)
                  lo, hi = f"MEMF({addr})", f"MEMF(({addr}) + 4)"
              else:
@@ -82,7 +103,7 @@ index 468312d..aa76089 100644
              return [f"{dst.reg} = MMX_PINSRW({dst.reg}, {v}, "
                      f"{ops[2].imm & 0xFF}u); /* pinsrw */"]
  
-@@ -2351,14 +2354,14 @@ class Lifter:
+@@ -2351,14 +2361,14 @@ class Lifter:
                               " /* movd */"])
                  if dst.type == "reg":
                      return [f"{dst.reg} = {ops[1].reg}.ud[0]; /* movd */"]
@@ -99,7 +120,7 @@ index 468312d..aa76089 100644
  
      def _lift_sse(self, insn, m, ops):
          """Translate SSE instructions to C float operations."""
-@@ -2776,9 +2779,32 @@ class Lifter:
+@@ -2776,9 +2786,32 @@ class Lifter:
                  mem_acc = _smem_accessor(size)
                  int_type = {2: "int16_t", 4: "int32_t", 8: "int64_t"}.get(
                      size, "int32_t")
@@ -134,7 +155,7 @@ index 468312d..aa76089 100644
              return [f"/* {m} {insn.op_str} */"]
  
          if m in ("fadd", "faddp", "fsub", "fsubp", "fsubr", "fsubrp",
-@@ -3018,6 +3044,35 @@ class Lifter:
+@@ -3018,6 +3051,69 @@ class Lifter:
          return [f"/* FPU: {m} {insn.op_str} */"]
  
  
@@ -144,8 +165,9 @@ index 468312d..aa76089 100644
 +
 +    CMP/TEST already write runtime operand snapshots on every incoming path.
 +    The operands' identities therefore need not agree, only operation and width
-+    (SF conditions still select a width-specific cast). Do not merge different
-+    flag semantics, absent states, or other setters that re-read operands.
++    (SF conditions still select a width-specific cast). Different CMP/TEST
++    semantics meet at captured ZF only. Unknown states and other unlike setters
++    that re-read operands are not merged.
 +    """
 +    if not states or any(state is None for state in states):
 +        return None
@@ -164,14 +186,104 @@ index 468312d..aa76089 100644
 +    if signature is not None and all(snapshot_signature(state) == signature
 +                                     for state in states[1:]):
 +        return first
++    # Every CMP/TEST captures its width-masked zero flag on the executed path.
++    # Mixed kinds/widths can safely share ZF, but no other condition bits.
++    if all(state[0] == "snapshot_zf" or snapshot_signature(state) is not None
++           for state in states):
++        return ("snapshot_zf", [])
 +    return None
++
++
++def advance_flag_state(curr, state):
++    """Pure flag transfer shared by CFG analysis and instruction emission."""
++    m = curr.mnemonic
++    # A CALL instruction preserves EFLAGS, but its callee can change them.
++    # No interprocedural flag-return contract is represented here.
++    if curr.is_call or m == "popfd": return None
++    if m in FLAG_SETTERS: return (m, list(curr.operands))
++    if m in _FLAGS_UNDEFINED: return None
++    if m in _EFLAGS_SETTERS: return (m, list(curr.operands))
++    if m in _EFLAGS_PRESERVE: return state
++    if m in ("fcompi", "fcomip", "fucomi", "fucompi", "fucomip", "fcomi", "sahf"):
++        return (m, list(curr.operands))
++    if m.startswith(("f", "cmov", "j", "set")): return state
++    if m.startswith("rep"):
++        rest = getattr(curr, "op_str", "")
++        if any(x in m or x in rest for x in ("cmpsb", "scasb")):
++            return (m, list(curr.operands))
++        return state
++    return None
++
++
++def block_flag_state(bb, incoming=None):
++    state = incoming
++    for insn in bb.instructions:
++        state = advance_flag_state(insn, state)
++    return state
 +
 +
  def lift_basic_block(lifter, bb, flag_state=None):
      """
      Lift a basic block to C statements.
+@@ -3134,53 +3230,9 @@ def lift_basic_block(lifter, bb, flag_state=None):
+             results = lifter.lift_instruction(insns[i])
+         stmts.extend(results)
+ 
+-        # Track flag-setting instructions
+-        if curr.mnemonic in FLAG_SETTERS:
+-            last_flag_setter = curr.mnemonic
+-            last_flag_ops = list(curr.operands)
+-        elif curr.mnemonic in _FLAGS_UNDEFINED:
+-            # Flags are undefined after these - clear tracking
+-            last_flag_setter = None
+-            last_flag_ops = []
+-        elif curr.mnemonic in _EFLAGS_SETTERS:
+-            # Additional flag-setting instructions
+-            last_flag_setter = curr.mnemonic
+-            last_flag_ops = list(curr.operands)
+-        elif curr.mnemonic in _EFLAGS_PRESERVE:
+-            pass  # These don't affect EFLAGS
+-        elif curr.mnemonic in ("fcompi", "fcomip", "fucomi", "fucompi",
+-                                "fucomip", "fcomi"):
+-            # FPU compare-to-EFLAGS: sets CF, ZF, PF directly
+-            last_flag_setter = curr.mnemonic
+-            last_flag_ops = list(curr.operands)
+-        elif curr.mnemonic == "sahf":
+-            # sahf loads AH into flags - typically after fnstsw ax
+-            # in the fcomp/fnstsw/sahf pattern for FPU comparisons
+-            last_flag_setter = "sahf"
+-            last_flag_ops = list(curr.operands)
+-        elif curr.mnemonic.startswith("f") or curr.mnemonic.startswith("cmov"):
+-            pass  # FPU and already-handled CMOVcc
+-        elif curr.mnemonic.startswith("j"):
+-            pass  # Jumps don't set flags
+-        elif curr.mnemonic.startswith("set"):
+-            pass  # SETcc doesn't set flags
+-        elif curr.mnemonic.startswith("rep"):
+-            # rep movsb/movsd = data copy, preserves flags
+-            # repe cmpsb/repne scasb = comparison, sets flags
+-            rest = curr.op_str.strip() if hasattr(curr, 'op_str') else ""
+-            raw_m = curr.mnemonic
+-            if "cmpsb" in raw_m or "scasb" in raw_m:
+-                last_flag_setter = raw_m
+-                last_flag_ops = list(curr.operands)
+-            elif "cmpsb" in rest or "scasb" in rest:
+-                last_flag_setter = raw_m
+-                last_flag_ops = list(curr.operands)
+-            else:
+-                pass  # rep movs/stos = data movement, flags preserved
+-        else:
+-            # Unknown instruction - conservatively clear flag state
+-            last_flag_setter = None
+-            last_flag_ops = []
++        state = advance_flag_state(curr, (last_flag_setter, last_flag_ops)
++                                   if last_flag_setter else None)
++        last_flag_setter, last_flag_ops = state if state else (None, [])
+ 
+         i += 1
+ 
 diff --git a/tools/recomp/translator.py b/tools/recomp/translator.py
-index 978b319..922d46b 100644
+index 978b319..e5c08be 100644
 --- a/tools/recomp/translator.py
 +++ b/tools/recomp/translator.py
 @@ -22,7 +22,7 @@ import struct
@@ -179,36 +291,78 @@ index 978b319..922d46b 100644
  from . import config as _config
  from .disasm import Disassembler
 -from .lifter import (Lifter, lift_basic_block, detect_seh_helpers,
-+from .lifter import (Lifter, lift_basic_block, merge_flag_states, detect_seh_helpers,
++from .lifter import (Lifter, lift_basic_block, merge_flag_states, block_flag_state, detect_seh_helpers,
                       detect_setjmp_helpers)
  
  
-@@ -937,20 +937,16 @@ class FunctionTranslator:
+@@ -920,13 +920,37 @@ class FunctionTranslator:
+                 continue
+             if last.jump_target in preds:
+                 preds[last.jump_target].add(bb.start)
++            elif last.mnemonic == "jmp" and last.operands:
++                for destination in self.lifter._analyze_switch_table(last.operands):
++                    if destination in preds:
++                        preds[destination].add(bb.start)
+             # A conditional jump also falls through; ret and an unconditional
+             # jmp do not.
+             leaves = last.is_ret or last.mnemonic in ("jmp", "int3", "ud2", "hlt")
+             if not leaves and i + 1 < len(blocks):
+                 preds[blocks[i + 1].start].add(bb.start)
+ 
+-        out_state = {}
++        # Establish terminal setters independently of address order. Propagate
++        # preserving blocks to a fixed point; unknown entry/call paths stay unknown.
++        out_state = {bb.start: block_flag_state(bb) for bb in blocks}
++        incoming_state = {}
++        for _ in range(len(blocks) + 1):
++            changed = False
++            for bb in blocks:
++                sources = preds[bb.start]
++                incoming = (merge_flag_states([out_state[p] for p in sorted(sources)])
++                            if bb.start != start and sources else None)
++                incoming_state[bb.start] = incoming
++                terminal = block_flag_state(bb, incoming)
++                if terminal != out_state[bb.start]:
++                    out_state[bb.start] = terminal
++                    changed = True
++            if not changed: break
++        self.lifter.needs_zf_snapshot = any(
++            state and state[0] == "snapshot_zf" for state in incoming_state.values())
++        if self.lifter.needs_zf_snapshot:
++            lines.append("    int _zf = 0; /* captured CMP/TEST zero flag */")
++
+         for bb in blocks:
+             # Emit label if this block is a branch target
+             if bb.start in label_addrs or bb.start == start:
+@@ -937,25 +961,8 @@ class FunctionTranslator:
                  # compile. The null statement costs nothing and is always valid.
                  lines.append(f"loc_{bb.start:08X}: ;")
  
 -            # Inherit the flag state only when every predecessor agrees on it.
-+            # Inherit only when every predecessor has compatible flag semantics.
-+            # CMP/TEST snapshot operands at runtime, so identities may differ.
-             # Blocks are walked in address order, so a back edge's predecessor
-             # may not be computed yet -- treat that as unknown rather than
+-            # Blocks are walked in address order, so a back edge's predecessor
+-            # may not be computed yet -- treat that as unknown rather than
 -            # guessing, which costs a fallback condition and never a wrong one.
-+            # guessing. Existing unknown-flag fallbacks remain a separate gap.
-             sources = preds[bb.start]
-             if bb.start == start or not sources:
-                 incoming = None
-             elif all(p in out_state for p in sources):
+-            sources = preds[bb.start]
+-            if bb.start == start or not sources:
+-                incoming = None
+-            elif all(p in out_state for p in sources):
 -                states = [out_state[p] for p in sources]
 -                incoming = states[0]
 -                for other in states[1:]:
 -                    if other != incoming:
 -                        incoming = None
 -                        break
-+                incoming = merge_flag_states([out_state[p] for p in sources])
-             else:
-                 incoming = None
+-            else:
+-                incoming = None
+-
+-            stmts, out_state[bb.start] = lift_basic_block(
+-                self.lifter, bb, flag_state=incoming)
++            stmts, _ = lift_basic_block(
++                self.lifter, bb, flag_state=incoming_state[bb.start])
+             for stmt in stmts:
+                 lines.append(f"    {stmt}")
  
-@@ -1378,7 +1374,7 @@ class BatchTranslator:
+@@ -1378,7 +1385,7 @@ class BatchTranslator:
              "/**",
              f" * {_config.banner_name(getattr(self, 'title', None))}"
              f" - Recompiled Function Declarations",
@@ -217,7 +371,7 @@ index 978b319..922d46b 100644
              " */",
              "",
              "#ifndef RECOMP_FUNCS_H",
-@@ -1387,23 +1383,15 @@ class BatchTranslator:
+@@ -1387,23 +1394,15 @@ class BatchTranslator:
              '#include "recomp_types.h"',
              "",
          ]
@@ -247,7 +401,7 @@ index 978b319..922d46b 100644
          header_lines.extend(["", "#endif /* RECOMP_FUNCS_H */", ""])
  
          with open(header_path, "w", encoding="utf-8") as f:
-@@ -1461,8 +1449,12 @@ class BatchTranslator:
+@@ -1461,8 +1460,12 @@ class BatchTranslator:
  
          # Split translations into chunks and write .c files
          generated_files = [header_path]
@@ -262,7 +416,7 @@ index 978b319..922d46b 100644
  
          # Remove chunk files a previous, larger run left behind. Projects glob
          # gen/*.c into their build, so a stale chunk keeps compiling: it still
-@@ -1485,8 +1477,8 @@ class BatchTranslator:
+@@ -1485,8 +1488,8 @@ class BatchTranslator:
                  "/**",
                  f" * {_config.banner_name(getattr(self, 'title', None))}"
                  f" - Recompiled code chunk {ci}",
@@ -273,7 +427,7 @@ index 978b319..922d46b 100644
                  " */",
                  "",
                  "#define RECOMP_GENERATED_CODE",
-@@ -1541,7 +1533,7 @@ class BatchTranslator:
+@@ -1541,7 +1544,7 @@ class BatchTranslator:
                  popped = self.translator._stub_ret_bytes(addr)
                  note = (f"ret {popped}" if popped else "not detected")
                  stub_lines.append(
