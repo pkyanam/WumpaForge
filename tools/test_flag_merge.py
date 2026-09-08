@@ -129,5 +129,11 @@ int main(void) {
         self.assertIn('if (_flags',unknown)
         call=fixture('call_join','3d07000000','e800000000',0x74,True)
         self.assertIn('if (_flags',call)
+        # Staged policy: preserve legacy-compatible behavior through a call,
+        # but never let a legacy callee justify a newly mixed-ZF meet.
+        legacy_call=fixture('legacy_call','3d07000000','3d07000000e800000000',0x74)
+        self.assertNotIn('if (_flags',legacy_call)
+        mixed_call=fixture('mixed_call','3d07000000','85dbe800000000',0x74)
+        self.assertIn('if (_flags',mixed_call)
 
 if __name__=='__main__': unittest.main()

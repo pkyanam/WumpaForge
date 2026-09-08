@@ -128,10 +128,12 @@ or menu predicate override:
   before code emission and propagates preserving-block state to a fixed point.
   Backward predecessors are therefore independent of source address order.
   The CFG includes known switch destinations. Unknown entry, clobber and call
-  paths remain unknown; circular preservation does not create an initial value.
-  CALL and POPFD no longer inherit an unverified caller flag state. This can
-  reveal additional unresolved legacy paths after a full lift; no arbitrary
-  interprocedural EFLAGS-return contract is assumed.
+  paths remain unknown for new proofs; circular preservation does not create an
+  initial value. The new solver treats CALL/POPFD as unknown. Where it cannot
+  prove a state, emission retains only the original address-order compatible
+  state, with mixed-ZF merging disabled. Local call behavior is unchanged; this
+  staged policy neither adds new across-call proofs nor converts established
+  paths into new constant-false legacy fallbacks.
 - Compatible same-kind/width snapshots retain their existing comparisons. A join
   of known CMP/TEST states with different semantics or widths meets at ZF only.
   JE/JNE and corresponding equality SETcc/CMOVcc can consume that bit; other
@@ -151,3 +153,15 @@ also pass. Translating only original6E130 to ignored
 function has no remaining `if (_flags` conditions. No whole-game lift/build/run
 was performed for this handoff; aggregate fallback counts and actual controller
 menu behavior await root integration and validation.
+
+
+Staged impact check after review: `tools/audit_flag_impact.py 741d5e2` compares the
+old cumulative patch and current translator on the same4550 actually generated
+function owners, in memory, with identical current metadata/CFG recovery. It
+writes no generated game code. Legacy `if (_flags` sites decrease62→51 in eight
+functions; there are zero newly introduced sites and no function with an increased
+count. Exact report: `local/reports/flag-impact-staged.json`. Counts differ from
+the historical lift29 inventory because the current metadata/function owners are
+newer. This audit measures unsupported fallback impact, not full game correctness.
+The additional staged-call regressions retain legacy-compatible same-kind handling
+while refusing a newly mixed-ZF proof through an unverified call.

@@ -12,7 +12,7 @@ index 4cf3d79..7437e9a 100644
  /* MSVC's __forceinline -> gcc/clang equivalent on POSIX. */
  #if !defined(_MSC_VER) && !defined(__forceinline)
 diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
-index 468312d..c1fdbd0 100644
+index 468312d..8788134 100644
 --- a/tools/recomp/lifter.py
 +++ b/tools/recomp/lifter.py
 @@ -342,6 +342,10 @@ def _make_condition(jcc, flag_setter, flag_ops):
@@ -155,12 +155,12 @@ index 468312d..c1fdbd0 100644
              return [f"/* {m} {insn.op_str} */"]
  
          if m in ("fadd", "faddp", "fsub", "fsubp", "fsubr", "fsubrp",
-@@ -3018,6 +3051,69 @@ class Lifter:
+@@ -3018,6 +3051,71 @@ class Lifter:
          return [f"/* FPU: {m} {insn.op_str} */"]
  
  
 +
-+def merge_flag_states(states):
++def merge_flag_states(states, allow_zf=True):
 +    """Meet known predecessor states without discarding compatible snapshots.
 +
 +    CMP/TEST already write runtime operand snapshots on every incoming path.
@@ -188,8 +188,8 @@ index 468312d..c1fdbd0 100644
 +        return first
 +    # Every CMP/TEST captures its width-masked zero flag on the executed path.
 +    # Mixed kinds/widths can safely share ZF, but no other condition bits.
-+    if all(state[0] == "snapshot_zf" or snapshot_signature(state) is not None
-+           for state in states):
++    if allow_zf and all(state[0] == "snapshot_zf" or snapshot_signature(state) is not None
++                        for state in states):
 +        return ("snapshot_zf", [])
 +    return None
 +
@@ -197,9 +197,6 @@ index 468312d..c1fdbd0 100644
 +def advance_flag_state(curr, state):
 +    """Pure flag transfer shared by CFG analysis and instruction emission."""
 +    m = curr.mnemonic
-+    # A CALL instruction preserves EFLAGS, but its callee can change them.
-+    # No interprocedural flag-return contract is represented here.
-+    if curr.is_call or m == "popfd": return None
 +    if m in FLAG_SETTERS: return (m, list(curr.operands))
 +    if m in _FLAGS_UNDEFINED: return None
 +    if m in _EFLAGS_SETTERS: return (m, list(curr.operands))
@@ -215,17 +212,22 @@ index 468312d..c1fdbd0 100644
 +    return None
 +
 +
-+def block_flag_state(bb, incoming=None):
++def block_flag_state(bb, incoming=None, conservative_calls=True):
 +    state = incoming
 +    for insn in bb.instructions:
-+        state = advance_flag_state(insn, state)
++        # New cross-block proofs cannot assume an arbitrary callee preserves
++        # flags. Local emission/legacy state remain a separately staged policy.
++        if conservative_calls and (insn.is_call or insn.mnemonic == "popfd"):
++            state = None
++        else:
++            state = advance_flag_state(insn, state)
 +    return state
 +
 +
  def lift_basic_block(lifter, bb, flag_state=None):
      """
      Lift a basic block to C statements.
-@@ -3134,53 +3230,9 @@ def lift_basic_block(lifter, bb, flag_state=None):
+@@ -3134,53 +3232,9 @@ def lift_basic_block(lifter, bb, flag_state=None):
              results = lifter.lift_instruction(insns[i])
          stmts.extend(results)
  
@@ -283,7 +285,7 @@ index 468312d..c1fdbd0 100644
          i += 1
  
 diff --git a/tools/recomp/translator.py b/tools/recomp/translator.py
-index 978b319..e5c08be 100644
+index 978b319..c6d4f4e 100644
 --- a/tools/recomp/translator.py
 +++ b/tools/recomp/translator.py
 @@ -22,7 +22,7 @@ import struct
@@ -295,10 +297,18 @@ index 978b319..e5c08be 100644
                       detect_setjmp_helpers)
  
  
-@@ -920,13 +920,37 @@ class FunctionTranslator:
+@@ -914,19 +914,61 @@ class FunctionTranslator:
+         # whatever instruction happens to sit above it -- silently, and with a
+         # perfectly plausible-looking condition.
+         preds = {bb.start: set() for bb in blocks}
++        legacy_preds = {bb.start: set() for bb in blocks}
+         for i, bb in enumerate(blocks):
+             last = bb.instructions[-1] if bb.instructions else None
+             if last is None:
                  continue
              if last.jump_target in preds:
                  preds[last.jump_target].add(bb.start)
++                legacy_preds[last.jump_target].add(bb.start)
 +            elif last.mnemonic == "jmp" and last.operands:
 +                for destination in self.lifter._analyze_switch_table(last.operands):
 +                    if destination in preds:
@@ -308,8 +318,8 @@ index 978b319..e5c08be 100644
              leaves = last.is_ret or last.mnemonic in ("jmp", "int3", "ud2", "hlt")
              if not leaves and i + 1 < len(blocks):
                  preds[blocks[i + 1].start].add(bb.start)
- 
--        out_state = {}
++                legacy_preds[blocks[i + 1].start].add(bb.start)
++
 +        # Establish terminal setters independently of address order. Propagate
 +        # preserving blocks to a fixed point; unknown entry/call paths stay unknown.
 +        out_state = {bb.start: block_flag_state(bb) for bb in blocks}
@@ -326,15 +336,31 @@ index 978b319..e5c08be 100644
 +                    out_state[bb.start] = terminal
 +                    changed = True
 +            if not changed: break
++        # Preserve the previous emitter's behavior where the new solver has no
++        # proof. This is deliberately NOT a new interprocedural flags model.
++        # Reconstruct the old address-order meet without mixed-ZF acceptance;
++        # otherwise a legacy call could accidentally justify a new ZF join.
++        legacy_out = {}
++        for bb in blocks:
++            sources = legacy_preds[bb.start]
++            legacy_in = (merge_flag_states([legacy_out[p] for p in sorted(sources)],
++                                           allow_zf=False)
++                         if bb.start != start and sources and
++                            all(p in legacy_out for p in sources) else None)
++            legacy_out[bb.start] = block_flag_state(bb, legacy_in,
++                                                  conservative_calls=False)
++            if incoming_state[bb.start] is None:
++                incoming_state[bb.start] = legacy_in
 +        self.lifter.needs_zf_snapshot = any(
 +            state and state[0] == "snapshot_zf" for state in incoming_state.values())
 +        if self.lifter.needs_zf_snapshot:
 +            lines.append("    int _zf = 0; /* captured CMP/TEST zero flag */")
-+
+ 
+-        out_state = {}
          for bb in blocks:
              # Emit label if this block is a branch target
              if bb.start in label_addrs or bb.start == start:
-@@ -937,25 +961,8 @@ class FunctionTranslator:
+@@ -937,25 +979,8 @@ class FunctionTranslator:
                  # compile. The null statement costs nothing and is always valid.
                  lines.append(f"loc_{bb.start:08X}: ;")
  
@@ -362,7 +388,7 @@ index 978b319..e5c08be 100644
              for stmt in stmts:
                  lines.append(f"    {stmt}")
  
-@@ -1378,7 +1385,7 @@ class BatchTranslator:
+@@ -1378,7 +1403,7 @@ class BatchTranslator:
              "/**",
              f" * {_config.banner_name(getattr(self, 'title', None))}"
              f" - Recompiled Function Declarations",
@@ -371,7 +397,7 @@ index 978b319..e5c08be 100644
              " */",
              "",
              "#ifndef RECOMP_FUNCS_H",
-@@ -1387,23 +1394,15 @@ class BatchTranslator:
+@@ -1387,23 +1412,15 @@ class BatchTranslator:
              '#include "recomp_types.h"',
              "",
          ]
@@ -401,7 +427,7 @@ index 978b319..e5c08be 100644
          header_lines.extend(["", "#endif /* RECOMP_FUNCS_H */", ""])
  
          with open(header_path, "w", encoding="utf-8") as f:
-@@ -1461,8 +1460,12 @@ class BatchTranslator:
+@@ -1461,8 +1478,12 @@ class BatchTranslator:
  
          # Split translations into chunks and write .c files
          generated_files = [header_path]
@@ -416,7 +442,7 @@ index 978b319..e5c08be 100644
  
          # Remove chunk files a previous, larger run left behind. Projects glob
          # gen/*.c into their build, so a stale chunk keeps compiling: it still
-@@ -1485,8 +1488,8 @@ class BatchTranslator:
+@@ -1485,8 +1506,8 @@ class BatchTranslator:
                  "/**",
                  f" * {_config.banner_name(getattr(self, 'title', None))}"
                  f" - Recompiled code chunk {ci}",
@@ -427,7 +453,7 @@ index 978b319..e5c08be 100644
                  " */",
                  "",
                  "#define RECOMP_GENERATED_CODE",
-@@ -1541,7 +1544,7 @@ class BatchTranslator:
+@@ -1541,7 +1562,7 @@ class BatchTranslator:
                  popped = self.translator._stub_ret_bytes(addr)
                  note = (f"ret {popped}" if popped else "not detected")
                  stub_lines.append(
