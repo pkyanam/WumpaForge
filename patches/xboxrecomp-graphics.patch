@@ -13,7 +13,7 @@ index f1b3606..4f014dc 100644
  
  target_include_directories(xbox_d3d8 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 diff --git a/src/d3d/d3d8_gl.c b/src/d3d/d3d8_gl.c
-index 7888785..bf5295b 100644
+index 7888785..b31bc76 100644
 --- a/src/d3d/d3d8_gl.c
 +++ b/src/d3d/d3d8_gl.c
 @@ -31,6 +31,12 @@
@@ -350,7 +350,22 @@ index 7888785..bf5295b 100644
      glUniform1i(g.u_use_xform, d3d8_fvf_transformed(fvf) ? 0 : 1);
  }
  
-@@ -747,7 +972,9 @@ static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETY
+@@ -737,17 +962,18 @@ static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETY
+     glUseProgram(g.prog);
+     glBindVertexArray(g.vao);
+     glBindBuffer(GL_ARRAY_BUFFER, g.stream_vbo);
+-    if (size > g.stream_vbo_size) {
+-        glBufferData(GL_ARRAY_BUFFER, size, verts, GL_STREAM_DRAW);
+-        g.stream_vbo_size = size;
+-    } else {
+-        glBufferSubData(GL_ARRAY_BUFFER, 0, size, verts);
+-    }
++    /* Each UP draw supplies a complete new byte sequence. Re-specify its store
++     * so earlier queued draws can retain the old storage. Overwriting offset0
++     * with BufferSubData forced Metal flushResource/semaphore waits (boot44). */
++    glBufferData(GL_ARRAY_BUFFER, size, verts, GL_STREAM_DRAW);
++    g.stream_vbo_size = size;
+     setup_fvf_attribs(g.current_fvf, stride);
      bind_texture0();
      update_mvp(g.current_fvf);
      apply_render_states();
@@ -360,7 +375,20 @@ index 7888785..bf5295b 100644
      return D3D_OK;
  }
  
-@@ -774,7 +1001,9 @@ static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s, D3DPRIM
+@@ -765,16 +991,18 @@ static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s, D3DPRIM
+     glUseProgram(g.prog);
+     glBindVertexArray(g.vao);
+     glBindBuffer(GL_ARRAY_BUFFER, g.stream_vbo);
+-    if (vbytes > g.stream_vbo_size) { glBufferData(GL_ARRAY_BUFFER, vbytes, verts, GL_STREAM_DRAW); g.stream_vbo_size = vbytes; }
+-    else glBufferSubData(GL_ARRAY_BUFFER, 0, vbytes, verts);
++    glBufferData(GL_ARRAY_BUFFER, vbytes, verts, GL_STREAM_DRAW);
++    g.stream_vbo_size = vbytes;
+     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g.stream_ibo);
+-    if (ibytes > g.stream_ibo_size) { glBufferData(GL_ELEMENT_ARRAY_BUFFER, ibytes, idx, GL_STREAM_DRAW); g.stream_ibo_size = ibytes; }
+-    else glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, ibytes, idx);
++    glBufferData(GL_ELEMENT_ARRAY_BUFFER, ibytes, idx, GL_STREAM_DRAW);
++    g.stream_ibo_size = ibytes;
+     setup_fvf_attribs(g.current_fvf, stride);
      bind_texture0();
      update_mvp(g.current_fvf);
      apply_render_states();
@@ -370,7 +398,7 @@ index 7888785..bf5295b 100644
      return D3D_OK;
  }
  
-@@ -974,6 +1203,14 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -974,6 +1202,14 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
  {
      (void)s; (void)adapter; (void)devtype; (void)hwnd; (void)flags;
      if (!pp || !pPP) return D3DERR_INVALIDCALL;
@@ -385,7 +413,7 @@ index 7888785..bf5295b 100644
  
      /* Initialise SDL video + GL 3.3 core context. */
      if (!SDL_WasInit(SDL_INIT_VIDEO)) SDL_InitSubSystem(SDL_INIT_VIDEO);
-@@ -1006,7 +1243,22 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -1006,7 +1242,22 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
          return D3DERR_INVALIDCALL;
      }
      SDL_GL_MakeCurrent(g.window, g.glctx);
@@ -408,7 +436,7 @@ index 7888785..bf5295b 100644
  
      fprintf(stderr, "[d3d8_gl] GL %s / GLSL %s\n",
              glGetString(GL_VERSION), glGetString(GL_SHADING_LANGUAGE_VERSION));
-@@ -1018,9 +1270,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -1018,9 +1269,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
      mat4_identity(&g.m_view);
      mat4_identity(&g.m_proj);
      g.rs[D3DRS_ZENABLE]            = 1;
