@@ -3,31 +3,48 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot-14, first actual rendered image
-- Boot-13 rendered the original Universal splash through native ARM64 game code
-  and GL4.1; actual GPU capture is `local/reports/game-frame-15.png`. Colors are
-  incorrect: the original game's generated DXT5 payload has black background
-  blocks where the source raw image is white. Compression/lifter investigation
-  remains active. This is not a verified correct splash, title screen, or menu.
-- Native paced vblank callback in `src/timing_bridge.c` invokes the game's actual
-  compiled callback0x39910. Boot-14 passes the two-second logo counter wait and
-  enters 3D intro code; thread isolation, ABI and60/50Hz pacing tests pass.
-- Boot-14 stops at nonzero programmable pixel shader0x2606890 after unsupported
-  vertex shader0x2606701 and texture render targets0x3B88660/0x3B9DC60. These are
-  substantial missing graphics compatibility features, not a launch setting.
-- Shader dump `boot14-shader-objects.bin` maps guest0x2606000..2608000. Vertex
-  object+0x118 contains six NV2A instructions. The toolkit HLSL decoder's opcode
-  word index is wrong; independent verified GLSL generators are in progress.
-- Root handles texture render targets and integration; mac_runtime handles
-  standalone vertex generator, native_audio standalone pixel generator, and
-  controller_support traces the incorrect DXT5 conversion. Avoid shared edits
-  and simultaneous game/debugger runs. No real menu/gameplay/audio/input verified.
+## Latest checkpoint: boot-15, correct Universal splash
+- Real native ARM64 game code renders the correct white-background Universal
+  splash. Actual GPU capture `local/reports/game-frame-15-fixed.png` was viewed.
+  This is original game rendering, not an asset viewer or injected image.
+- Native vblank callback invokes compiled game39910 at60/50Hz and passes the
+  two-second hold. Boot15 reaches3D intro, but title/menu/gameplay remain unverified.
+- Incorrect colors were proven a generic x87 FIST/FISTP rounding bug: original
+  D3DX requests truncation, but old lift used nearest llrint, converting255.5 to256.
+  `tools/test_x87_rounding.py` covers guest/host rounding modes, bounds and the
+  exact white-byte sequence under sanitizers. Cumulative lifter patch fixed;
+  sources regenerated and native build completed with2 jobs. Real capture confirms.
+- Both128x128 texture render-target calls now pass in boot15. `src/graphics.c`
+  uses real GL FBO storage and resolves GPU pixels into guest texture storage on
+  switches. Native graphics tests pass offscreen drawing, orientation, target
+  rebinding and resource lifetime using the CURRENT build/native D3D library.
+- Boot15 still aborts at programmable pixel shader0x2606890 after rejecting vertex
+  shader0x2606701. Cubemap resource AddRef/Release warnings also remain. No reliable
+  time estimate to title/menu is established; shader integration is substantial.
+- `src/nv2a_vertex.{h,c}` standalone generator is frozen and tested with native GPU
+  transform feedback plus actual six-instruction shader compilation. Inputs v0/v3,
+  physical constants112,113,119,120. It is NOT yet integrated/CMake-linked.
+- `src/nv2a_pixel.{h,c}` standalone generator exists; native_audio agent is testing
+  it. It is NOT yet integrated. Both use GLSL410 varyings vD0/vD1/vT0..3/vFog.
+- Real fixture `boot14-shader-objects.bin` maps guest2606000..2608000. Vertex
+  object2606700+118 contains six instructions (opcode in word1, not toolkit word0).
+  Declaration slots at object+14+16*slot: stream,offset,format,tess bytes. Observed
+  v0 offset0 float3(32), v1 offset12 float1(12), v2 offset16 color(40), v3 offset20
+  float2(22), stride28. Pixel object+8 points to60-DWORD definition at260689C.
+- NEXT root integration: audited SetVertexShaderConstant102AA0(index,data,count),
+  ret12, physical index=index+96. Original pure-device mode skips guest cache:
+  capture uploads in native storage. Shader0 programs require source generation,
+  GL compilation/link/cache, attribute binding, native constants/state/texture
+  upload. No CPU interpreter/JIT. Original pixel constant setter102D80 needs audit.
+- Agent ownership: mac_runtime finishing declaration/constant ABI docs; native_audio
+  testing standalone pixel generator; controller_support now confirms unbridged
+  cubemap CreateFE9F0/GetSurface103CB0 caused resource warnings. Root graphics.c
+  owns RTs/integration. Avoid shared edits and simultaneous native game runs.
 - Audio decoder, native output, lazy voices and28 title SDK bridges are tested
   independently. `src/audio_bridge.c` is not yet linked into the real executable.
-- `tools/package.py` creates `build/Wrath Native.app` with an asset symlink and
-  native executable. Repackage after building; packaging is not proof of play.
-- User asked for distance to title/menu: reported real splash plus substantial
-  shader/render-target work; no reliable ETA or percentage asserted.
+  Physical Bluetooth controller testing and real in-game audio remain pending.
+- `tools/package.py` creates build/Wrath Native.app with asset symlink. Repackage
+  after building; existing app copy is stale. CLI build/native/wrath_native current.
 
 The older numbered checkpoints below are historical; this section is current.
 

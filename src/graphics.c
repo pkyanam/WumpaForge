@@ -45,7 +45,7 @@ _Static_assert(offsetof(GuestPresentation, buffer_surfaces) == 52, "Xbox surface
 _Static_assert(sizeof(D3DVIEWPORT8) == 24, "Xbox viewport layout");
 
 static IDirect3DDevice8 *s_device;
-static UINT s_width, s_height;
+static UINT s_width, s_height, s_target_width, s_target_height;
 static int s_depth_available;
 static HRESULT initialize_depth_surface(uint32_t format);
 static D3DVIEWPORT8 s_viewport;
@@ -126,6 +126,7 @@ void sub_000FD6E0(void)
     s_depth_available = pp.EnableAutoDepthStencil != 0;
     s_width = pp.BackBufferWidth;
     s_height = pp.BackBufferHeight;
+    s_target_width = s_width; s_target_height = s_height;
     s_viewport = (D3DVIEWPORT8){0, 0, s_width, s_height, 0.0f, 1.0f};
     s_device->lpVtbl->SetViewport(s_device, &s_viewport);
     /* Reproduce observed SDK globals, never store native pointers in Xbox RAM.
@@ -341,12 +342,11 @@ void sub_000FF860(void)
         return;
     }
     memcpy(&vp, guest_ptr(address), sizeof(vp));
-    /* SDK clamps the viewport to its render target. This bridge currently has
-     * only the native window render target. */
-    if (vp.X > s_width) vp.X = s_width;
-    if (vp.Y > s_height) vp.Y = s_height;
-    if (vp.Width > s_width - vp.X) vp.Width = s_width - vp.X;
-    if (vp.Height > s_height - vp.Y) vp.Height = s_height - vp.Y;
+    /* SDK clamps the viewport to its currently bound render target. */
+    if (vp.X > s_target_width) vp.X = s_target_width;
+    if (vp.Y > s_target_height) vp.Y = s_target_height;
+    if (vp.Width > s_target_width - vp.X) vp.Width = s_target_width - vp.X;
+    if (vp.Height > s_target_height - vp.Y) vp.Height = s_target_height - vp.Y;
     if (!isfinite(vp.MinZ) || !isfinite(vp.MaxZ)) {
         finish(4, (uint32_t)D3DERR_INVALIDCALL);
         return;
@@ -354,6 +354,7 @@ void sub_000FF860(void)
     HRESULT result = s_device->lpVtbl->SetViewport(s_device, &vp);
     if (result >= 0) {
         s_viewport = vp;
+        glViewport(vp.X, s_target_height - vp.Y - vp.Height, vp.Width, vp.Height);
         memcpy(guest_ptr(GUEST_VIEWPORT), &vp, sizeof(vp));
     }
     finish(4, (uint32_t)result);
@@ -401,7 +402,7 @@ static void clear_rectangles(uint32_t count, uint32_t rectangles, uint32_t flags
             if (rect.y2 < bottom) bottom = rect.y2;
         }
         if (right > left && bottom > top) {
-            glScissor(left, (GLint)s_height - bottom, right - left, bottom - top);
+            glScissor(left, (GLint)s_target_height - bottom, right - left, bottom - top);
             glClear(bits);
         }
     }
@@ -432,7 +433,7 @@ void sub_00100EA0(void)
                             ((flags & 1) ? D3DCLEAR_ZBUFFER : 0) |
                             ((flags & 2) ? D3DCLEAR_STENCIL : 0);
     int whole_target = !count && s_viewport.X == 0 && s_viewport.Y == 0 &&
-        s_viewport.Width == s_width && s_viewport.Height == s_height;
+        s_viewport.Width == s_target_width && s_viewport.Height == s_target_height;
     /* Use native API for its supported whole-target clear. Stencil write masks
      * and partial channels require the bridge's exact GL path. */
     HRESULT result = D3D_OK;
@@ -535,6 +536,7 @@ static struct Resource {
     uint32_t offsets[13], pitches[13], sizes[13];
     unsigned type, references, bindings;
     GLenum framebuffer;
+    GLuint target_fbo, target_texture;
     int linear, dirty;
     IDirect3DTexture8 *texture;
     IDirect3DVertexBuffer8 *vertex_buffer;
@@ -561,6 +563,8 @@ static void update_common(struct Resource *r)
 static void release_resource(struct Resource *r)
 {
     if (r->references || r->bindings) { update_common(r); return; }
+    if (r->target_fbo) glDeleteFramebuffers(1, &r->target_fbo);
+    if (r->target_texture) glDeleteTextures(1, &r->target_texture);
     if (r->texture) r->texture->lpVtbl->Release(r->texture);
     if (r->vertex_buffer) r->vertex_buffer->lpVtbl->Release(r->vertex_buffer);
     uint32_t owner = r->owner;
@@ -1002,20 +1006,39 @@ void sub_000FF830(void) /* GetDepthStencilSurface(out), ret4. */
     if (!r) { finish(4,0x88760866); return; } /* D3DERR_NOTFOUND, observed FF850. */
     ++r->references; update_common(r); finish(4,0);
 }
+static HRESULT prepare_texture_target(struct Resource *r);
+static HRESULT resolve_texture_target(struct Resource *r);
 void sub_000FEF20(void) /* SetRenderTarget(color,depth), ret8. NULL color keeps current. */
 {
     uint32_t color=arg(0),depth=arg(1);
     if (!color) color=read32(GUEST_DEVICE+0x2070);
     struct Resource *r=resource(color), *z=resource(depth);
-    if (!s_device || !main_thread() || !r || r->type!=RESOURCE_SURFACE || r->framebuffer!=GL_BACK ||
-        (depth && (!z || z->type!=RESOURCE_DEPTH_SURFACE || depth!=s_depthbuffer_handle))) {
+    int window = r && r->framebuffer == GL_BACK;
+    struct Resource *parent = r ? resource(r->owner) : NULL;
+    int texture = r && !r->framebuffer && parent && parent->type == RESOURCE_TEXTURE;
+    int linear, bpp = r ? format_info(r->format, &linear) : -1;
+    if (!s_device || !main_thread() || !r || r->type!=RESOURCE_SURFACE ||
+        (!window && (!texture || bpp <= 0)) ||
+        (depth && (!window || !z || z->type!=RESOURCE_DEPTH_SURFACE || depth!=s_depthbuffer_handle))) {
         fprintf(stderr,"[wrath graphics] unsupported SetRenderTarget color0x%X depth0x%X\n",color,depth);
         finish(8,(uint32_t)D3DERR_INVALIDCALL); return;
     }
-    /* This subset binds the actual window backbuffer and its real D24S8 storage.
-     * A null depth surface disables both tests and prevents subsequent clears
-     * from modifying the still physically present window depth attachment. */
-    glBindFramebuffer(GL_FRAMEBUFFER,0); glDrawBuffer(GL_BACK); glReadBuffer(GL_BACK);
+    uint32_t old_color = read32(GUEST_DEVICE+0x2070);
+    struct Resource *old = resource(old_color);
+    if (old_color != color) {
+        HRESULT result = old && old->target_fbo ? resolve_texture_target(old) : 0;
+        if (result >= 0 && texture) result = prepare_texture_target(r);
+        if (result < 0) { finish(8,(uint32_t)result); return; }
+        ++r->bindings; update_common(r);
+        if (old && old->bindings) { --old->bindings; release_resource(old); }
+    } else if (texture && !r->target_fbo) {
+        HRESULT result = prepare_texture_target(r);
+        if (result < 0) { finish(8,(uint32_t)result); return; }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER,window ? 0 : r->target_fbo);
+    glDrawBuffer(window ? GL_BACK : GL_COLOR_ATTACHMENT0);
+    glReadBuffer(window ? GL_BACK : GL_COLOR_ATTACHMENT0);
+    s_target_width=r->width; s_target_height=r->height;
     write32(GUEST_DEVICE+0x2070,color); write32(GUEST_DEVICE+0x2074,depth);
     s_depth_available=depth!=0;
     native_state(D3DRS_ZENABLE,s_depth_available&&read32(0x10F008));
@@ -1023,6 +1046,7 @@ void sub_000FEF20(void) /* SetRenderTarget(color,depth), ret8. NULL color keeps 
     gl_toggle(GL_STENCIL_TEST,s_depth_available&&read32(0x10F00C));
     s_viewport=(D3DVIEWPORT8){0,0,r->width,r->height,0,1};
     s_device->lpVtbl->SetViewport(s_device,&s_viewport);
+    glViewport(0,0,r->width,r->height);
     memcpy(guest_ptr(GUEST_VIEWPORT),&s_viewport,sizeof(s_viewport));
     finish(8,0);
 }
@@ -1045,7 +1069,7 @@ void sub_000FF450(void) /* GetBackBuffer(index,type,out), ret12 */
             memset(r, 0, sizeof(*r)); finish(12, 0x8007000E); return;
         }
         r->type = RESOURCE_SURFACE; r->format = 0x12; r->linear = 1;
-        r->width = s_width; r->height = s_height; r->levels = 1; r->bindings = 1;
+        r->width = s_width; r->height = s_height; r->levels = 1; r->bindings = index == 0 ? 2 : 1;
         r->framebuffer = index == 0 ? GL_BACK : GL_FRONT;
         r->sizes[0] = r->bytes; r->pitches[0] = r->pitch;
         update_common(r); write32(r->handle + 4, r->data); write32(r->handle + 8, 0);
@@ -1076,7 +1100,7 @@ static uint32_t encode_color(uint32_t color, uint32_t format)
 }
 static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
 {
-    if (r->framebuffer) {
+    if (r->framebuffer || (r->target_fbo && read32(GUEST_DEVICE+0x2070)==r->handle)) {
         GLint old_fbo, old_buffer, old_pack, old_alignment, old_row, old_rows, old_pixels;
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &old_fbo);
         glGetIntegerv(GL_READ_BUFFER, &old_buffer);
@@ -1085,8 +1109,8 @@ static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
         glGetIntegerv(GL_PACK_ROW_LENGTH, &old_row);
         glGetIntegerv(GL_PACK_SKIP_ROWS, &old_rows);
         glGetIntegerv(GL_PACK_SKIP_PIXELS, &old_pixels);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        glReadBuffer(r->framebuffer); glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, r->target_fbo);
+        glReadBuffer(r->framebuffer ? r->framebuffer : GL_COLOR_ATTACHMENT0); glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         glPixelStorei(GL_PACK_ALIGNMENT, 4); glPixelStorei(GL_PACK_ROW_LENGTH, 0);
         glPixelStorei(GL_PACK_SKIP_ROWS, 0); glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
         glReadPixels(0, 0, r->width, r->height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
@@ -1119,6 +1143,62 @@ static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
         }
     return 0;
 }
+/* Keep guest texture storage coherent when leaving a render target. This first
+ * implementation resolves actual GPU pixels at target switches; shader sampling
+ * then uses the ordinary texture upload path. It avoids stale guest uploads and
+ * keeps row orientation explicit without a shader-specific texture flip. */
+static HRESULT resolve_texture_target(struct Resource *r)
+{
+    int linear, bpp=format_info(r->format,&linear);
+    if (bpp<=0) return D3DERR_INVALIDCALL;
+    uint32_t *pixels=malloc((size_t)r->width*r->height*4);
+    if (!pixels) return (HRESULT)0x8007000E;
+    HRESULT result=surface_pixels(r,pixels);
+    if (result>=0) {
+        uint8_t *data=guest_ptr(r->data);
+        for (unsigned y=0;y<r->height;++y) for (unsigned x=0;x<r->width;++x) {
+            uint32_t value=encode_color(pixels[y*r->width+x],r->format);
+            uint32_t offset=linear ? y*r->pitch+x*bpp : morton_index(x,y,r->width,r->height)*bpp;
+            memcpy(data+offset,&value,bpp);
+        }
+        struct Resource *parent=resource(r->owner);
+        if (parent) parent->dirty=1;
+    }
+    free(pixels); return result;
+}
+static HRESULT prepare_texture_target(struct Resource *r)
+{
+    uint32_t *pixels=malloc((size_t)r->width*r->height*4);
+    if (!pixels) return (HRESULT)0x8007000E;
+    HRESULT result=surface_pixels(r,pixels);
+    if (result<0) { free(pixels); return result; }
+    for (unsigned y=0;y<r->height/2;++y) for (unsigned x=0;x<r->width;++x) {
+        unsigned a=y*r->width+x,b=(r->height-1-y)*r->width+x;
+        uint32_t swap=pixels[a]; pixels[a]=pixels[b]; pixels[b]=swap;
+    }
+    GLint old_read,old_draw,old_tex,old_unpack,old_alignment,old_row,old_rows,old_pixels;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&old_read); glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&old_draw);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D,&old_tex); glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING,&old_unpack);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT,&old_alignment); glGetIntegerv(GL_UNPACK_ROW_LENGTH,&old_row);
+    glGetIntegerv(GL_UNPACK_SKIP_ROWS,&old_rows); glGetIntegerv(GL_UNPACK_SKIP_PIXELS,&old_pixels);
+    if (!r->target_texture) glGenTextures(1,&r->target_texture);
+    if (!r->target_fbo) glGenFramebuffers(1,&r->target_fbo);
+    glBindTexture(GL_TEXTURE_2D,r->target_texture); glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,4); glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS,0); glPixelStorei(GL_UNPACK_SKIP_PIXELS,0);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,r->width,r->height,0,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,pixels);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER,r->target_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,r->target_texture,0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0); glReadBuffer(GL_COLOR_ATTACHMENT0);
+    result=glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE ? 0 : D3DERR_INVALIDCALL;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,old_read); glBindFramebuffer(GL_DRAW_FRAMEBUFFER,old_draw);
+    glBindTexture(GL_TEXTURE_2D,old_tex); glBindBuffer(GL_PIXEL_UNPACK_BUFFER,old_unpack);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,old_alignment); glPixelStorei(GL_UNPACK_ROW_LENGTH,old_row);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS,old_rows); glPixelStorei(GL_UNPACK_SKIP_PIXELS,old_pixels);
+    free(pixels); return result;
+}
 static HRESULT pixels_to_framebuffer(struct Resource *destination, const uint32_t *pixels,
                                      unsigned width, unsigned height, int x, int y)
 {
@@ -1136,8 +1216,9 @@ static HRESULT pixels_to_framebuffer(struct Resource *destination, const uint32_
     glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     HRESULT result = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE ? 0 : D3DERR_INVALIDCALL;
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    GLint old_draw_buffer; glGetIntegerv(GL_DRAW_BUFFER, &old_draw_buffer); glDrawBuffer(destination->framebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination->target_fbo);
+    GLint old_draw_buffer; glGetIntegerv(GL_DRAW_BUFFER, &old_draw_buffer);
+    glDrawBuffer(destination->framebuffer ? destination->framebuffer : GL_COLOR_ATTACHMENT0);
     if (result >= 0) {
         glDisable(GL_SCISSOR_TEST);
         glBlitFramebuffer(0, 0, width, height, x, destination->height - y,
@@ -1180,7 +1261,7 @@ void sub_000FF580(void) /* CopyRects(source,rectangles,count,destination,points)
             result = D3DERR_INVALIDCALL; break;
         }
         if (!width || !height) continue;
-        if (destination->framebuffer) {
+        if (destination->framebuffer || (destination->target_fbo && read32(GUEST_DEVICE+0x2070)==destination->handle)) {
             uint32_t *region = malloc((size_t)width * height * 4);
             if (!region) { result = (HRESULT)0x8007000E; break; }
             for (int64_t y = 0; y < height; ++y)
@@ -1455,6 +1536,35 @@ int main(void)
     target[1]=depth_handle; call(0xFEF20,target,2); assert(g_eax==0);
     uint32_t depth_release[]={depth_handle}; call(0x103AD0,depth_release,1); assert(resource(depth_handle));
     call(0xFE5C0,no_state,1);
+    /* A true offscreen target: draw into a swizzled texture, resolve GPU writes
+     * to guest storage, and preserve orientation/content across target changes. */
+    uint32_t rt_create[]={8,4,1,1,6,0,0x8160}; call(0xFE9C0,rt_create,7); assert(g_eax==0);
+    uint32_t rt_texture=read32(0x8160),rt_get[]={rt_texture,0,0x8170};
+    call(0x103C30,rt_get,3); assert(g_eax==0);
+    uint32_t rt_surface=read32(0x8170),rt_target[]={rt_surface,0};
+    call(0xFEF20,rt_target,2); assert(g_eax==0 && s_target_width==8 && s_target_height==4);
+    GLint native_vp[4]; glGetIntegerv(GL_VIEWPORT,native_vp);
+    assert(native_vp[0]==0 && native_vp[1]==0 && native_vp[2]==8 && native_vp[3]==4);
+    clear[0]=0; clear[1]=0; clear[2]=0xF0; clear[3]=0xFF0000FF;
+    call(0x100EA0,clear,6); assert(g_eax==0);
+    memcpy(guest_ptr(0x8400),vertices,sizeof(vertices));
+    for (unsigned i=0;i<4;++i) { vertices[i].color=0xFFFF0000; vertices[i].z=0; }
+    vertices[0].x=vertices[3].x=0; vertices[1].x=vertices[2].x=8;
+    vertices[0].y=vertices[1].y=0; vertices[2].y=vertices[3].y=2;
+    memcpy(guest_ptr(0x6000),vertices,sizeof(vertices)); call(0x1019C0,draw,4); assert(g_eax==0);
+    glReadPixels(4,3,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==255 && pixel[2]==0);
+    glReadPixels(4,0,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==0 && pixel[2]==255);
+    call(0xFEF20,target,2); assert(g_eax==0 && s_target_width==320 && s_target_height==240);
+    uint32_t rt_data=read32(rt_surface+4);
+    assert(read32(rt_data+morton_index(4,0,8,4)*4)==0xFFFF0000);
+    assert(read32(rt_data+morton_index(4,3,8,4)*4)==0xFF0000FF);
+    call(0xFEF20,rt_target,2); assert(g_eax==0);
+    glReadPixels(4,3,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==255 && pixel[2]==0);
+    glReadPixels(4,0,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel); assert(pixel[0]==0 && pixel[2]==255);
+    call(0xFEF20,target,2); assert(g_eax==0);
+    uint32_t rt_release[]={rt_surface}; call(0x103AD0,rt_release,1); assert(!resource(rt_surface));
+    rt_release[0]=rt_texture; call(0x103AD0,rt_release,1); assert(!resource(rt_texture));
+    memcpy(vertices,guest_ptr(0x8400),sizeof(vertices)); memcpy(guest_ptr(0x6000),vertices,sizeof(vertices));
     /* Restore the capture pattern after the independent depth tests. */
     clear[0]=0; clear[1]=0; clear[2]=0xF0; clear[3]=0xFF102030; call(0x100EA0,clear,6);
     clear[0]=1; clear[1]=0x8000; clear[3]=0xFFB04020; call(0x100EA0,clear,6);

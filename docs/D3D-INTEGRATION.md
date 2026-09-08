@@ -156,7 +156,7 @@ mkdir -p build/input
 clang -std=c11 -Wall -Wextra -Werror -Wno-deprecated-declarations \
   -DWRATH_GRAPHICS_SMOKE_TEST -Ithird_party/xboxrecomp/src \
   $(/opt/homebrew/bin/sdl2-config --cflags) -I/opt/homebrew/include \
-  src/graphics.c build/runtime/src/d3d/libxbox_d3d8.a \
+  src/graphics.c build/native/third_party/xboxrecomp/src/d3d/libxbox_d3d8.a \
   -L/opt/homebrew/lib $(/opt/homebrew/bin/sdl2-config --libs) -lepoxy \
   -o build/input/test_graphics
 build/input/test_graphics
@@ -693,3 +693,49 @@ grayscale inputs exactly, including 255 → FFFFFFFF. This rules out that initia
 conversion sequence in isolation. The remaining diagnosis requires comparing
 the post-D3DX guest texture and active draw state against the actual framebuffer;
 no corrective renderer change has been justified yet.
+
+The follow-up LLDB dump resolves the mismatch: D3DX receives an actual opaque
+white ARGB source (`0x1170FC` first source bytes are FFFFFFFF), but its output
+texture at handle `0x0294D030`, data `0x0294D080`, is DXT5 (`0xF`), 512² with ten
+levels. In the base level, 14364 of 16384 blocks begin
+`01010000000000000000000000000000`: alpha endpoints 1 and black RGB endpoints.
+The native draw has blending disabled, source ONE/destination ZERO, FVF 0x144,
+stride 28. The renderer is displaying this already corrupted compressed data.
+
+A hardware watchpoint on the actual write-combined alias (`data|0xF0000000`)
+stops in DXT5 alpha encoding `0x124437`, called from `0x11E93F`. The latter calls
+`0x11CBE3` to select x87 rounding toward zero (`FLDCW` with RC bits 0xC00), then
+converts normalized channels with `FISTP(channel*255 + .5)`. The lifter previously
+emitted host `llrint` without consulting the guest control word. Thus white
+255.5 became 256; the game's unmasked byte packing yielded 0x01010100 and DXT
+compressed it as black with alpha 1.
+
+The generic FIST/FISTP lifting now explicitly honors all four guest RC modes,
+including nearest-even independent of host floating-point rounding. Nonfinite
+or out-of-range conversion stores the masked x87 integer-indefinite value
+without an undefined C cast. It preserves FIST versus FISTP stack behavior.
+The change is saved in the existing cumulative `patches/xboxrecomp-lifter.patch`;
+no game/API replacement and no rendering adjustment are involved. The native
+regression `tools/test_x87_rounding.py` checks all guest/host rounding combinations,
+positive/negative ties, 16/32/64-bit bounds and invalid values, FPU stack effects,
+and all 256 original D3DX grayscale byte conversions, under undefined-behavior
+and float-cast-overflow sanitizers. Full regeneration/build/frame recapture is
+still required to confirm the original logo after the fix.
+
+## Texture render targets (root, post boot14)
+
+SetRenderTarget now creates real GL framebuffer/color storage for uncompressed
+texture-level surfaces, preserving the guest resource header/parent relationship.
+At a target switch actual GPU pixels resolve to the original guest swizzled/linear
+storage, so subsequent native texture uploads see the draw results. This initial
+implementation favors correctness and bounded128x128 readbacks over an unverified
+GPU-only alias path. Texture-depth attachments remain explicitly unsupported.
+
+Active-target dimensions now govern viewport clamp and clear rectangle origin.
+Window backbuffer ownership is independent from its current target binding.
+The native graphics test draws a red top half over a blue offscreen8x4 surface,
+verifies GPU pixels, switches to the window, verifies Morton-ordered guest pixels,
+rebinds to check preserved orientation, and checks release lifetimes. It passes
+with the current production D3D library; the older build/runtime library was stale
+and is no longer the documented test link path. Full game validation is pending
+the next boot with the independently fixed x87 rounding.
