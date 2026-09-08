@@ -1,6 +1,28 @@
 # Status — 2026-09-08
 
-## Current: story10 corrected Cortex, original skip, then hub morph dependency
+## Current: story11/12 hub passes morph; programmable texture adjustment next
+-16fe0e9 implements a conservative component dependency proof through registers,
+  masks, paired instructions, ARL/relative constants and exactzero multiplication.
+  CPU edges/fullrenderer smoke/actual88shader nativeGPU tests pass, including
+  individual XYZ+W changes to all10secondary inputs and nonzero-weight rejection.
+- Build53/story11 passes prior hub morphology stop and now reaches13VS/2combiner
+  effect draw A5D40(type6,count254,stride36), but demands an unbound texturestage.
+  Stage0 is640x480 live texture; stage1isnull. Filenamehub, Level37/Demo0.
+  Player(0,7.848237,2.31); Arctic portal center(9.25314,7.80484,9.57952).
+- Controller matched exact original PS1ADF40 and13VS1ADE68 registeredatB6F19.
+  PStexturemodes21 declaresstage0/1PROJECT2D; equationsreadonlyt0. Finalconstants1FF
+  enables original107CA0 automatic modeadjustment. mac_runtime implements flag-
+  controlled null-stageNONE/bounddimensions adjustment plus originalNONEalpha1.
+  Native GL retained the unused sampler in its fixture, so linkeduniform filtering
+  alone is insufficient; originalSDKadjustment is the required compatibility rule.
+- story12 repeated sameboundary to improveprobe; itsshaderJSON failed on optimized-
+  away redundant s_pixel_constants shadow. Root removedthatread7e1b56a. Nextprobe
+  stillincludescompleteactivepixeldefinition, actualtextures/boundmetadata/hubstate.
+  No game running. Build53packaged; story11session75365/story12session40721 ended.
+- Next frozen textureadjustment+GPUtests/build54/story13, normalNewGame/Spaceskip,
+  verifyhubpixels/movement and originalportalentry toArcticAntics(Level7/Demo0).
+
+## Earlier: story10 corrected Cortex, original skip, then hub morph dependency
 - Build52 includes017dc9e null-texture combiner fallback andeb21d33 exact-dead
   bound-input handling. Combined native GPU tests pass, including actual69shader
   captured constants and dynamic nonzero regression. Cortex now visibly renders
