@@ -37,3 +37,15 @@ compilable console binary with a working native game.
 - Ahead-of-time game-code translation and graphics/audio/system compatibility are
   authorized. Verify that game CPU instructions execute as compiled ARM64 code.
 - Do not publish assets or contact others without user authorization.
+
+## Native graphics conventions
+- The original game renders its loading screen from worker2BF30. Serialize native
+  graphics/resource access across game threads; do not reinstate a blanket main
+  thread-only guard or call SDL window APIs from workers. graphics.c acquires once
+  per SDK entry through arg()/graphics_thread() and releases in finish().
+- Keep SDL creation/events on the Cocoa main thread. The backend uses native CGL
+  for context handoff and worker presentation, plus a monotonic refresh deadline.
+- The graphics toolkit patch includes both src/d3d/d3d8_gl.c and its CMakeLists.txt
+  (OpenGL framework linkage). Preserve both when regenerating that patch.
+- See docs/STATUS.md for the current unimplemented boundary. Native component
+  tests and a correct splash do not prove title/menu/gameplay completion.

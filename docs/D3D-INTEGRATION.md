@@ -841,3 +841,72 @@ Boot17 linked four real game shader pairs and stopped at pixel constant8. Boot18
 passes that and links a fifth pair, then aborts on newly launched missing AOT
 worker entry2BF30. No new title/menu pixels verified. The most recent verified
 actual framebuffer remains the correct Universal splash.
+
+## Loading-worker context handoff (boot19)
+
+Boot19 reaches the original `2BF30` loading worker, whose `A40E0/A8140`
+rendering path executes while the main thread loads assets. The former blanket
+main-thread check fails at SetRenderTarget and then FD830. This requires shared
+native device synchronization, not another guest function exclusion.
+
+The OpenGL backend now exports `int xbox_D3D8GLAcquire(void)`,
+`void xbox_D3D8GLRelease(void)`, and `void xbox_D3D8GLPumpEvents(void)`.
+Acquire returns true on success and recursively serializes host device state.
+On Apple it locks the cached native CGL context and makes it current on the
+caller; outermost release clears the current context before unlocking. Acquisition
+before device creation is valid; creation registers its CGL lock for the matching
+release. Callers must pair every successful acquisition, including error returns.
+The root bridge owns an idempotent TLS guard per guest SDK invocation: acquire
+before resource lookup or state access, release in finish. Fastcall FD830 has no
+stack args and must enter through its explicit guard. Backend helpers can nest.
+
+Only the main thread creates the SDL window/context, pumps events, or calls SDL
+window presentation. Worker Present calls native `CGLFlushDrawable`; it does not
+dispatch to the main queue. Main event pumping takes the same recursive lock.
+Pumping is capped at once per 16 milliseconds using the monotonic clock, so
+calling the helper at every SDK boundary does not repeatedly drain SDL events.
+SDL's display-link swap wait is disabled and the native CGL swap interval is set
+to one for both paths. The initial bounded test measured six presents in 0.057
+seconds, demonstrating that this driver setting alone did not enforce 60 Hz.
+Present now caps completion against a shared native `CLOCK_MONOTONIC` deadline
+at the presentation refresh (zero means 60 Hz). It sleeps only the remaining
+time after the real swap, retries interrupted sleeps, and resets the schedule
+when more than one interval late. Time already spent in a blocking driver counts
+toward the deadline; there is no additional fixed sleep. Device creation resets
+the schedule for its refresh rate. Existing game Sleep/vblank callbacks still
+represent game timing and should be evaluated against real gameplay.
+
+This design follows Apple's requirement to serialize all calls into a shared
+context, explicitly set the current context on each thread, and protect view
+interactions with context locking. Apple's CGL context lock is recursive.
+[Apple OpenGL concurrency guide](https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/OpenGL-MacProgGuide/opengl_threading/opengl_threading.html).
+Installed SDL2-compat 2.32.70 delegates to SDL3 (3.4.14 is installed); SDL3 documents
+[MakeCurrent](https://wiki.libsdl.org/SDL3/SDL_GL_MakeCurrent) and
+[SwapWindow](https://wiki.libsdl.org/SDL3/SDL_GL_SwapWindow) as main-thread APIs.
+[SDL2 PumpEvents](https://wiki.libsdl.org/SDL2/SDL_PumpEvents) also requires the
+video thread. The [SDL 3.4.14 Cocoa backend](https://github.com/libsdl-org/SDL/blob/release-3.4.14/src/video/cocoa/SDL_cocoaopengl.m)
+can synchronously dispatch drawable updates to the main queue, which would
+deadlock if a worker held the graphics lock while main waited for that lock.
+CGL worker presentation avoids that path. Drawable updates are serviced by the
+main SDL presentation path; resizing/moving windows during loading is not yet
+validated.
+
+`tools/tests/graphics_threads.c` creates a real native GL window, then verifies
+48 distinct pixel readbacks across main and worker threads, six real presents,
+shared texture integrity, nested acquisition, detached context after release,
+and worker rejection of CreateDevice. Main joins the worker without processing
+main dispatch; the test completes. It compiles with warnings treated as errors
+(excluding existing backend missing-vtable-initializer and unused-parameter
+warnings). No game assets are involved and this test is not playable-game proof.
+With the native deadline, six presents completed in 0.100 seconds. The test
+requires at least five 60 Hz intervals and a generous five-second upper bound,
+in addition to all existing context/pixel checks.
+
+```
+clang -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initializers -Wno-deprecated-declarations -Ithird_party/xboxrecomp/src -Ithird_party/xboxrecomp/src/platform $(/opt/homebrew/bin/sdl2-config --cflags) -I/opt/homebrew/include tools/tests/graphics_threads.c third_party/xboxrecomp/src/d3d/d3d8_gl.c $(/opt/homebrew/bin/sdl2-config --libs) -L/opt/homebrew/lib -lepoxy -framework OpenGL -o build/input/test_graphics_threads
+build/input/test_graphics_threads
+```
+
+The cumulative `patches/xboxrecomp-graphics.patch` includes this backend change,
+the Apple OpenGL framework dependency in toolkit D3D CMake, and all previous
+graphics changes. Reverse-apply check passes against the local toolkit checkout.

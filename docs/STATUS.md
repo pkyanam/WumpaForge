@@ -3,57 +3,45 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot19, loading-screen worker needs native GL handoff
+## Latest checkpoint: boot20, loading exceeds guest heap budget
 - Correct original Universal splash verified from actual GPU capture
-  local/reports/game-frame-15-fixed.png. No title/menu/gameplay verified yet.
-- Boot18 passes previous graphics barriers: native128x128 texture render targets,
-  six-face cubemap creation/all-level2D/cube uploads, programmable vertex/pixel
-  shaders, explicit texture-coordinate sets on4 stages and pixel constant index8.
-- Five real game shader pairs link in boot18 (6 vertex instructions,1/2/4/8
-  combiner stages). The next abort is unresolved AOT worker2BF30, proven actual
-  PsCreateSystemThreadEx ctx1 at boot18.log2323. Main concurrently loads files in
-  2C020→87400→2D950. mac_runtime agent auditing seed; root coordinates analyze/lift.
-- Runtime and shader code are current in src/shader_bridge.inc + nv2a_vertex,
-  nv2a_vertex_input, nv2a_pixel. CMake and exclusions integrate them. Root added
-  four exclusions FE9F0,103CB0,102AA0,102D80. graphics patch includes native GL
-  texture-name/state helper exports. The latest tiny shader error-message edit
-  is not built yet; build next with seed changes.
-- Core shader/native draw tests pass; native integration verifies SDK object
-  decoding/actual GPU pixels, constant cache reuse, unchanged guest PS definition,
-  and different samplers on the SAME texture simultaneously. Equal depth endpoints
-  no longer divide by0; native transform-feedback regression passes. All tests
-  use synthetic geometry except optional ignored actual shader fixtures.
-- Vertex parser handles up to136 instructions, multiple upload packets and
-  embedded constants. Actual first shader inputs v0/v3 (position/UV) and physical
-  constants112,113,119,120. SetVSConstant102AA0 maps signedindex+96, ret12.
-- SetPSConstant102D80 uses original four-bit mappings0..15, ret12; originaldef
-  remains immutable, only mapped live state slots update. Active state rebind
-  restores originaldef constants, matching SDK. Pixel18 uniforms are distinct
-  from16 public constant-register slots. See docs/PIXEL-SHADERS.md.
-- Shader cache64 entries; GL sampler objects perstage preserve separatefilter/wrap
-  onsharedtexture. Explicit gaps: mixed fixed/programmed stages, volume textures,
-  advanceddependenttexturemodes, fogparameters, packed/float2h vertices, indices.
+  `local/reports/game-frame-15-fixed.png`, plus its fade in `game-frame-25.png`.
+  **No Crash title/menu, 3D scene, or gameplay pixels verified.**
+- Five real native GPU shader pairs link, with actual game vertex/pixel programs.
+  Native render targets, cube/all-mip textures, shader constants and per-stage
+  samplers pass focused real GPU tests. See shader and D3D integration docs.
+- Loading-screen worker2BF30 is discovered, AOT compiled, and executing.
+  Native CGL context handoff now serializes graphics SDK calls across threads.
+  Cocoa/SDL events remain on main; workers present through native CGL. A native
+  monotonic deadline caps presentation at60Hz. Two-thread test passes48 readbacks
+  and6 paced presents; full graphics integration GPU test also passes.
+- Boot20 passes the old worker graphics guard, then fails heap allocation:
+  requested4279360, used46256276/48365568. Original allocator wrapper9E300 clears
+  the returned pointer without a NULL check (9E386 REP STOSD), corrupting low guest
+  memory. Worker then calls the now-zero import15AA64 from3A7F0. Do NOT alias the
+  zero call target or hide allocation failure.
+- Runtime currently reserves an oversized8MiB main stack above the9.3MiB XBE.
+  Actual XBE StackCommit at header0x130 is64KiB; original CreateThreadECC6A uses
+  this when requested stack size is0, as main and loading worker do. mac_runtime
+  agent is implementing image-derived stack sizing with256KiB minimum and moving
+  compatibility worker stacks into independent heap allocations. Keep retail64MiB
+  RAM and its physical aliases; do not expand to128MiB speculatively.
+- Root will build with at most2 jobs and run bounded boot21 after focused runtime
+  checks. No game/debugger is intentionally left running after boot20.
+- Known later graphics gaps: mixed fixed/programmed shader stages, indexed draws,
+  advanced dependent texture modes, fog parameters, volume textures, packed vertex
+  formats. Implement the next actually reached boundary, not guessed features.
 - Indexed path already audited if reached: CreateIndexBuffer100D00(length,usage,
   format,pool,out)ret20, gameINDEX16fmt2C; SetIndicesFFEA0(buffer,baseVertex)ret8;
   DrawIndexedVertices101BC0(type,indexCount,uint16DataPointer)ret12. Game writes
   indexbuffer.Data directly. Actual fetch index+baseVertex. Not implemented yet.
-- Worker seed2BF30 is now added, analyzed/lifted, built and actually executing in
-  boot19. It draws a loading screen while main loads assets. Current blanket
-  graphics main_thread() guard rejects it (SetRenderTarget then FD830), aborting
-  worker13. Main is in2C020→982C0→9E300. This is the NEW critical path.
-- controller_support agent is researching safe native GL context transfer / SDL
-  main-thread event handling. Proposed serialized SDK-call guard and attach/detach
-  via arg()/main_thread()/finish(), with context/window creation and event pump on
-  Cocoa main only. No implementation yet. Do not merely remove thread check and
-  call SDL/Cocoa indiscriminately fromworkers. Rootownsgraphics.c changes.
-- Actual frame25 capturedandviewed game-frame-25.png: Universal fades out correctly;
-  no3Dscene/title/menu image verified. All games/debuggers exited afterboot19.
-- Sound SDK bridge remains unlinked despite tested backend/decoder/voices; real
-  audio and physical Xbox/DualSense tests still pending. Goal remains active.
-- App bundle is stale: tools/package.py rebuilds local app from current binary and
-  symlinks assets. ISO/assets/build products remain ignored, max2 compile jobs.
-- Recent committed milestones5b00179(firstframe/vblank),7eba3f6(correctrounding/RT).
-  Current shader/cube + worker-seed changes are ready for next Git checkpoint.
+- Shader/cube/worker seed milestone committed292caa1. Native threaded graphics
+  handoff is tested and ready for a separate commit; memory fix is in progress.
+- Audio backend and SDK bridge have isolated tests, but audio bridge is unlinked;
+  no in-game audio verified. SDL controller bridge is integrated and virtual tests
+  pass; physical Xbox/DualSense Bluetooth input remains untested.
+- App bundle is stale. `tools/package.py` packages the current native binary with
+  an asset symlink when ready. Original ISO/assets/generated code stay ignored.
 
 The older numbered checkpoints below are historical; this section is current.
 

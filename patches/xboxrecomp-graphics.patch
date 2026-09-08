@@ -1,8 +1,35 @@
+diff --git a/src/d3d/CMakeLists.txt b/src/d3d/CMakeLists.txt
+index f1b3606..4f014dc 100644
+--- a/src/d3d/CMakeLists.txt
++++ b/src/d3d/CMakeLists.txt
+@@ -25,6 +25,9 @@ else()
+     pkg_check_modules(EPOXY REQUIRED epoxy)
+     target_include_directories(xbox_d3d8 PRIVATE ${EPOXY_INCLUDE_DIRS})
+     target_link_libraries(xbox_d3d8 PUBLIC platform SDL2::SDL2 ${EPOXY_LIBRARIES})
++    if(APPLE)
++        target_link_libraries(xbox_d3d8 PUBLIC "-framework OpenGL")
++    endif()
+ endif()
+ 
+ target_include_directories(xbox_d3d8 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 diff --git a/src/d3d/d3d8_gl.c b/src/d3d/d3d8_gl.c
-index 7888785..33fedde 100644
+index 7888785..1869516 100644
 --- a/src/d3d/d3d8_gl.c
 +++ b/src/d3d/d3d8_gl.c
-@@ -99,6 +99,7 @@ typedef struct {
+@@ -31,6 +31,12 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <math.h>
++#include <pthread.h>
++#include <time.h>
++#include <errno.h>
++#ifdef __APPLE__
++#include <OpenGL/OpenGL.h>
++#endif
+ 
+ #ifndef D3D_OK
+ #define D3D_OK ((HRESULT)0)
+@@ -99,9 +105,121 @@ typedef struct {
      GLint            u_use_tex;
      GLint            u_use_xform;
      GLint            u_tex0;
@@ -10,7 +37,121 @@ index 7888785..33fedde 100644
  } D3DGL;
  
  static D3DGL g;
-@@ -181,6 +182,7 @@ static const char *VS_SRC =
++static uint64_t g_present_period_ns = 1000000000ull / 60;
++static uint64_t g_present_deadline_ns;
++
++static uint64_t monotonic_ns(void)
++{
++    struct timespec now;
++    if (clock_gettime(CLOCK_MONOTONIC, &now)) abort();
++    return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
++}
++/* Some macOS drivers return from a swap before the requested refresh interval.
++ * Cap completion using one monotonic schedule for both rendering threads. Work
++ * already spent in the driver counts toward the interval; never add a fixed
++ * sleep after a blocking swap. The caller holds the device/context mutex. */
++static void pace_present(void)
++{
++    uint64_t now = monotonic_ns();
++    if (!g_present_deadline_ns) {
++        g_present_deadline_ns = now + g_present_period_ns;
++        return;
++    }
++    while (now < g_present_deadline_ns) {
++        uint64_t remaining = g_present_deadline_ns - now;
++        struct timespec wait = {(time_t)(remaining / 1000000000ull),
++                                (long)(remaining % 1000000000ull)};
++        if (nanosleep(&wait, NULL) && errno != EINTR) abort();
++        now = monotonic_ns();
++    }
++    if (now - g_present_deadline_ns >= g_present_period_ns)
++        g_present_deadline_ns = now + g_present_period_ns;
++    else
++        g_present_deadline_ns += g_present_period_ns;
++}
++
++/* The Xbox has one device shared by its loading worker and main thread. Keep
++ * both its host state and its context serialized. On Cocoa the SDL window and
++ * SDL context APIs remain main-thread-only; CGL provides the native worker
++ * context binding and swap without dispatching synchronously to the UI thread. */
++static pthread_once_t g_context_once = PTHREAD_ONCE_INIT;
++static pthread_mutex_t g_context_mutex;
++static _Thread_local unsigned g_context_depth;
++#ifdef __APPLE__
++static CGLContextObj g_cgl;
++static _Thread_local int g_cgl_locked;
++#endif
++static void init_context_mutex(void)
++{
++    pthread_mutexattr_t attr;
++    if (pthread_mutexattr_init(&attr) ||
++        pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) ||
++        pthread_mutex_init(&g_context_mutex, &attr)) abort();
++    pthread_mutexattr_destroy(&attr);
++}
++int xbox_D3D8GLAcquire(void)
++{
++    pthread_once(&g_context_once, init_context_mutex);
++    if (pthread_mutex_lock(&g_context_mutex)) abort();
++    if (g_context_depth++) return 1;
++#ifdef __APPLE__
++    if (g_cgl) {
++        if (CGLLockContext(g_cgl) != kCGLNoError) goto fail;
++        g_cgl_locked = 1;
++        if (CGLSetCurrentContext(g_cgl) != kCGLNoError) goto fail;
++    }
++#else
++    if (g.glctx && SDL_GL_MakeCurrent(g.window, g.glctx) < 0) goto fail;
++#endif
++    return 1;
++fail:
++#ifdef __APPLE__
++    if (g_cgl_locked) { CGLUnlockContext(g_cgl); g_cgl_locked = 0; }
++#endif
++    g_context_depth = 0;
++    pthread_mutex_unlock(&g_context_mutex);
++    fprintf(stderr, "[d3d8_gl] failed to acquire native GL context\n");
++    return 0;
++}
++void xbox_D3D8GLRelease(void)
++{
++    if (!g_context_depth) abort();
++    if (--g_context_depth == 0) {
++#ifdef __APPLE__
++        if (g_cgl_locked) {
++            if (CGLSetCurrentContext(NULL) != kCGLNoError) abort();
++            CGLUnlockContext(g_cgl);
++            g_cgl_locked = 0;
++        }
++#else
++        if (g.glctx && SDL_GL_MakeCurrent(g.window, NULL) < 0) abort();
++#endif
++    }
++    pthread_mutex_unlock(&g_context_mutex);
++}
++void xbox_D3D8GLPumpEvents(void)
++{
++#ifdef __APPLE__
++    if (!pthread_main_np()) return;
++#endif
++    static uint64_t last_pump_ns;
++    uint64_t now = monotonic_ns();
++    if (last_pump_ns && now - last_pump_ns < 16000000ull) return;
++    if (!xbox_D3D8GLAcquire()) abort();
++    if (g.window) {
++        last_pump_ns = now;
++        SDL_Event ev;
++        while (SDL_PollEvent(&ev)) {
++            if (ev.type == SDL_QUIT)
++                fprintf(stderr, "[d3d8_gl] window close requested\n");
++        }
++    }
++    xbox_D3D8GLRelease();
++}
+ 
+ /* ======================================================================== */
+ /* Tiny helpers                                                             */
+@@ -181,6 +299,7 @@ static const char *VS_SRC =
      "uniform mat4 u_mvp;\n"
      "uniform int  u_use_xform;\n"
      "out vec4 v_color;\n"
@@ -18,7 +159,7 @@ index 7888785..33fedde 100644
      "out vec2 v_uv;\n"
      "void main() {\n"
      "  if (u_use_xform != 0) {\n"
-@@ -191,19 +193,34 @@ static const char *VS_SRC =
+@@ -191,19 +310,34 @@ static const char *VS_SRC =
      "    gl_Position = a_pos;\n"
      "  }\n"
      "  v_color = a_color;\n"
@@ -54,7 +195,7 @@ index 7888785..33fedde 100644
      "  frag_color = c;\n"
      "}\n";
  
-@@ -267,6 +284,10 @@ static void init_gl_pipeline(void)
+@@ -267,6 +401,10 @@ static void init_gl_pipeline(void)
      g.u_use_tex   = glGetUniformLocation(g.prog, "u_use_tex");
      g.u_use_xform = glGetUniformLocation(g.prog, "u_use_xform");
      g.u_tex0      = glGetUniformLocation(g.prog, "u_tex0");
@@ -65,7 +206,7 @@ index 7888785..33fedde 100644
  }
  
  /* ======================================================================== */
-@@ -483,6 +504,14 @@ static HRESULT __stdcall tex_UnlockRect(IDirect3DTexture8 *self, UINT lvl)
+@@ -483,6 +621,14 @@ static HRESULT __stdcall tex_UnlockRect(IDirect3DTexture8 *self, UINT lvl)
      return D3D_OK;
  }
  
@@ -80,7 +221,32 @@ index 7888785..33fedde 100644
  static const IDirect3DTexture8Vtbl g_tex_vtbl = {
      tex_QueryInterface, tex_AddRef, tex_Release,
      tex_GetDevice, tex_SetPriority, tex_GetPriority, tex_PreLoad, tex_GetType,
-@@ -714,6 +743,11 @@ static void bind_texture0(void)
+@@ -548,15 +694,15 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *s, const RECT *src, const
+                                      HWND hwnd, void *dirty)
+ {
+     (void)s;(void)src;(void)dst;(void)hwnd;(void)dirty;
+-    SDL_GL_SwapWindow(g.window);
+-    /* Pump events so the window stays responsive. Quit closes the window
+-     * but leaves the process running until the game's loop notices. */
+-    SDL_Event ev;
+-    while (SDL_PollEvent(&ev)) {
+-        if (ev.type == SDL_QUIT) {
+-            fprintf(stderr, "[d3d8_gl] window close requested\n");
+-        }
+-    }
++#ifdef __APPLE__
++    if (!pthread_main_np()) {
++        if (!g_cgl || CGLFlushDrawable(g_cgl) != kCGLNoError)
++            return D3DERR_INVALIDCALL;
++    } else
++#endif
++        SDL_GL_SwapWindow(g.window);
++    pace_present();
++    xbox_D3D8GLPumpEvents();
+     return D3D_OK;
+ }
+ 
+@@ -714,6 +860,11 @@ static void bind_texture0(void)
      }
      glUniform1i(g.u_tex0, 0);
      glUniform1i(g.u_use_tex, use_tex);
@@ -92,7 +258,45 @@ index 7888785..33fedde 100644
  }
  
  static void update_mvp(DWORD fvf)
-@@ -1018,9 +1052,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -974,6 +1125,14 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+ {
+     (void)s; (void)adapter; (void)devtype; (void)hwnd; (void)flags;
+     if (!pp || !pPP) return D3DERR_INVALIDCALL;
++    UINT refresh_hz = pPP->FullScreen_RefreshRateInHz;
++    if (!refresh_hz) refresh_hz = 60;
++    if (refresh_hz > 1000) return D3DERR_INVALIDCALL;
++#ifdef __APPLE__
++    if (!pthread_main_np()) return D3DERR_INVALIDCALL;
++#endif
++    g_present_period_ns = (1000000000ull + refresh_hz - 1) / refresh_hz;
++    g_present_deadline_ns = 0;
+ 
+     /* Initialise SDL video + GL 3.3 core context. */
+     if (!SDL_WasInit(SDL_INIT_VIDEO)) SDL_InitSubSystem(SDL_INIT_VIDEO);
+@@ -1006,7 +1165,22 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+         return D3DERR_INVALIDCALL;
+     }
+     SDL_GL_MakeCurrent(g.window, g.glctx);
++#ifdef __APPLE__
++    g_cgl = CGLGetCurrentContext();
++    if (!g_cgl) return D3DERR_INVALIDCALL;
++    /* SDL3 Cocoa implements its own display-link wait. Use one driver swap
++     * interval for both SDL/main and CGL/worker presentation paths. */
++    SDL_GL_SetSwapInterval(0);
++    GLint interval = 1;
++    if (CGLSetParameter(g_cgl, kCGLCPSwapInterval, &interval) != kCGLNoError)
++        return D3DERR_INVALIDCALL;
++    if (g_context_depth) {
++        if (CGLLockContext(g_cgl) != kCGLNoError) return D3DERR_INVALIDCALL;
++        g_cgl_locked = 1;
++    }
++#else
+     SDL_GL_SetSwapInterval(1);
++#endif
+ 
+     fprintf(stderr, "[d3d8_gl] GL %s / GLSL %s\n",
+             glGetString(GL_VERSION), glGetString(GL_SHADING_LANGUAGE_VERSION));
+@@ -1018,9 +1192,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
      mat4_identity(&g.m_view);
      mat4_identity(&g.m_proj);
      g.rs[D3DRS_ZENABLE]            = 1;

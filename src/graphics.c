@@ -1,6 +1,6 @@
 /* Initial Xbox 4361 -> native OpenGL bridge. See docs/D3D-INTEGRATION.md.
- * These are compiled host replacements for four identified SDK functions.
- * All entry points must execute on the SDL/main thread. */
+ * Compiled host SDK replacements serialize GPU/resource access across game
+ * threads; SDL window creation and event handling stay on the Cocoa main thread. */
 #include "d3d/d3d8_xbox.h"
 #include <SDL.h>
 #include <epoxy/gl.h>
@@ -64,28 +64,49 @@ static void write32(uint32_t address, uint32_t value)
 {
     memcpy(guest_ptr(address), &value, sizeof(value));
 }
-static uint32_t arg(unsigned index) { return read32(g_esp + 4 + index * 4); }
+extern int xbox_D3D8GLAcquire(void);
+extern void xbox_D3D8GLRelease(void);
+extern void xbox_D3D8GLPumpEvents(void);
+static _Thread_local int s_graphics_held;
+/* arg() can be evaluated repeatedly inside one SDK entry. Acquire exactly once;
+ * helpers do not call back into guest SDK entries before finish(). */
+static int graphics_thread(void)
+{
+    if (!s_graphics_held) {
+        if (!xbox_D3D8GLAcquire()) {
+            fprintf(stderr,"[wrath graphics] failed native graphics context acquisition\n");
+            return 0;
+        }
+        s_graphics_held=1;
+        xbox_D3D8GLPumpEvents();
+    }
+    return 1;
+}
+static uint32_t arg(unsigned index)
+{
+    if (!graphics_thread()) abort();
+    return read32(g_esp + 4 + index * 4);
+}
 static void finish(unsigned bytes, uint32_t result)
 {
-    g_eax = result;
-    g_esp += 4 + bytes; /* guest return address plus callee-popped arguments */
+    g_eax=result;
+    g_esp+=4+bytes;
+    if (s_graphics_held) { s_graphics_held=0; xbox_D3D8GLRelease(); }
 }
-static int main_thread(void)
+static int window_thread(void)
 {
 #ifdef __APPLE__
-    if (!pthread_main_np()) {
-        fprintf(stderr, "[wrath graphics] SDL/OpenGL call outside main thread\n");
-        return 0;
-    }
-#endif
+    return pthread_main_np()!=0;
+#else
     return 1;
+#endif
 }
 
 /* HRESULT WINAPI Direct3D_CreateDevice(adapter,type,window,flags,pp,out). */
 void sub_000FD6E0(void)
 {
     uint32_t pp_address = arg(4), output = arg(5), behavior = arg(3);
-    if (!main_thread() || !pp_address || !output || s_device) {
+    if (!graphics_thread() || !window_thread() || !pp_address || !output || s_device) {
         finish(24, (uint32_t)D3DERR_INVALIDCALL);
         return;
     }
@@ -195,7 +216,7 @@ void sub_000FD830(void)
 {
     uint32_t packet = g_ecx, value = g_edx, method = packet & 0xFFFF;
     unsigned guest_state = 0;
-    if (!s_device || !main_thread() || (packet & 0xFFFF0000) != 0x40000)
+    if (!s_device || !graphics_thread() || (packet & 0xFFFF0000) != 0x40000)
         state_error(packet, value);
     switch (method) {
     case 0x354: /* ZFUNC, GL enum on Xbox vs D3DCMP enum in host API. */
@@ -265,7 +286,7 @@ void sub_000FD830(void)
 void sub_000FDAD0(void) /* SetRenderState_CullMode(value), Xbox 0 / GL_CW / GL_CCW. */
 {
     uint32_t value=arg(0);
-    if (!s_device || !main_thread() || (value && value!=GL_CW && value!=GL_CCW)) state_error(0x39C,value);
+    if (!s_device || !graphics_thread() || (value && value!=GL_CW && value!=GL_CCW)) state_error(0x39C,value);
     native_state(D3DRS_CULLMODE,value==0?D3DCULL_NONE:value==GL_CW?D3DCULL_CW:D3DCULL_CCW);
     gl_toggle(GL_CULL_FACE,value); glCullFace(GL_BACK); glFrontFace(value==GL_CW?GL_CCW:GL_CW);
     write32(0x10F018,value); finish(4,0);
@@ -273,7 +294,7 @@ void sub_000FDAD0(void) /* SetRenderState_CullMode(value), Xbox 0 / GL_CW / GL_C
 void sub_000FDB40(void) /* SetRenderState_FrontFace(value). */
 {
     uint32_t value=arg(0);
-    if (!s_device || !main_thread() || (value!=GL_CW && value!=GL_CCW)) state_error(0x3A0,value);
+    if (!s_device || !graphics_thread() || (value!=GL_CW && value!=GL_CCW)) state_error(0x3A0,value);
     /* CullMode identifies the removed winding. The original setter recalculates
      * GL_FRONT/GL_BACK to preserve that winding when FrontFace changes. */
     write32(0x10F014,value); finish(4,0);
@@ -282,7 +303,7 @@ void sub_000FDB40(void) /* SetRenderState_FrontFace(value). */
 void sub_000FDDF0(void) /* SetRenderState_FillMode(GL_POINT/GL_LINE/GL_FILL), ret4. */
 {
     uint32_t value=arg(0);
-    if (!s_device || !main_thread() || (value!=GL_POINT && value!=GL_LINE && value!=GL_FILL)) state_error(0x38C,value);
+    if (!s_device || !graphics_thread() || (value!=GL_POINT && value!=GL_LINE && value!=GL_FILL)) state_error(0x38C,value);
     /* GL core supports a single polygon mode for both faces. */
     if (read32(0x10F000) && read32(0x10EFFC)!=value) state_error(0x390,read32(0x10EFFC));
     native_state(D3DRS_FILLMODE,value-GL_POINT+D3DFILL_POINT);
@@ -294,7 +315,7 @@ void sub_000FDF60(void) /* SetTextureStageState_TexCoordIndex(stage,value), ret8
     uint32_t stage=arg(0), value=arg(1);
     /* Explicit coordinate sets pass through; programmed vertex shaders supply
      * their own oT0..oT3 values. Generated fixed coordinates remain unsupported. */
-    if (!s_device || !main_thread() || stage>=4 || value>=8) state_error(0x1964+stage*4,value);
+    if (!s_device || !graphics_thread() || stage>=4 || value>=8) state_error(0x1964+stage*4,value);
     HRESULT result=s_device->lpVtbl->SetTextureStageState(s_device,stage,D3DTSS_TEXCOORDINDEX,value);
     if (result<0) state_error(0x1964+stage*4,value);
     write32(0x10EC88+stage*128,value);
@@ -308,7 +329,7 @@ void sub_000FDF60(void) /* SetTextureStageState_TexCoordIndex(stage,value), ret8
 void sub_000FE660(void) /* SetRenderState_StencilEnable(value), ret4. */
 {
     uint32_t value=arg(0);
-    if (!s_device || !main_thread()) state_error(0x32C,value);
+    if (!s_device || !graphics_thread()) state_error(0x32C,value);
     /* Original SDK also updates early-Z optimizations; native GL owns those. */
     gl_toggle(GL_STENCIL_TEST,value&&s_depth_available);
     native_state(D3DRS_STENCILENABLE,value!=0);
@@ -317,7 +338,7 @@ void sub_000FE660(void) /* SetRenderState_StencilEnable(value), ret4. */
 void sub_000FE6F0(void) /* SetRenderState_StencilFail(GL stencil op), ret4. */
 {
     uint32_t value=arg(0);
-    if (!s_device || !main_thread() || !stencil_valid(value)) state_error(0x370,value);
+    if (!s_device || !graphics_thread() || !stencil_valid(value)) state_error(0x370,value);
     s_stencil_fail=value;
     glStencilOp(s_stencil_fail,s_stencil_zfail,s_stencil_pass);
     write32(0x10F010,value); finish(4,0);
@@ -326,7 +347,7 @@ void sub_000FE6F0(void) /* SetRenderState_StencilFail(GL stencil op), ret4. */
 void sub_000FE5C0(void) /* SetRenderState_ZEnable(value), 0=off / 1=Z / 2=W. */
 {
     uint32_t value=arg(0);
-    if (!s_device || !main_thread() || value>1) state_error(0x30C,value);
+    if (!s_device || !graphics_thread() || value>1) state_error(0x30C,value);
     native_state(D3DRS_ZENABLE,value&&s_depth_available);
     gl_toggle(GL_DEPTH_TEST,value&&s_depth_available);
     write32(0x10F008,value); finish(4,0);
@@ -337,7 +358,7 @@ void sub_000FF860(void)
 {
     uint32_t address = arg(0);
     D3DVIEWPORT8 vp;
-    if (!s_device || !main_thread() || !address) {
+    if (!s_device || !graphics_thread() || !address) {
         finish(4, (uint32_t)D3DERR_INVALIDCALL);
         return;
     }
@@ -423,7 +444,7 @@ void sub_00100EA0(void)
     uint32_t depth_bits = arg(4), stencil = arg(5);
     float depth;
     memcpy(&depth, &depth_bits, sizeof(depth));
-    if (!s_device || !main_thread() || (count && !rects) || count > 65536 ||
+    if (!s_device || !graphics_thread() || (count && !rects) || count > 65536 ||
         (flags & ~0xF3u) || !isfinite(depth)) {
         finish(24, (uint32_t)D3DERR_INVALIDCALL);
         return;
@@ -503,7 +524,7 @@ static void capture_frame(uint32_t frame)
 void sub_00100C40(void)
 {
     uint32_t flags = arg(0);
-    if (!s_device || !main_thread()) {
+    if (!s_device || !graphics_thread()) {
         finish(4, (uint32_t)D3DERR_INVALIDCALL);
         return;
     }
@@ -672,7 +693,7 @@ static uint32_t dxt_color(const uint8_t *block, unsigned pixel, uint32_t format)
 extern GLuint xbox_D3D8GLTextureName(IDirect3DTexture8 *texture);
 static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint name, unsigned faces)
 {
-    if (!r || !name || !main_thread()) return D3DERR_INVALIDCALL;
+    if (!r || !name || !graphics_thread()) return D3DERR_INVALIDCALL;
     if (!r->dirty) return 0;
     uint32_t *pixels = malloc((size_t)r->width * r->height * 4);
     if (!pixels) return (HRESULT)0x8007000E;
@@ -734,7 +755,7 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
 }
 static HRESULT upload_cube_texture(struct Resource *r)
 {
-    if (!r || r->type != RESOURCE_CUBE_TEXTURE || !main_thread()) return D3DERR_INVALIDCALL;
+    if (!r || r->type != RESOURCE_CUBE_TEXTURE || !graphics_thread()) return D3DERR_INVALIDCALL;
     if (!r->cube_gl) glGenTextures(1, &r->cube_gl);
     return upload_texture_images(r, GL_TEXTURE_CUBE_MAP, r->cube_gl, 6);
 }
@@ -743,7 +764,7 @@ void sub_000FE9F0(void) /* CreateCubeTexture(edge,levels,usage,format,pool,out) 
     uint32_t edge = arg(0), levels = arg(1), format = arg(3), out = arg(5);
     int linear, bpp = format_info(format, &linear);
     struct Resource *r = new_resource();
-    if (!s_device || !main_thread() || !out || !r || bpp < 0 || linear || !edge ||
+    if (!s_device || !graphics_thread() || !out || !r || bpp < 0 || linear || !edge ||
         edge > 4096 || (edge & (edge - 1))) { finish(24, (uint32_t)D3DERR_INVALIDCALL); return; }
     write32(out, 0);
     unsigned max_levels = log2_size(edge) + 1;
@@ -810,7 +831,7 @@ void sub_000FE9C0(void) /* CreateTexture(w,h,levels,usage,format,pool,out), ret2
     uint32_t width = arg(0), height = arg(1), levels = arg(2), format = arg(4), output = arg(6);
     int linear, bpp = format_info(format, &linear);
     struct Resource *r = new_resource();
-    if (!s_device || !main_thread() || !output || !r || bpp < 0 || !width || !height ||
+    if (!s_device || !graphics_thread() || !output || !r || bpp < 0 || !width || !height ||
         width > 4096 || height > 4096 || (!linear && ((width & (width - 1)) || (height & (height - 1))))) {
         fprintf(stderr, "[wrath graphics] unsupported texture %ux%u format 0x%X\n", width, height, format);
         finish(28, (uint32_t)D3DERR_INVALIDCALL); return;
@@ -924,7 +945,7 @@ void sub_00103AD0(void)
 void sub_000FFC90(void)
 {
     uint32_t stage = arg(0), handle = arg(1); struct Resource *r = resource(handle);
-    if (!s_device || !main_thread() || stage >= 4 || (handle && (!r || (r->type != RESOURCE_TEXTURE && r->type != RESOURCE_CUBE_TEXTURE)))) {
+    if (!s_device || !graphics_thread() || stage >= 4 || (handle && (!r || (r->type != RESOURCE_TEXTURE && r->type != RESOURCE_CUBE_TEXTURE)))) {
         finish(8, (uint32_t)D3DERR_INVALIDCALL); return;
     }
     HRESULT result = 0;
@@ -943,7 +964,7 @@ void sub_000FFC90(void)
 void sub_00100D70(void) /* CreateVertexBuffer(length,usage,FVF,pool,out) */
 {
     uint32_t size = arg(0), out = arg(4); struct Resource *r = new_resource();
-    if (!s_device || !main_thread() || !size || size > 64 * 1024 * 1024 || !out || !r) {
+    if (!s_device || !graphics_thread() || !size || size > 64 * 1024 * 1024 || !out || !r) {
         finish(20, (uint32_t)D3DERR_INVALIDCALL); return;
     }
     write32(out, 0); r->handle = xbox_HeapAlloc(12, 16); r->data = xbox_HeapAlloc(size, 128);
@@ -991,7 +1012,7 @@ void sub_00102580(void)
 void sub_001026F0(void) /* SetShaderConstantMode(mode), ret4; supported192-constant bank. */
 {
     uint32_t mode=arg(0);
-    if (!s_device || !main_thread() || mode!=0) state_error(0x1026F0,mode);
+    if (!s_device || !graphics_thread() || mode!=0) state_error(0x1026F0,mode);
     /* The native fixed vertex shader owns its matrices/uniforms; it needs no
      * NV2A constant-bank upload. Preserve the observed guest mode/dirty fields. */
     write32(GUEST_DEVICE+8,read32(GUEST_DEVICE+8)&~0x200u);
@@ -1002,7 +1023,7 @@ void sub_001026F0(void) /* SetShaderConstantMode(mode), ret4; supported192-const
 void sub_00102BB0(void) /* SetPixelShader(handle), ret4; NULL selects fixed texture stages. */
 {
     uint32_t handle=arg(0);
-    if (!s_device || !main_thread()) state_error(0x102BB0,handle);
+    if (!s_device || !graphics_thread()) state_error(0x102BB0,handle);
     if (handle) { shader_set_pixel(handle); finish(4,0); return; }
     s_pixel_handle=0;
     HRESULT result=s_device->lpVtbl->SetPixelShader(s_device,0);
@@ -1018,7 +1039,7 @@ void sub_00102BB0(void) /* SetPixelShader(handle), ret4; NULL selects fixed text
 void sub_00102940(void) /* SetVertexShader: even FVF codes vs odd program handles. */
 {
     uint32_t fvf = arg(0);
-    if (!s_device || !main_thread()) state_error(0x102940,fvf);
+    if (!s_device || !graphics_thread()) state_error(0x102940,fvf);
     if (fvf&1) { shader_set_vertex(fvf); s_fvf=fvf; finish(4,0); return; }
     s_vertex_handle=0;
     if (
@@ -1033,7 +1054,7 @@ void sub_00102940(void) /* SetVertexShader: even FVF codes vs odd program handle
 static HRESULT draw_vertices(uint32_t type, uint32_t count, uint32_t data, uint32_t stride)
 {
     if (!count) return 0;
-    if (!s_device || !main_thread() || !data || !stride || stride > 1024 || count > 1024 * 1024 || (uint64_t)count * stride > 64 * 1024 * 1024 || !s_fvf)
+    if (!s_device || !graphics_thread() || !data || !stride || stride > 1024 || count > 1024 * 1024 || (uint64_t)count * stride > 64 * 1024 * 1024 || !s_fvf)
         return D3DERR_INVALIDCALL;
     D3DPRIMITIVETYPE native; unsigned primitives; int quads = 0;
     switch (type) {
@@ -1129,7 +1150,7 @@ static HRESULT initialize_depth_surface(uint32_t format)
 void sub_000FF830(void) /* GetDepthStencilSurface(out), ret4. */
 {
     uint32_t out=arg(0);
-    if (!s_device || !main_thread() || !out) { finish(4,(uint32_t)D3DERR_INVALIDCALL); return; }
+    if (!s_device || !graphics_thread() || !out) { finish(4,(uint32_t)D3DERR_INVALIDCALL); return; }
     struct Resource *r=resource(read32(GUEST_DEVICE+0x2074));
     write32(out,r?r->handle:0);
     if (!r) { finish(4,0x88760866); return; } /* D3DERR_NOTFOUND, observed FF850. */
@@ -1146,7 +1167,7 @@ void sub_000FEF20(void) /* SetRenderTarget(color,depth), ret8. NULL color keeps 
     struct Resource *parent = r ? resource(r->owner) : NULL;
     int texture = r && !r->framebuffer && parent && parent->type == RESOURCE_TEXTURE;
     int linear, bpp = r ? format_info(r->format, &linear) : -1;
-    if (!s_device || !main_thread() || !r || r->type!=RESOURCE_SURFACE ||
+    if (!s_device || !graphics_thread() || !r || r->type!=RESOURCE_SURFACE ||
         (!window && (!texture || bpp <= 0)) ||
         (depth && (!window || !z || z->type!=RESOURCE_DEPTH_SURFACE || depth!=s_depthbuffer_handle))) {
         fprintf(stderr,"[wrath graphics] unsupported SetRenderTarget color0x%X depth0x%X\n",color,depth);
@@ -1183,7 +1204,7 @@ void sub_000FEF20(void) /* SetRenderTarget(color,depth), ret8. NULL color keeps 
 void sub_000FF450(void) /* GetBackBuffer(index,type,out), ret12 */
 {
     int32_t index = (int32_t)arg(0); uint32_t out = arg(2);
-    if (!s_device || !main_thread() || !out || (index != 0 && index != -1) || arg(1) != 0) {
+    if (!s_device || !graphics_thread() || !out || (index != 0 && index != -1) || arg(1) != 0) {
         finish(12, (uint32_t)D3DERR_INVALIDCALL); return;
     }
     uint32_t *slot = index == 0 ? &s_backbuffer_handle : &s_frontbuffer_handle;
@@ -1367,7 +1388,7 @@ void sub_000FF580(void) /* CopyRects(source,rectangles,count,destination,points)
     struct Resource *source = resource(arg(0)), *destination = resource(arg(3));
     uint32_t rectangles = arg(1), count = arg(2), points = arg(4);
     int linear, bpp = destination ? format_info(destination->format, &linear) : -1;
-    if (!s_device || !main_thread() || !source || !destination || source->type != RESOURCE_SURFACE ||
+    if (!s_device || !graphics_thread() || !source || !destination || source->type != RESOURCE_SURFACE ||
         destination->type != RESOURCE_SURFACE || bpp <= 0 || count > 65536 ||
         (uint64_t)source->width * source->height > 16 * 1024 * 1024) {
         fprintf(stderr, "[wrath graphics] unsupported CopyRects surfaces 0x%X -> 0x%X\n", arg(0), arg(3));
@@ -1645,6 +1666,7 @@ int main(void)
     const uint8_t transparent[8] = {0,0,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
     assert(dxt_color(transparent, 0, 0x0C) == 0);
     assert(uncompressed_color(0x7E0, 5) == 0xFF00FF00);
+    assert(xbox_D3D8GLAcquire()); /* Keep context current for direct GPU assertions. */
     void *memory = calloc(1, 0x400000);
     assert(memory);
     g_xbox_mem_offset = (ptrdiff_t)memory;
@@ -1907,6 +1929,7 @@ int main(void)
     test_cube_resources();
     test_shader_bridge();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
+    xbox_D3D8GLRelease();
     SDL_Quit();
     free(memory);
     return 0;
