@@ -229,3 +229,60 @@ At the stop, native source10.223966s is still active, with0 underruns/overflows.
 No audio failure or unsupported format was reached. Chamber character playback,
 remaining scene timings, transition to sound174, and full completion still need
 an actual run after the graphics state boundary is implemented.
+
+### Initial offset audit: original frame origin and feeder scheduling
+
+The simple header-length/30 comparison above overstates the residual offset.
+Original `79EC4` initializes each instance's position to **1.0**, not0.0.
+`7A9F3..7A9FF` adds rate0.5 per active update, and `7AA17..7AA4A` invokes the
+end callback when position reaches the cut-header length. At the next-scene
+handoff, `7AA92` starts the next instance (again1.0), then `7AA97..7AAA7` adds
+any carried excess. The first active update also has a flag-controlled activation
+pass (`7A9DF..7A9E1 → 7AB1F`) before normal incrementing. These are original
+frame-number conventions, not playback seconds starting at frame0.
+
+Using content position measured from frame1, station end is109/30=3.633333s;
+station+corridor end is(109+199)/30=10.266667s. Their differences from the measured
+source cursors are **118.678ms and122.700ms**. The supposed37ms offset growth
+mostly came from counting an extra frame at the scene boundary; the actual
+interval discrepancy is4.02ms. Including the first activation tick gives expected
+boundary update counts219 and219+398, matching measured vblanks exactly; the
+corresponding source lags are135.345ms and139.367ms. Neither comparison supports
+a persistent audio-rate error.
+
+There is also an explicit original **100ms startup gap** between stream readiness
+and its first data submission:
+
+1. `2C59F` requests sound173 on channel4; `2C5A7` sets the audio hold gate.
+2. Original worker `5DA9D` calls stream setup `5D820`. Setup creates the media and
+   DirectSound stream, marks wrapper+24 feeding at `5D9C9`, sets volume via5D670,
+   then returns at5DA24. It does **not** call the packet feeder5D720.
+3. Worker5DAA2 jumps to5DAFE, completes its six-stream scan, then pushes100 at
+   `5DB1B` and calls the original Sleep wrapperECD37 at5DB1D.
+4. On its next scan, feeding is set, so it takes5DAA7→5DADB and finally calls
+   packet feeder5D720 at5DAF9. First native mixing follows real Process submission.
+5. Meanwhile `2C348` checks channel4 through
+   `AA590 → EC770 → B9370 → 5D4B0`. The original5D4B1..5D4B6 returns true directly
+   from wrapper+24; it does not wait for the first packet to reach the hardware.
+   Movie1 therefore clears hold at2C38A and resumes animation while the feeder
+   is in that original100ms sleep.
+
+The measured stable roughly119–123ms content/source difference is consistent
+with this original100ms delay plus frame/worker/mixer scheduling; exact subframe
+attribution was not captured. Native output adds the observed16–21ms ring queue
+and hardware latency. The application's DirectSound-ready status cannot correct
+this gate: the original feeding-byte fast path bypasses that status entirely.
+Changing a bridge status, skipping Sleep, shifting animation frames or adjusting
+sample rate would change original behavior without evidence of a compatibility
+bug. No such correction was made.
+
+The native44.1kHz→48kHz mixer increment floors a16.16 fraction; its effective
+source rate is44099.8535Hz (3.32ppm low). That is approximately1.22ms over366s,
+far below this startup difference. This is a precision bound, not a measurement
+of final long-story sync or a justification to retime the original game.
+
+Next useful validation is ordinary scene2 dialogue/lip movement and the
+scene3 transition to sound174 after the graphics blocker is resolved. Existing
+probe boundaries can show whether another similar one-time startup gap occurs.
+An actual additional growing mismatch would justify further investigation;
+current evidence supports retaining original timing and the native audio code.
