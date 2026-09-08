@@ -1,6 +1,23 @@
 # Status — 2026-09-08
 
-## Current: story07, 60 FPS station/corridor and next character boundary
+## Current: build50/story08, chamber now renders and plays beyond prior stop
+- a987ae4 implements original shader constant mode0/1 and programmable fog modes
+  using original SDK coefficients. Combined native GPU tests pass; build50 arm64
+  packaged successfully, no additional lift needed.
+- Actual New Game -> DONE -> story succeeds. Uka Uka is visibly animated in the
+  chamber in Computer Use screenshots. Mode1 no longer aborts atscene2 frame1.5.
+  Sustained chamber windows run60FPS; zero repeated texture uploads. This is
+  partial character rendering, not complete asset/render correctness yet.
+- Repeated stream1 attribute6 range failures reject some character draws. Current
+  example type5 count144 indices2D2DD0C stream0data2D2A570 stride56. controller_support
+  owns exact range/binding diagnosis and bounded optional failure probes; do not
+  remove bounds checks or substitute geometry. Source edits ongoing, rootbuilds.
+- story08 PID51552/session47281 launched480s; root intends to allow fullstory unless
+  it fails naturally. Agents must not launch/attach/pause/terminate it. Audio agent
+  monitors timing and mac_runtime monitors performance. Keep package untouched
+  while live. Next capture actual subsequent scenes/stop and repair required data.
+
+## Earlier: story07, 60 FPS station/corridor and next character boundary
 - Build49 integrates the real secondary vertex streams, paged resources and exact
   P8 palette change detection. Actual original New Game -> default DONE works via
   keyboard/Computer Use. All11 story instances load; station and corridor complete.
