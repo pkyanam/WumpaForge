@@ -57,3 +57,6 @@ compilable console binary with a working native game.
   (OpenGL framework linkage). Preserve both when regenerating that patch.
 - See docs/STATUS.md for the current unimplemented boundary. Native component
   tests and a correct splash do not prove title/menu/gameplay completion.
+- Read docs/research/README.md for the architecture audit and next diagnostic.
+  Pair original scene/fade/animation state with draw state and actual pixels before
+  changing timing or graphics conventions to explain a black frame.
