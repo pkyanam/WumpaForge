@@ -16,6 +16,42 @@
     "evidence": "Boot30 unresolved original callback at call 0x34A82. Supplied XBE DWORD[0x199C1C] is 0x31E20; sub_00034820 selects this callback table using signed byte[definition+0x20] at 0x348D0/0x348D4 and stores target to pool+0x4A8 at 0x348DF. Original 0x34A80 PUSH EBP, 0x34A81 PUSH EBX, 0x34A82 CALL [EBX+0x4A8], ADD ESP,8 establishes cdecl(pool,definition). Independent entry follows RET 0x31E1D and two NOPs; reserves 12 local bytes, returns record pointer in EAX and restores frame before RET 0x31FC2. Existing tail thunk 0x32730 also jumps directly to 0x31E20."
   },
   {
+    "start": "0x00031FD0",
+    "evidence": "Original emission callback table slot 6: supplied XBE DWORD[0x199C34]=0x31FD0. Table spans 11 entries at 0x199C1C..0x199C47; independent second callback table begins at 0x199C48, and original editor 0x57590 exposes indices through 10. Original 0x348D0/0x348D4 selects by signed byte[definition+0x20], 0x348DF stores pool+0x4A8, and 0x34A80..0x34A88 establishes cdecl(pool,definition). Independent aligned entry loads the two arguments at 0x31FD4 and 0x32025; balanced frame returns selected record in EAX through RET 0x321AC. See docs/CALLBACK-SEEDS.md for complete table and index-bound evidence."
+  },
+  {
+    "start": "0x000321B0",
+    "evidence": "Original emission callback table slot 7: supplied XBE DWORD[0x199C38]=0x321B0. Table spans 11 entries at 0x199C1C..0x199C47; independent second callback table begins at 0x199C48, and original editor 0x57590 exposes indices through 10. Original 0x348D0/0x348D4 selects by signed byte[definition+0x20], 0x348DF stores pool+0x4A8, and 0x34A80..0x34A88 establishes cdecl(pool,definition). Independent aligned entry loads the two arguments at 0x321B7 and 0x321FF; balanced frame returns selected record in EAX through RET 0x323DE. See docs/CALLBACK-SEEDS.md for complete table and index-bound evidence."
+  },
+  {
+    "start": "0x000323E0",
+    "evidence": "Original emission callback table slot 8: supplied XBE DWORD[0x199C3C]=0x323E0. Table spans 11 entries at 0x199C1C..0x199C47; independent second callback table begins at 0x199C48, and original editor 0x57590 exposes indices through 10. Original 0x348D0/0x348D4 selects by signed byte[definition+0x20], 0x348DF stores pool+0x4A8, and 0x34A80..0x34A88 establishes cdecl(pool,definition). Independent aligned entry loads the two arguments at 0x323E4 and 0x3242F; balanced frame returns selected record in EAX through RET 0x325FB. See docs/CALLBACK-SEEDS.md for complete table and index-bound evidence."
+  },
+  {
+    "start": "0x00032600",
+    "evidence": "Original emission callback table slot 2: supplied XBE DWORD[0x199C24]=0x32600. Table spans 11 entries at 0x199C1C..0x199C47; independent second callback table begins at 0x199C48, and original editor 0x57590 exposes indices through 10. Original 0x348D0/0x348D4 selects by signed byte[definition+0x20], 0x348DF stores pool+0x4A8, and 0x34A80..0x34A88 establishes cdecl(pool,definition). Independent aligned entry loads the two arguments at 0x32601 and 0x3264B; balanced frame returns selected record in EAX through RET 0x3272E. See docs/CALLBACK-SEEDS.md for complete table and index-bound evidence."
+  },
+  {
+    "start": "0x00032740",
+    "evidence": "Original emission callback table slot 5: supplied XBE DWORD[0x199C30]=0x32740. Table spans 11 entries at 0x199C1C..0x199C47; independent second callback table begins at 0x199C48, and original editor 0x57590 exposes indices through 10. Original 0x348D0/0x348D4 selects by signed byte[definition+0x20], 0x348DF stores pool+0x4A8, and 0x34A80..0x34A88 establishes cdecl(pool,definition). Independent aligned entry loads the two arguments at 0x32741 and 0x32785; balanced frame returns selected record in EAX through RET 0x32887. See docs/CALLBACK-SEEDS.md for complete table and index-bound evidence."
+  },
+  {
+    "start": "0x00032890",
+    "evidence": "Original emission callback table slot 3: supplied XBE DWORD[0x199C28]=0x32890. Table spans 11 entries at 0x199C1C..0x199C47; independent second callback table begins at 0x199C48, and original editor 0x57590 exposes indices through 10. Original 0x348D0/0x348D4 selects by signed byte[definition+0x20], 0x348DF stores pool+0x4A8, and 0x34A80..0x34A88 establishes cdecl(pool,definition). Independent aligned entry loads the two arguments at 0x32891 and 0x328DB; balanced frame returns selected record in EAX through RET 0x329D1. See docs/CALLBACK-SEEDS.md for complete table and index-bound evidence."
+  },
+  {
+    "start": "0x000329E0",
+    "evidence": "Original emission callback table slot 4: supplied XBE DWORD[0x199C2C]=0x329E0. Table spans 11 entries at 0x199C1C..0x199C47; independent second callback table begins at 0x199C48, and original editor 0x57590 exposes indices through 10. Original 0x348D0/0x348D4 selects by signed byte[definition+0x20], 0x348DF stores pool+0x4A8, and 0x34A80..0x34A88 establishes cdecl(pool,definition). Independent aligned entry loads the two arguments at 0x329E1 and 0x32A2B; balanced frame returns selected record in EAX through RET 0x32AC9. See docs/CALLBACK-SEEDS.md for complete table and index-bound evidence."
+  },
+  {
+    "start": "0x00033A90",
+    "evidence": "Original emission callback table slot 9: supplied XBE DWORD[0x199C40]=0x33A90. Table spans 11 entries at 0x199C1C..0x199C47; independent second callback table begins at 0x199C48, and original editor 0x57590 exposes indices through 10. Original 0x348D0/0x348D4 selects by signed byte[definition+0x20], 0x348DF stores pool+0x4A8, and 0x34A80..0x34A88 establishes cdecl(pool,definition). Independent aligned entry loads the two arguments at 0x33A94 and 0x33AE6; balanced frame returns selected record in EAX through RET 0x33E11. See docs/CALLBACK-SEEDS.md for complete table and index-bound evidence."
+  },
+  {
+    "start": "0x00033E20",
+    "evidence": "Original emission callback table slot 10: supplied XBE DWORD[0x199C44]=0x33E20. Table spans 11 entries at 0x199C1C..0x199C47; independent second callback table begins at 0x199C48, and original editor 0x57590 exposes indices through 10. Original 0x348D0/0x348D4 selects by signed byte[definition+0x20], 0x348DF stores pool+0x4A8, and 0x34A80..0x34A88 establishes cdecl(pool,definition). Independent aligned entry loads the two arguments at 0x33E24 and 0x33E8E; balanced frame returns selected record in EAX through RET 0x34217. See docs/CALLBACK-SEEDS.md for complete table and index-bound evidence."
+  },
+  {
     "start": "0x0005DA30",
     "evidence": "Audio worker entry pushed by sub_000B99D0 for CreateThread; prior function ends in RET8 at 0x5DA24, followed by alignment NOPs."
   }
