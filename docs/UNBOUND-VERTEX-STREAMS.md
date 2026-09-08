@@ -80,3 +80,11 @@ build/nv2a-vertex-input-test local/reports/boot14-shader-objects.bin > local/rep
 clang -std=c11 -O0 -Wall -Wextra -Werror -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 tools/tests/nv2a_vertex.c src/nv2a_vertex.c src/nv2a_vertex_input.c -L/opt/homebrew/lib -lSDL2 -lepoxy -o build/nv2a-vertex-test
 build/nv2a-vertex-test local/reports/boot14-shader-objects.bin local/reports/boot35-vertex-words.bin local/reports/boot35-vertex-constants.bin > local/reports/nv2a-dead-input-gpu.log 2>&1
 ```
+
+## Later reached bound stream
+
+Story-05 actually attempts stream1 binding with a real buffer and live nonzero
+weight. The old stream0-only rejection was the cause; this is now implemented
+with genuine indexed secondary fetches. See [MULTISTREAM-VERTICES.md](MULTISTREAM-VERTICES.md).
+The exact dead-input proof above remains restricted to truly unbound, irrelevant
+inputs; it is not used to replace the new live deformation stream.

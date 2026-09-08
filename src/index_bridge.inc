@@ -55,7 +55,7 @@ static HRESULT draw_indexed_vertices(uint32_t type,uint32_t count,uint32_t indic
 {
     if (!count) return 0;
     struct Resource *vb=resource(s_stream_handle);
-    uint32_t stride=s_stream_stride,base=read32(GUEST_DEVICE+0x1c);
+    uint32_t stride=s_stream_stride,base=read32(GUEST_DEVICE+0x1c),offset=read32(0x10F284);
     if (!s_device || !vb || vb->type!=RESOURCE_VERTEX_BUFFER || !stride ||
         stride>1024 || count>1024u*1024u || (uint64_t)count*stride>64u*1024u*1024u ||
         !index_range(indices,(uint64_t)count*2) || !index_range(vb->data,vb->bytes))
@@ -74,16 +74,17 @@ static HRESULT draw_indexed_vertices(uint32_t type,uint32_t count,uint32_t indic
      * rejects base/index/stride overflow instead of wrapping into guest RAM. */
     for (uint32_t i=0;i<count;++i) {
         uint32_t index=in[i*2]|((uint32_t)in[i*2+1]<<8);
-        if (((uint64_t)base+index+1)*stride>vb->bytes) return D3DERR_INVALIDCALL;
+        if ((uint64_t)offset+((uint64_t)base+index+1)*stride>vb->bytes) return D3DERR_INVALIDCALL;
     }
     uint8_t *expanded=malloc((size_t)count*stride);
     if (!expanded) return (HRESULT)0x8007000Eu;
-    const uint8_t *vertices=guest_ptr(vb->data);
+    const uint8_t *vertices=(const uint8_t *)guest_ptr(vb->data)+offset;
     for (uint32_t i=0;i<count;++i) {
         uint32_t index=in[i*2]|((uint32_t)in[i*2+1]<<8);
         memcpy(expanded+(size_t)i*stride,vertices+((size_t)base+index)*stride,stride);
     }
-    HRESULT result=draw_vertices_data(type,count,expanded,stride);
+    struct VertexFetch fetch={.first=base,.indices=in};
+    HRESULT result=draw_vertices_data_fetch(type,count,expanded,stride,&fetch);
     free(expanded); return result;
 }
 void sub_00101BC0(void) /* DrawIndexedVertices(type,indexCount,uint16Pointer), ret12. */
