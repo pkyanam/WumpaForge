@@ -21,19 +21,21 @@ int main(void)
     SDL_Thread *thread = SDL_CreateThread(push_tap, "tap producer", NULL);
     assert(thread); SDL_WaitThread(thread, NULL);
     Uint8 keys[SDL_NUM_SCANCODES] = {0};
+    Uint32 now = 100;
     SDL_AtomicLock(&g_desktop_lock);
-    xbox_DesktopLatchConsume(&g_desktop_latch, 42, 42, keys);
+    xbox_DesktopLatchConsume(&g_desktop_latch, 42, 42, keys, now);
     SDL_AtomicUnlock(&g_desktop_lock);
     assert(keys[SDL_SCANCODE_SPACE]);
     SDL_Event events[2];
     assert(SDL_PeepEvents(events, 2, SDL_GETEVENT, SDL_KEYDOWN, SDL_KEYUP) == 2);
     assert(events[0].type == SDL_KEYDOWN && events[1].type == SDL_KEYUP);
+    now += XBOX_DESKTOP_TAP_MS;
     memset(keys, 0, sizeof(keys));
-    xbox_DesktopLatchConsume(&g_desktop_latch, 42, 42, keys);
+    xbox_DesktopLatchConsume(&g_desktop_latch, 42, 42, keys, now);
     assert(!keys[SDL_SCANCODE_SPACE]);
     xbox_InputShutdown();
     push_tap(NULL);
-    xbox_DesktopLatchConsume(&g_desktop_latch, 42, 42, keys);
+    xbox_DesktopLatchConsume(&g_desktop_latch, 42, 42, keys, now);
     assert(!keys[SDL_SCANCODE_SPACE]); /* Shutdown removed production watcher. */
     SDL_Quit();
     puts("PASS: production SDL watch, worker tap delivery, untouched queue, one-shot and shutdown");

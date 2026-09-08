@@ -9,60 +9,83 @@
 static void test_latch(void)
 {
     XboxDesktopLatch l = {0};
+    Uint32 now = 100;
     Uint8 keys[SDL_NUM_SCANCODES] = {0};
     SDL_Event e = {0};
     e.type = SDL_KEYDOWN; e.key.windowID = 42;
     e.key.keysym.scancode = SDL_SCANCODE_SPACE;
     xbox_DesktopLatchEvent(&l, &e);
     e.type = SDL_KEYUP; xbox_DesktopLatchEvent(&l, &e);
-    assert(xbox_DesktopLatchConsume(&l, 42, 42, keys) == 0);
+    assert(xbox_DesktopLatchConsume(&l, 42, 42, keys, now) == 0);
     assert(keys[SDL_SCANCODE_SPACE]); /* Complete tap survives one sample. */
     memset(keys, 0, sizeof(keys));
-    xbox_DesktopLatchConsume(&l, 42, 42, keys);
-    assert(!keys[SDL_SCANCODE_SPACE]); /* Exactly one sample, no stuck release. */
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now);
+    assert(keys[SDL_SCANCODE_SPACE]); /* Original discovery then edge read both see tap. */
+    now += XBOX_DESKTOP_TAP_MS;
+    memset(keys, 0, sizeof(keys));
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now);
+    assert(!keys[SDL_SCANCODE_SPACE]); /* Bounded release even with repeated polls. */
     e.type = SDL_KEYDOWN; e.key.repeat = 1;
     xbox_DesktopLatchEvent(&l, &e);
-    xbox_DesktopLatchConsume(&l, 42, 42, keys);
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now);
     assert(!keys[SDL_SCANCODE_SPACE]);
     e.key.repeat = 0;
     for (int tap = 0; tap < 2; ++tap) {
         e.type = SDL_KEYDOWN; xbox_DesktopLatchEvent(&l, &e);
         e.type = SDL_KEYUP; xbox_DesktopLatchEvent(&l, &e);
     }
-    xbox_DesktopLatchConsume(&l, 42, 42, keys);
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now);
     assert(keys[SDL_SCANCODE_SPACE]); /* Same-poll taps coalesce. */
+    now += XBOX_DESKTOP_TAP_MS;
     memset(keys, 0, sizeof(keys));
-    xbox_DesktopLatchConsume(&l, 42, 42, keys); assert(!keys[SDL_SCANCODE_SPACE]);
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now); assert(!keys[SDL_SCANCODE_SPACE]);
     e.type = SDL_KEYDOWN; xbox_DesktopLatchEvent(&l, &e);
     SDL_Event lost = {0}; lost.type = SDL_WINDOWEVENT;
     lost.window.windowID = 42; lost.window.event = SDL_WINDOWEVENT_FOCUS_LOST;
     xbox_DesktopLatchEvent(&l, &lost);
-    xbox_DesktopLatchConsume(&l, 42, 42, keys);
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now);
     assert(!keys[SDL_SCANCODE_SPACE]); /* Blur/refocus before poll does not replay. */
     xbox_DesktopLatchEvent(&l, &e);
-    xbox_DesktopLatchConsume(&l, 77, 77, keys);
+    xbox_DesktopLatchConsume(&l, 77, 77, keys, now);
     assert(!keys[SDL_SCANCODE_SPACE]); /* Other window never inherits a tap. */
-    xbox_DesktopLatchConsume(&l, 42, 42, keys); assert(!keys[SDL_SCANCODE_SPACE]);
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now); assert(!keys[SDL_SCANCODE_SPACE]);
     xbox_DesktopLatchEvent(&l, &e);
     SDL_Event command = e; command.key.keysym.scancode = SDL_SCANCODE_LGUI;
     xbox_DesktopLatchEvent(&l, &command);
     e.key.keysym.mod = KMOD_GUI; xbox_DesktopLatchEvent(&l, &e);
-    xbox_DesktopLatchConsume(&l, 42, 42, keys); assert(!keys[SDL_SCANCODE_SPACE]);
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now); assert(!keys[SDL_SCANCODE_SPACE]);
     command.type = SDL_KEYUP; command.key.keysym.mod = KMOD_NONE;
     xbox_DesktopLatchEvent(&l, &command);
     SDL_Event mouse = {0}; mouse.type = SDL_MOUSEBUTTONDOWN;
     mouse.button.windowID = 42; mouse.button.button = SDL_BUTTON_LEFT;
     xbox_DesktopLatchEvent(&l, &mouse);
     mouse.type = SDL_MOUSEBUTTONUP; xbox_DesktopLatchEvent(&l, &mouse);
-    assert(xbox_DesktopLatchConsume(&l, 42, 42, keys) == SDL_BUTTON_LMASK);
-    assert(xbox_DesktopLatchConsume(&l, 42, 42, keys) == 0);
+    assert(xbox_DesktopLatchConsume(&l, 42, 42, keys, now) == SDL_BUTTON_LMASK);
+    assert(xbox_DesktopLatchConsume(&l, 42, 42, keys, now) == SDL_BUTTON_LMASK);
+    now += XBOX_DESKTOP_TAP_MS;
+    assert(xbox_DesktopLatchConsume(&l, 42, 42, keys, now) == 0);
     mouse.type = SDL_MOUSEBUTTONDOWN; xbox_DesktopLatchEvent(&l, &mouse);
     lost.window.event = SDL_WINDOWEVENT_LEAVE; xbox_DesktopLatchEvent(&l, &lost);
-    assert(xbox_DesktopLatchConsume(&l, 42, 42, keys) == 0);
+    assert(xbox_DesktopLatchConsume(&l, 42, 42, keys, now) == 0);
     xbox_DesktopLatchEvent(&l, &mouse);
-    assert(xbox_DesktopLatchConsume(&l, 42, 77, keys) == 0);
+    assert(xbox_DesktopLatchConsume(&l, 42, 77, keys, now) == 0);
+    /* Focus loss releases an already visible tap immediately, not after16ms. */
+    memset(&l, 0, sizeof(l)); memset(keys, 0, sizeof(keys));
+    e.type = SDL_KEYDOWN; e.key.keysym.mod = KMOD_NONE;
+    xbox_DesktopLatchEvent(&l, &e);
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now); assert(keys[SDL_SCANCODE_SPACE]);
+    lost.window.event = SDL_WINDOWEVENT_FOCUS_LOST; xbox_DesktopLatchEvent(&l, &lost);
+    memset(keys, 0, sizeof(keys));
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now); assert(!keys[SDL_SCANCODE_SPACE]);
+    now = UINT32_MAX - 7;
+    xbox_DesktopLatchEvent(&l, &e);
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now); assert(keys[SDL_SCANCODE_SPACE]);
+    memset(keys, 0, sizeof(keys)); now = 0;
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now); assert(keys[SDL_SCANCODE_SPACE]);
+    memset(keys, 0, sizeof(keys)); now = 8;
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now); assert(!keys[SDL_SCANCODE_SPACE]);
     keys[SDL_SCANCODE_W] = 1;
-    xbox_DesktopLatchConsume(&l, 42, 42, keys);
+    xbox_DesktopLatchConsume(&l, 42, 42, keys, now);
     assert(keys[SDL_SCANCODE_W]); /* Held snapshot survives consuming empty latch. */
 }
 

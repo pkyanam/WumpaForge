@@ -29,8 +29,8 @@ stick's circular range. Modern face buttons are digital; triggers remain analog.
 Desktop input is neutral whenever the game window loses keyboard focus. Mouse
 also requires that same window's mouse focus; Cmd shortcuts do not contribute
 input. The cursor is never captured or warped. An SDL event watcher preserves a press/release entirely between game polls for
-one focused input sample; the next sample releases unless the key is still held.
-Repeated taps within the same poll interval coalesce. Physical
+16ms starting with its first focused sample, so repeated immediate state reads
+see the same tap. It then releases unless still held. Taps within that interval coalesce. Physical
 gamepad focus/background behavior remains SDL's policy. `WRATH_KEYBOARD=0` disables
 the desktop source at startup, useful for controller-only diagnostics.
 
@@ -87,8 +87,8 @@ presses. That is consistent with snapshot polling loss, but did not independentl
 establish that focus or guest handles were correct. The native input backend now
 records non-repeat key/mouse down events without removing them from SDL's queue.
 The next focused port0 poll merges each pending edge into the normal held snapshot
-exactly once. Key-up does not erase an unobserved press; the following normal
-snapshot supplies release. Focus loss/window close clears pending edges, mouse
+for a bounded16ms exposure interval. Key-up does not erase an unobserved press;
+the normal snapshot supplies release once that interval expires. Focus loss/window close clears pending edges, mouse
 leave clears mouse edges, and Command shortcuts clear/suppress desktop edges.
 Unfocused or other-window events never migrate into the game on a later poll.
 
@@ -112,3 +112,26 @@ build/test_desktop_latch_watch
 Evidence: `local/reports/desktop-input-latch-test.log`,
 `desktop-latch-watch-test.log`, `input-controller-latch-test.log`, and
 `input-bridge-latch-test.log` all pass. Real title interaction awaits integration.
+
+## Repeated original reads (story-02)
+
+The original frame routine`86D30` calls`EB0A0` at`86D48`, which calls`369F0` and
+XInputGetState at`36A21` for discovery/raw state. It then calls`36330` at`86D5C`,
+which reads XInputGetState again at`363AB` and computes the game button edges.
+The first read does not compute controller+CC/+D0. Consuming a desktop tap for
+one API read therefore loses it before the original menu sees it.
+
+The native desktop latch now exposes a tap for16ms from its first focused sample,
+so those immediate repeated reads agree. This is a host input accessibility policy,
+not an assertion that the Xbox USB polling period was16ms. Existing held SDL state
+is still authoritative beyond that interval, and focus loss clears even an active
+exposure immediately. Multiple taps inside the exposure window coalesce. Tests
+cover both immediate reads, bounded release, active focus loss and timer wrap.
+
+`WRATH_TRACE_INPUT=1` enables at most64 desktop focus/event reports and64 guest
+input-read reports, including exact return caller, handle, result, packet and
+A/Start state. It observes without injecting input and makes a further UI failure
+distinguishable from absent focus, absent SDL events, or missing guest delivery.
+Evidence: `desktop-input-doublepoll-test.log`, `desktop-latch-doublepoll-watch-test.log`,
+`input-controller-doublepoll-test.log` and `input-bridge-doublepoll-test.log` under
+`local/reports`. Actual title navigation still requires the parent integration run.

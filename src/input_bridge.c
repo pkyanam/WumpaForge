@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #ifdef __APPLE__
 #include <pthread.h>
@@ -259,6 +260,23 @@ static void input_state(void)
     if (h && h->connected) {
         result = h->auto_poll ? xbox_InputGetState(h->port, &h->state) : INPUT_OK;
         if (result == INPUT_OK) write_state(output, &h->state);
+    }
+    /* Opt-in bounded evidence connects native reports to the exact guest reader. */
+    static int trace = -1;
+    static unsigned reports;
+    static uint32_t last_packet = UINT32_MAX, last_result = UINT32_MAX;
+    if (trace < 0) trace = getenv("WRATH_TRACE_INPUT") != NULL;
+    if (trace && reports < 64 && (reports < 8 || result != last_result ||
+        (h && (h->state.dwPacketNumber != last_packet || h->state.Gamepad.wButtons ||
+               h->state.Gamepad.bAnalogButtons[XBOX_BUTTON_A])))) {
+        fprintf(stderr, "[wrath input] read caller=%08X token=%08X port=%u result=%u packet=%u buttons=%04X A=%u X=%u LX=%d LY=%d\n",
+            read32(g_esp), token, h ? h->port : 255, result,
+            h ? h->state.dwPacketNumber : 0, h ? h->state.Gamepad.wButtons : 0,
+            h ? h->state.Gamepad.bAnalogButtons[XBOX_BUTTON_A] : 0,
+            h ? h->state.Gamepad.bAnalogButtons[XBOX_BUTTON_X] : 0,
+            h ? h->state.Gamepad.sThumbLX : 0, h ? h->state.Gamepad.sThumbLY : 0);
+        ++reports; last_result = result;
+        last_packet = h ? h->state.dwPacketNumber : UINT32_MAX;
     }
     finish(8, result);
 }
