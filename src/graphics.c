@@ -621,12 +621,36 @@ static struct Resource {
     uint32_t p8_palette_handle[4];
     uint32_t face_stride;
     int linear, dirty;
+    uint8_t *encoded_snapshot;
+    int snapshot_valid;
+    uint64_t upload_serial;
     IDirect3DTexture8 *texture;
     IDirect3DVertexBuffer8 *vertex_buffer;
 } s_resources[RESOURCE_LIMIT];
 static uint32_t s_texture_handles[4], s_stream_handle, s_stream_stride, s_fvf;
 static uint32_t s_palette_handles[4];
 static uint64_t s_palette_revision;
+/* Exact encoded-byte shadows avoid decoding unchanged guest storage. Their
+ * total host allocation is capped; exhaustion preserves the uncached path. */
+#define TEXTURE_SNAPSHOT_BUDGET (64u*1024u*1024u)
+static size_t s_texture_snapshot_bytes;
+static int texture_snapshot_matches(const struct Resource *r)
+{
+    return r->snapshot_valid && r->encoded_snapshot &&
+        !memcmp(r->encoded_snapshot,guest_ptr(r->data),r->bytes);
+}
+static const uint8_t *texture_snapshot_capture(struct Resource *r)
+{
+    r->snapshot_valid=0;
+    if (!r->encoded_snapshot && r->bytes &&
+        r->bytes<=TEXTURE_SNAPSHOT_BUDGET-s_texture_snapshot_bytes) {
+        r->encoded_snapshot=malloc(r->bytes);
+        if (r->encoded_snapshot) s_texture_snapshot_bytes+=r->bytes;
+    }
+    if (!r->encoded_snapshot) return guest_ptr(r->data);
+    memcpy(r->encoded_snapshot,guest_ptr(r->data),r->bytes);
+    return r->encoded_snapshot;
+}
 
 static struct Resource *resource(uint32_t handle)
 {
@@ -650,6 +674,7 @@ static void update_common(struct Resource *r)
 static void release_resource(struct Resource *r)
 {
     if (r->references || r->bindings) { update_common(r); return; }
+    if (r->encoded_snapshot) { s_texture_snapshot_bytes-=r->bytes; free(r->encoded_snapshot); }
     if (r->target_fbo) glDeleteFramebuffers(1, &r->target_fbo);
     if (r->target_texture) glDeleteTextures(1, &r->target_texture);
     if (r->cube_gl) glDeleteTextures(1, &r->cube_gl);
@@ -760,6 +785,9 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
 {
     if (!r || !name || !graphics_thread()) return D3DERR_INVALIDCALL;
     if (r->format == 0x0B && (!colors || !color_count)) return D3DERR_INVALIDCALL;
+    /* P8 output also depends on the stage palette: its caller validates that
+     * key. Other formats require byte equality even if no Lock marked dirty. */
+    if (r->format != 0x0B && texture_snapshot_matches(r)) { r->dirty=0; return 0; }
     if (r->format == 0x0B) {
         for (unsigned level = 0; level < r->levels; ++level) {
             const uint8_t *indices = guest_ptr(r->data + r->offsets[level]);
@@ -767,10 +795,10 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
                 if (indices[i] >= color_count) return D3DERR_INVALIDCALL;
         }
     }
-    if (!r->dirty) return 0;
     uint64_t profile_start=wrath_profile_begin(),profile_bytes=0;
     uint32_t *pixels = malloc((size_t)r->width * r->height * 4);
     if (!pixels) return (HRESULT)0x8007000E;
+    const uint8_t *encoded=texture_snapshot_capture(r);
     GLint old_texture, old_unpack, old_alignment, old_row, old_rows, old_columns, old_swap;
     glGetIntegerv(target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_BINDING_CUBE_MAP : GL_TEXTURE_BINDING_2D, &old_texture);
     glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &old_unpack);
@@ -789,7 +817,7 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
         uint32_t width = r->width >> level, height = r->height >> level;
         if (!width) width = 1; if (!height) height = 1;
         profile_bytes+=(uint64_t)width*height*4;
-        const uint8_t *source = guest_ptr(r->data + face * r->face_stride + r->offsets[level]);
+        const uint8_t *source = encoded + face * r->face_stride + r->offsets[level];
         for (unsigned y = 0; y < height; ++y) for (unsigned x = 0; x < width; ++x) {
             uint32_t color;
             if (!bpp) {
@@ -827,6 +855,7 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
         return D3DERR_INVALIDCALL;
     }
     wrath_profile_upload(profile_start,profile_bytes);
+    r->snapshot_valid=r->encoded_snapshot!=NULL; ++r->upload_serial;
     r->dirty = 0; return 0;
 }
 static HRESULT upload_cube_texture(struct Resource *r)
@@ -923,13 +952,21 @@ static HRESULT upload_texture_stage(struct Resource *r, unsigned stage)
         fprintf(stderr, "[wrath graphics] P8 texture 0x%X has no palette at stage %u\n", r->handle, stage);
         return D3DERR_INVALIDCALL;
     }
-    if (r->dirty) { ++r->p8_revision; r->dirty = 0; }
+    /* Retained CPU pointers may change indices or palette colors without Lock.
+     * Compare both exact byte sequences; a revision alone cannot prove reuse. */
+    if (!texture_snapshot_matches(r)) ++r->p8_revision;
+    if (!texture_snapshot_matches(palette)) {
+        texture_snapshot_capture(palette);
+        palette->snapshot_valid=palette->encoded_snapshot!=NULL;
+        palette->palette_revision=++s_palette_revision;
+    }
+    r->dirty=0;
     if (r->p8_uploaded[stage] == r->p8_revision &&
         r->p8_palette_handle[stage] == palette->handle &&
         r->p8_palette_revision[stage] == palette->palette_revision) return 0;
     r->dirty = 1;
     HRESULT result = upload_texture_images(r, GL_TEXTURE_2D, texture_gl_name(r, stage), 1,
-                                          guest_ptr(palette->data), palette->bytes / 4);
+                                          palette->snapshot_valid?(const uint32_t *)palette->encoded_snapshot:guest_ptr(palette->data), palette->bytes / 4);
     if (result >= 0) {
         r->p8_uploaded[stage] = r->p8_revision;
         r->p8_palette_handle[stage] = palette->handle;
@@ -1945,6 +1982,7 @@ static void test_shader_bridge(void)
     assert(!resource(texture));assert(glGetError()==GL_NO_ERROR);
 }
 #include "../tools/test_mixed_shader_bridge.inc"
+#include "../tools/test_texture_snapshot.inc"
 
 int main(void)
 {
@@ -2268,6 +2306,7 @@ int main(void)
     assert(g_eax == 1);
     assert(glGetError() == GL_NO_ERROR);
     assert(wrath_graphics_lookup(0xDEADBEEF) == NULL);
+    test_texture_snapshot();
     test_cube_resources();
     test_palette_resources();
     test_index_bridge();
