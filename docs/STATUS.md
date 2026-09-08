@@ -6,8 +6,11 @@
   keyboard/Computer Use. All11 story instances load; station and corridor complete.
 - Palette rebind/lock no longer invalidates identical texture bytes. Station and
   corridor run60FPS with zero repeat texture uploads; corridor audio advances6.6293s
-  against6.633s animation/vblank time. No audio underruns/overflows. Small initial
-  audio offset (~0.15–0.19s plus output queue) remains under audit, not claimed fixed.
+  against6.633s animation/vblank time. No audio underruns/overflows. Audit bdd21c0 corrects
+  the original per-scene frame1 origin: stable119–123ms source offset is consistent
+  with the original worker's100ms sleep after marking the stream ready, plus
+  scheduling. No timing/rate changes justified; actual character lip sync remains
+  unverified. See docs/research/STORY-PLAYBACK-AUDIT.md.
 - Story07 crosses the previous stream1 deformation failure and stops at original
   SetShaderConstantMode1026F0(1), caller398CA, movie1 scene2 position1.5. Original
   mode1 enables the existing192 physical constants without clearing/remapping them.
