@@ -14,9 +14,9 @@ static int index_range(uint32_t address, uint64_t bytes)
 }
 void sub_00100D00(void) /* CreateIndexBuffer(length,usage,format,pool,out), ret20. */
 {
-    uint32_t bytes=arg(0),format=arg(2),out=arg(4);
+    uint32_t bytes=arg(0),out=arg(4);
     if (!s_device || !bytes || (bytes&1) || bytes>0x4000000u-12 ||
-        format!=0x2c || !index_range(out,4)) {
+        !index_range(out,4)) {
         finish(20,(uint32_t)D3DERR_INVALIDCALL); return;
     }
     write32(out,0);
@@ -27,8 +27,9 @@ void sub_00100D00(void) /* CreateIndexBuffer(length,usage,format,pool,out), ret2
     memset(r,0,sizeof(*r));
     r->handle=handle; r->data=handle+12; r->bytes=bytes;
     r->type=RESOURCE_INDEX_BUFFER; r->references=1; r->format=0x2c;
-    /* Usage/pool are ignored by this retail SDK and have no GPU allocation
-     * consequence for a buffer consumed directly from guest CPU memory. */
+    /* Retail100D00 reads only length and out. Usage/format/pool are ignored;
+     * D3DX111CC7 passes PC INDEX16=0x65, whereas game3A140 passes Xbox0x2c.
+     * Both create the same header and16-bit index storage. */
     update_common(r); write32(handle+4,r->data); write32(handle+8,0);
     write32(out,handle); finish(20,0);
 }

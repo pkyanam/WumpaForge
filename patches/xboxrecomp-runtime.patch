@@ -23,7 +23,7 @@ index ade9b08..42926eb 100644
  /* KeTickCount - exported as a data pointer, not a function */
  extern volatile ULONG xbox_KeTickCount;
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 2d996b1..13cb6c4 100644
+index 2d996b1..2169100 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -26,6 +26,7 @@
@@ -242,7 +242,41 @@ index 2d996b1..13cb6c4 100644
  
          while (n < sizeof(host) - 1 && w[n]) {
              host[n] = (char)w[n];
-@@ -3163,6 +3211,40 @@ static void bridge_NtDeviceIoControlFile(void)
+@@ -2638,13 +2686,26 @@ static void bridge_NtCreateFile(void)
+     {
+         extern uint32_t xbox_LastFileError(void);
+         uint32_t _e = g_eax ? xbox_LastFileError() : 0u;
+-        if (g_eax)
+-            fprintf(stderr, "  [FILE] -> 0x%08X FAILED (win32 err=%u%s)\n",
+-                    g_eax, _e,
+-                    _e == 32u ? " ERROR_SHARING_VIOLATION"
+-                  : _e ==  2u ? " ERROR_FILE_NOT_FOUND"
+-                  : _e ==  3u ? " ERROR_PATH_NOT_FOUND" : "");
+-        else
++        if (g_eax) {
++            static volatile LONG failure_count;
++            LONG failure = InterlockedIncrement(&failure_count);
++            if (failure <= 64) {
++                /* Dispatch saved the guest return before popping the kernel
++                 * frame. g_esp now points to arg0, not the return address. */
++#ifdef _WIN32
++                const char *host_format = "  [FILE] -> 0x%08X FAILED (host err=%u%s) guest_return=%08X guest_esp=%08X resolved_host=%.*ls\n";
++#else
++                const char *host_format = "  [FILE] -> 0x%08X FAILED (host err=%u%s) guest_return=%08X guest_esp=%08X resolved_host=%.*s\n";
++#endif
++                fprintf(stderr, host_format, g_eax, _e,
++                        _e == 32u ? " ERROR_SHARING_VIOLATION"
++                      : _e ==  2u ? " ERROR_FILE_NOT_FOUND"
++                      : _e ==  3u ? " ERROR_PATH_NOT_FOUND" : "",
++                        g_xbox_kernel_caller, g_esp, MAX_PATH, xbox_LastHostPath());
++            } else if (failure == 65) {
++                fprintf(stderr, "  [FILE] further failed-open diagnostics suppressed after 64 failures\n");
++            }
++        } else
+             fprintf(stderr, "  [FILE] -> 0x%08X\n", g_eax);
+     }
+     fflush(stderr);
+@@ -3163,6 +3224,40 @@ static void bridge_NtDeviceIoControlFile(void)
      uint32_t out_va  = STACK_ARG(8);
      uint32_t out_len = STACK_ARG(9);
  
@@ -283,7 +317,7 @@ index 2d996b1..13cb6c4 100644
      if (ioctl == IOCTL_DISK_GET_DRIVE_GEOMETRY) {
          /* DISK_GEOMETRY: Cylinders (LARGE_INTEGER), MediaType,
           * TracksPerCylinder, SectorsPerTrack, BytesPerSector -- 24 bytes. */
-@@ -3276,16 +3358,82 @@ static void bridge_IoCreateSymbolicLink(void)
+@@ -3276,16 +3371,82 @@ static void bridge_IoCreateSymbolicLink(void)
                                                  target_va ? &target : NULL);
  }
  
@@ -374,7 +408,7 @@ index 2d996b1..13cb6c4 100644
  }
  
  /* ── RtlRaiseException (ordinal 302) ─────────────────────
-@@ -3606,7 +3754,8 @@ static void bridge_NtResumeThread(void)
+@@ -3606,7 +3767,8 @@ static void bridge_NtResumeThread(void)
   * dereference whatever the caller happened to leave there. */
  static void bridge_ObfDereferenceObject(void)
  {
@@ -384,7 +418,7 @@ index 2d996b1..13cb6c4 100644
      g_eax = 0;
  }
  
-@@ -3624,7 +3773,8 @@ static void bridge_ObfDereferenceObject(void)
+@@ -3624,7 +3786,8 @@ static void bridge_ObfDereferenceObject(void)
   * dereference whatever the caller happened to leave there. */
  static void bridge_ObfReferenceObject(void)
  {
@@ -394,7 +428,7 @@ index 2d996b1..13cb6c4 100644
      g_eax = 0;
  }
  
-@@ -4429,12 +4579,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
+@@ -4429,12 +4592,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
   * The source resolves through the table, DuplicateHandle produces a real
   * native handle, and the target lands via bridge_write_handle as a fresh
   * token -- same shape as NtCreateEvent. DUPLICATE_CLOSE_SOURCE also closes
@@ -411,7 +445,7 @@ index 2d996b1..13cb6c4 100644
      HANDLE dup = NULL;
      DWORD opts = 0;
  
-@@ -4450,7 +4601,20 @@ static void bridge_NtDuplicateObject(void)
+@@ -4450,7 +4614,20 @@ static void bridge_NtDuplicateObject(void)
          g_eax = 0xC0000001u;   /* STATUS_UNSUCCESSFUL */
          return;
      }

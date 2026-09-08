@@ -47,7 +47,46 @@ def dump(debugger, destination):
             value("s_vertex_constants").GetLoadAddress() - base, 192 * 4),
         "texture_states": [words(0x10EC18 + stage * 128, 32)
                            for stage in range(4)],
+        "game_state": {"level": words(0x19C068, 1)[0],
+                       "demo": words(0x23B750, 1)[0]},
     }
+    # Capture the real D3DX mesh registry at a null indirect call. This does
+    # not depend on LLDB being able to resolve ARM64 thread-local globals.
+    # The original pool has 1000 five-DWORD entries at21F8B8; word4 is mesh*.
+    # At3B460 the expected object vtables are169EB0/169F20, method+38=111140.
+    if any("sub_0003B2E0" in (f.GetFunctionName() or "")
+           for f in process.GetSelectedThread()):
+        mesh = {"registers": {}, "pool": [],
+                "free_head": words(0x2246E0, 1)[0],
+                "used_count": words(0x2246E4, 1)[0],
+                "used_head": words(0x2246E8, 1)[0],
+                "expected_vtables": {hex(a): words(a, 28)
+                                     for a in (0x169EB0, 0x169F20)}}
+        for name in ("g_eax", "g_ebx", "g_ecx", "g_edx", "g_esi", "g_edi",
+                     "g_esp", "g_ebp", "g_seh_ebp", "g_xbox_kernel_caller"):
+            item = target.FindFirstGlobalVariable(name)
+            mesh["registers"][name] = (item.GetValueAsUnsigned()
+                if item.IsValid() and item.GetError().Success() and item.GetValue() is not None else None)
+        esp = mesh["registers"].get("g_esp")
+        if esp and 0x10000 <= esp < 0x4000000 - 128:
+            mesh["guest_stack"] = words(esp, 32)
+        registry = words(0x21F8B8, 1000 * 5)
+        for i in range(1000):
+            entry = registry[i * 5:(i + 1) * 5]
+            address = entry[4]
+            if not address:
+                continue
+            record = {"index": i, "handle": i + 1, "entry": entry}
+            if 0x10000 <= address < 0x4000000 - 104:
+                record["object"] = words(address, 26)
+                vtable = record["object"][0]
+                if 0x10000 <= vtable < 0x4000000 - 112:
+                    record["vtable"] = words(vtable, 28)
+            mesh["pool"].append(record)
+        out["mesh"] = mesh
+    filename = process.ReadMemory(base + 0x561740, 256, error)
+    if error.Success():
+        out["game_state"]["level_filename"] = filename.split(b"\0", 1)[0].decode("utf-8", "replace")
     # At shader_error, walk back to the real native draw, without evaluating game
     # functions. Optimized-away parameters are explicitly unavailable.
     for frame in process.GetSelectedThread():

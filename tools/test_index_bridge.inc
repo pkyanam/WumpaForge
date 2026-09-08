@@ -17,7 +17,9 @@ static void test_index_bridge(void)
     uint32_t createvb[]={sizeof(vertices),0,shader[0],0,0x16040};call(0x100D70,createvb,5);assert(g_eax==0);
     uint32_t vb=read32(0x16040);memcpy(guest_ptr(read32(vb+4)),vertices,sizeof(vertices));
     uint32_t stream[]={0,vb,sizeof(vertices[0])};call(0x102580,stream,3);assert(g_eax==0);
-    uint32_t create[]={14,0,0x2c,0,0x16044};call(0x100D00,create,5);assert(g_eax==0);
+    /* Exact D3DX111CC7 format0x65 used to fail, returning a null mesh that
+     * the game then dereferenced. Retail100D00 ignores all middle args. */
+    uint32_t create[]={14,0xdeadbeef,0x65,0xcafebabe,0x16044};call(0x100D00,create,5);assert(g_eax==0);
     uint32_t ib=read32(0x16044),data=read32(ib+4);
     assert(read32(ib)==0x01010001 && data==ib+12 && read32(ib+8)==0);
     uint16_t indices[]={0xffff,0,1,2,0,2,3};memcpy(guest_ptr(data),indices,sizeof(indices));
@@ -43,9 +45,14 @@ static void test_index_bridge(void)
     draw[2]=0x16060;call(0x101BC0,draw,3);assert(g_eax==0);
     glReadPixels(60,180,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
     assert(pixel[0]==0x20 && pixel[1]==0xc0 && pixel[2]==0x60);
-    create[2]=0x2d;call(0x100D00,create,5);assert(g_eax==(uint32_t)D3DERR_INVALIDCALL);
+    for(unsigned i=0;i<3;++i) {
+        const uint32_t ignored_formats[]={0x2c,0x2d,0xffffffff};
+        create[2]=ignored_formats[i];call(0x100D00,create,5);assert(g_eax==0);
+        uint32_t extra=read32(create[4]);assert(read32(extra)==0x01010001 && read32(extra+4)==extra+12);
+        uint32_t drop[]={extra};call(0x103AD0,drop,1);assert(!resource(extra));
+    }
     release[0]=vb;call(0x103AD0,release,1);assert(resource(vb));
     stream[1]=0;call(0x102580,stream,3);assert(!resource(vb));
     assert(glGetError()==GL_NO_ERROR);
-    puts("PASS: indexed GPU readback, base vertex, literal offset/raw indices, INDEX16 header, bounds, binding lifetime");
+    puts("PASS: indexed GPU readback, base vertex, literal offset/raw indices, INDEX16 header, original ignored format/usage/pool, bounds, binding lifetime");
 }
