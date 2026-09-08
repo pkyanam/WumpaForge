@@ -1175,6 +1175,8 @@ static void apply_fixed_transforms(void)
             state_error(0xFEA20,guest_states[i]);
     }
 }
+#include "graphics_probe.inc"
+
 static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *vertices, uint32_t stride)
 {
     if (!count) return 0;
@@ -1209,7 +1211,9 @@ static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *ver
     }
     if (s_vertex_handle || s_pixel_handle) {
         GLenum primitive=type==1?GL_POINTS:type==2?GL_LINES:type==3?GL_LINE_STRIP:type==6?GL_TRIANGLE_STRIP:type==7?GL_TRIANGLE_FAN:GL_TRIANGLES;
+        unsigned probe=probe_begin();
         HRESULT result=shader_draw(primitive,count,vertices,stride);
+        probe_end(probe,result);
         free(converted); return result;
     }
     for (unsigned stage=1; stage<4; ++stage) {
@@ -1239,7 +1243,9 @@ static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *ver
         }
         vertices = converted;
     }
+    unsigned probe=probe_begin();
     HRESULT result = s_device->lpVtbl->DrawPrimitiveUP(s_device, native, primitives, vertices, stride);
+    probe_end(probe,result);
     free(converted); return result;
 }
 static HRESULT draw_vertices(uint32_t type, uint32_t count, uint32_t data, uint32_t stride)
