@@ -175,3 +175,33 @@ Native in-game verification of this latest handle fix is left to the parent.
 clang -std=c11 -O0 -Ithird_party/xboxrecomp/src tools/tests/thread_handles.c third_party/xboxrecomp/src/platform/win32_compat.c -o build/thread-handles-test
 build/thread-handles-test
 ```
+
+## Worker-thread isolation audit
+
+The non-first `PsCreateSystemThreadEx` path already launched real POSIX threads
+and used thread-local guest registers. Inspection found concrete isolation gaps:
+the copied worker TIB retained the main TIB's self-pointer and stack limit;
+worker TIBs leaked; allocation bookkeeping could race when the main thread and
+worker allocated simultaneously; resource exhaustion ran workers inline.
+
+Workers now receive a complete, distinct TIB/TLS context before launch, with a
+correct TIB self-pointer and the actual 512 KB worker-stack lower bound. Both
+ordinary return and `PsTerminateSystemThread` free worker TIB and stack storage.
+Launch/allocation failure reports insufficient resources instead of executing an
+infinite worker on its caller. Heap allocation, free and size lookup use the
+platform reader/writer lock; worker-stack accounting uses interlocked operations.
+
+`tools/tests/worker_memory.c` includes the actual production memory-layout code
+and exercises its allocator/TIB routines without executing game code. Four real
+pthreads keep guest registers, TLS values, TIB identity, stacks and 1,024 allocated
+blocks distinct, then reclaim their stacks. The test passed in 0.30 seconds with
+about 3.75 MB maximum RSS; evidence is `local/reports/worker-memory-test.log`.
+The prior runtime-layout, memory-alias/non-clobber and handle regressions also
+passed after these changes. No complete game launch was performed for this audit.
+The parent separately seeded missing audio worker routine 0x0005DA30 for AOT
+function discovery.
+
+```sh
+clang -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,-dead_strip -Ithird_party/xboxrecomp/src tools/tests/worker_memory.c third_party/xboxrecomp/src/platform/win32_compat.c -o build/worker-memory-test
+build/worker-memory-test
+```

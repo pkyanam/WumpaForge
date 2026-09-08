@@ -1,0 +1,6 @@
+[
+  {
+    "start": "0x0005DA30",
+    "evidence": "Audio worker entry pushed by sub_000B99D0 for CreateThread; prior function ends in RET8 at 0x5DA24, followed by alignment NOPs."
+  }
+]

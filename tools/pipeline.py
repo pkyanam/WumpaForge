@@ -74,6 +74,7 @@ def analyze():
     disasm = REPORTS / "disasm"
     run("tools.disasm", [xbe, "--analysis-json", REPORTS / "default_analysis.json",
                         "--text-only", "--extra-sections", "D3D,D3DX,XGRPH,DSOUND,XPP,DOLBY",
+                        "--seed-functions", ROOT / "config/seed-functions.json",
                         "-o", disasm], "disasm.log")
     run("tools.func_id", [xbe, "--functions", disasm / "functions.json",
                          "--strings", disasm / "strings.json",

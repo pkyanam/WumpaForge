@@ -23,7 +23,7 @@ index ade9b08..42926eb 100644
  /* KeTickCount - exported as a data pointer, not a function */
  extern volatile ULONG xbox_KeTickCount;
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 2d996b1..34930fb 100644
+index 2d996b1..09d9717 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -26,6 +26,7 @@
@@ -34,7 +34,95 @@ index 2d996b1..34930fb 100644
  #include "xbox_memory_layout.h"
  #include "recomp_icall_feedback.h"
  #include <stdio.h>
-@@ -2386,13 +2387,14 @@ static void bridge_write_iostatus(uint32_t ios_va, NTSTATUS status, uint32_t inf
+@@ -378,10 +379,11 @@ static RECOMP_TLS int g_is_spawned_thread = 0;
+  * ExitThread from PsTerminateSystemThread -- bridge_thread_main's own return
+  * path is the rare one. */
+ static RECOMP_TLS uint32_t g_thread_stack_top = 0;
++static RECOMP_TLS uint32_t g_thread_tib = 0;
+ 
+ struct bridge_thread_start {
+     recomp_func_t fn;
+-    uint32_t ctx1, ctx2, stack_top;
++    uint32_t ctx1, ctx2, stack_top, tib;
+ };
+ 
+ static void bridge_write_handle(uint32_t handle_va, HANDLE h);
+@@ -412,14 +414,7 @@ static DWORD WINAPI bridge_thread_main(LPVOID param)
+     g_is_spawned_thread = 1;
+     g_esp = s->stack_top;
+     g_thread_stack_top = s->stack_top;
+-    {
+-        uint32_t tib = xbox_AllocThreadTib();
+-        if (tib)
+-            g_fs_base = tib;
+-        else
+-            fprintf(stderr, "  [KERNEL] worker thread has no TIB of its own;"
+-                            " it shares the main thread's\n");
+-    }
++    g_fs_base = g_thread_tib = s->tib;
+     free(s);
+ 
+     bridge_run_thread_inline(fn, ctx1, ctx2);
+@@ -429,7 +424,8 @@ static DWORD WINAPI bridge_thread_main(LPVOID param)
+     /* The routine returned instead of calling PsTerminateSystemThread; the
+      * stack is still ours to give back. */
+     xbox_FreeThreadStack(g_thread_stack_top);
+-    g_thread_stack_top = 0;
++    xbox_HeapFree(g_thread_tib);
++    g_thread_stack_top = g_thread_tib = 0;
+     return 0;
+ }
+ 
+@@ -441,9 +437,12 @@ static HANDLE bridge_spawn_thread(recomp_func_t fn, uint32_t ctx1,
+ 
+     if (!s) return NULL;
+     s->fn = fn; s->ctx1 = ctx1; s->ctx2 = ctx2; s->stack_top = stack_top;
+-
++    s->tib = xbox_AllocThreadTib();
++    if (!s->tib) { free(s); return NULL; }
++    BRIDGE_MEM32(s->tib + 0x08) = stack_top + 16 - XBOX_THREAD_STACK_SIZE;
++    /* Prepare the complete isolated guest context before launching. */
+     th = CreateThread(NULL, 0, bridge_thread_main, s, 0, NULL);
+-    if (!th) free(s);
++    if (!th) { xbox_HeapFree(s->tib); free(s); }
+     /* Record the game thread so a host-tick-driven title's watchdog can sample
+      * it via xbox_thread_debug_handle. Harmless for default-model titles: they
+      * spawn workers too, but never read it back. See kernel_thread.c. */
+@@ -546,14 +545,18 @@ static void bridge_PsCreateSystemThreadEx(void)
+                 stack_top = xbox_AllocThreadStack();
+ 
+                 if (!stack_top) {
+-                    fprintf(stderr, "  [KERNEL] PsCreateSystemThreadEx: out of "
+-                            "thread stacks, running worker 0x%08X inline\n",
+-                            start_routine);
+-                    fflush(stderr);
+-                    bridge_run_thread_inline(fn, start_context1, start_context2);
++                    if (xbox_handle_ptr) BRIDGE_MEM32(xbox_handle_ptr) = 0;
++                    g_eax = 0xC000009Au; /* STATUS_INSUFFICIENT_RESOURCES */
++                    return;
+                 } else {
+                     HANDLE th = bridge_spawn_thread(fn, start_context1,
+                                                     start_context2, stack_top);
++                    if (!th) {
++                        xbox_FreeThreadStack(stack_top);
++                        if (xbox_handle_ptr) BRIDGE_MEM32(xbox_handle_ptr) = 0;
++                        g_eax = 0xC000009Au;
++                        return;
++                    }
+                     fprintf(stderr, "  [KERNEL] PsCreateSystemThreadEx: spawned "
+                             "worker 0x%08X (ctx=0x%08X, stack top 0x%08X)\n",
+                             start_routine, start_context1, stack_top);
+@@ -1694,7 +1697,8 @@ static void bridge_PsTerminateSystemThread(void)
+          * return the stack -- ExitThread never comes back to bridge_thread_main
+          * to do it. */
+         xbox_FreeThreadStack(g_thread_stack_top);
+-        g_thread_stack_top = 0;
++        xbox_HeapFree(g_thread_tib);
++        g_thread_stack_top = g_thread_tib = 0;
+         ExitThread(exit_status);
+     }
+ }
+@@ -2386,13 +2390,14 @@ static void bridge_write_iostatus(uint32_t ios_va, NTSTATUS status, uint32_t inf
  #define BRIDGE_HANDLE_MASK 0x00FFFFFFu
  #define BRIDGE_HANDLE_MAX  16384
  static HANDLE s_handle_table[BRIDGE_HANDLE_MAX];
@@ -51,7 +139,7 @@ index 2d996b1..34930fb 100644
      for (i = 1; i < BRIDGE_HANDLE_MAX; i++)
          if (s_handle_table[i] == NULL) {
              s_handle_table[i] = h;
-@@ -2418,6 +2420,8 @@ static HANDLE bridge_read_handle(uint32_t va)
+@@ -2418,6 +2423,8 @@ static HANDLE bridge_read_handle(uint32_t va)
          return (i > 0 && i < BRIDGE_HANDLE_MAX) ? s_handle_table[i] : NULL;
      }
      /* Untagged value: synthetic/dummy handle -- pass through unchanged. */
@@ -60,7 +148,7 @@ index 2d996b1..34930fb 100644
      return (HANDLE)(uintptr_t)token;
  }
  
-@@ -2441,6 +2445,8 @@ static HANDLE bridge_resolve_handle(uint32_t token)
+@@ -2441,6 +2448,8 @@ static HANDLE bridge_resolve_handle(uint32_t token)
          return (i > 0 && i < BRIDGE_HANDLE_MAX) ? s_handle_table[i] : NULL;
      }
      /* Untagged: synthetic/dummy handle -- pass through unchanged. */
@@ -69,7 +157,7 @@ index 2d996b1..34930fb 100644
      return (HANDLE)(uintptr_t)token;
  }
  
-@@ -2451,6 +2457,7 @@ static HANDLE bridge_take_handle(uint32_t token)
+@@ -2451,6 +2460,7 @@ static HANDLE bridge_take_handle(uint32_t token)
          if (i > 0 && i < BRIDGE_HANDLE_MAX) {
              HANDLE h = s_handle_table[i];
              s_handle_table[i] = NULL;
@@ -77,7 +165,7 @@ index 2d996b1..34930fb 100644
              return h;
          }
      }
-@@ -2494,6 +2501,13 @@ static NTSTATUS bridge_create_file_impl(
+@@ -2494,6 +2504,13 @@ static NTSTATUS bridge_create_file_impl(
  
      if (NT_SUCCESS(st)) {
          bridge_write_handle(handle_va, h);
@@ -91,7 +179,7 @@ index 2d996b1..34930fb 100644
          bridge_write_iostatus(iostatus_va, ios.Status, (uint32_t)ios.Information);
      } else {
          bridge_write_iostatus(iostatus_va, st, 0);
-@@ -2619,7 +2633,7 @@ static void bridge_NtCreateFile(void)
+@@ -2619,7 +2636,7 @@ static void bridge_NtCreateFile(void)
          char host[MAX_PATH * 2];
          size_t n = 0;
  
@@ -100,7 +188,7 @@ index 2d996b1..34930fb 100644
  
          while (n < sizeof(host) - 1 && w[n]) {
              host[n] = (char)w[n];
-@@ -3163,6 +3177,40 @@ static void bridge_NtDeviceIoControlFile(void)
+@@ -3163,6 +3180,40 @@ static void bridge_NtDeviceIoControlFile(void)
      uint32_t out_va  = STACK_ARG(8);
      uint32_t out_len = STACK_ARG(9);
  
@@ -141,7 +229,7 @@ index 2d996b1..34930fb 100644
      if (ioctl == IOCTL_DISK_GET_DRIVE_GEOMETRY) {
          /* DISK_GEOMETRY: Cylinders (LARGE_INTEGER), MediaType,
           * TracksPerCylinder, SectorsPerTrack, BytesPerSector -- 24 bytes. */
-@@ -4429,12 +4477,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
+@@ -4429,12 +4480,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
   * The source resolves through the table, DuplicateHandle produces a real
   * native handle, and the target lands via bridge_write_handle as a fresh
   * token -- same shape as NtCreateEvent. DUPLICATE_CLOSE_SOURCE also closes
@@ -158,7 +246,7 @@ index 2d996b1..34930fb 100644
      HANDLE dup = NULL;
      DWORD opts = 0;
  
-@@ -4450,7 +4499,20 @@ static void bridge_NtDuplicateObject(void)
+@@ -4450,7 +4502,20 @@ static void bridge_NtDuplicateObject(void)
          g_eax = 0xC0000001u;   /* STATUS_UNSUCCESSFUL */
          return;
      }
@@ -530,7 +618,7 @@ index e9b6344..4bec709 100644
  #include <stdint.h>
  #include <stdlib.h>
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index fe24fdc..eb968ed 100644
+index fe24fdc..9e708f1 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -15,6 +15,14 @@
@@ -710,10 +798,17 @@ index fe24fdc..eb968ed 100644
  
  static int g_heap_alloc_count = 0;
  
-@@ -1950,6 +2022,15 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment);
+@@ -1945,10 +2017,19 @@ static int g_heap_block_count = 0;
+  */
+ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment);
  
- static int g_thread_stacks_used = 0;
+-#define XBOX_THREAD_STACK_SIZE  (512 * 1024)
+ #define XBOX_MAX_THREAD_STACKS  8
  
+-static int g_thread_stacks_used = 0;
++static volatile LONG g_thread_stacks_used = 0;
++static SRWLOCK g_heap_lock = SRWLOCK_INIT;
++
 +static void xbox_reset_allocators(void)
 +{
 +    g_heap_next = XBOX_HEAP_BASE;
@@ -722,12 +817,111 @@ index fe24fdc..eb968ed 100644
 +    g_thread_stacks_used = 0;
 +}
 +
-+
+ 
  /* A TIB and TLS block for a newly spawned guest thread.
   *
-  * A TIB is per-thread on the console and was per-process here: one address,
+@@ -1991,6 +2072,7 @@ uint32_t xbox_AllocThreadTib(void)
+     memset(TIB_VA(thread_data), 0, g_tls_thread_size);
+ 
+     *(uint32_t *)TIB_VA(tib + 0x00) = 0xFFFFFFFFu;   /* own SEH chain    */
++    *(uint32_t *)TIB_VA(tib + 0x18) = tib;           /* own TIB identity */
+     *(uint32_t *)TIB_VA(block)      = thread_data;   /* slot 0           */
+     *(uint32_t *)TIB_VA(tib + 0x04) = block + total; /* fs:[4], see above*/
+ 
+@@ -2002,7 +2084,8 @@ uint32_t xbox_AllocThreadStack(void)
+ {
+     uint32_t base;
+ 
+-    if (g_thread_stacks_used >= XBOX_MAX_THREAD_STACKS) {
++    if (InterlockedIncrement(&g_thread_stacks_used) > XBOX_MAX_THREAD_STACKS) {
++        InterlockedDecrement(&g_thread_stacks_used);
+         return 0;
+     }
+ 
+@@ -2021,9 +2104,10 @@ uint32_t xbox_AllocThreadStack(void)
+      * for small ones.
+      */
+     base = xbox_HeapAlloc(XBOX_THREAD_STACK_SIZE, 4096);
+-    if (!base)
++    if (!base) {
++        InterlockedDecrement(&g_thread_stacks_used);
+         return 0;
+-    g_thread_stacks_used++;
++    }
+ 
+     /* Top of the slice, 16-byte aligned, growing down. */
+     return base + XBOX_THREAD_STACK_SIZE - 16;
+@@ -2048,8 +2132,7 @@ void xbox_FreeThreadStack(uint32_t stack_top)
+     if (!stack_top)
+         return;
+     xbox_HeapFree(stack_top + 16 - XBOX_THREAD_STACK_SIZE);
+-    if (g_thread_stacks_used > 0)
+-        g_thread_stacks_used--;
++    InterlockedDecrement(&g_thread_stacks_used);
+ }
+ 
+ /* Bump allocator over the contiguous window mapped at XBOX_CONTIG_BASE.
+@@ -2104,7 +2187,7 @@ uint32_t xbox_ContiguousAllocatedBytes(void)
+ }
+ 
+ 
+-uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
++static uint32_t xbox_heap_alloc_locked(uint32_t size, uint32_t alignment)
+ {
+     uint32_t result;
+ 
+@@ -2213,7 +2296,7 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
+  * forward is asking about the block that contains it. Returns 0 for an address
+  * this heap never handed out, which is what "not one of mine" has to look like.
+  */
+-uint32_t xbox_HeapBlockSize(uint32_t xbox_va)
++static uint32_t xbox_heap_block_size_locked(uint32_t xbox_va)
+ {
+     int i;
+ 
+@@ -2229,7 +2312,7 @@ uint32_t xbox_HeapBlockSize(uint32_t xbox_va)
+     return 0;
+ }
+ 
+-void xbox_HeapFree(uint32_t xbox_va)
++static void xbox_heap_free_locked(uint32_t xbox_va)
+ {
+     static int frees = 0, matched = 0;
+ 
+@@ -2273,6 +2356,31 @@ void xbox_HeapFree(uint32_t xbox_va)
+     }
+ }
+ 
++/* Main and guest workers allocate/free concurrently, including their TIBs.
++ * Keep bump state and the free-block table one atomic allocator transaction. */
++uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
++{
++    AcquireSRWLockExclusive(&g_heap_lock);
++    uint32_t result = xbox_heap_alloc_locked(size, alignment);
++    ReleaseSRWLockExclusive(&g_heap_lock);
++    return result;
++}
++
++uint32_t xbox_HeapBlockSize(uint32_t va)
++{
++    AcquireSRWLockShared(&g_heap_lock);
++    uint32_t result = xbox_heap_block_size_locked(va);
++    ReleaseSRWLockShared(&g_heap_lock);
++    return result;
++}
++
++void xbox_HeapFree(uint32_t va)
++{
++    AcquireSRWLockExclusive(&g_heap_lock);
++    xbox_heap_free_locked(va);
++    ReleaseSRWLockExclusive(&g_heap_lock);
++}
++
+ HANDLE xbox_GetMappingHandle(void)
+ {
+     return g_mapping_handle;
 diff --git a/src/kernel/xbox_memory_layout.h b/src/kernel/xbox_memory_layout.h
-index fd83afb..2565ce3 100644
+index fd83afb..a75fb4f 100644
 --- a/src/kernel/xbox_memory_layout.h
 +++ b/src/kernel/xbox_memory_layout.h
 @@ -24,6 +24,7 @@
@@ -775,6 +969,14 @@ index fd83afb..2565ce3 100644
  
  /** Exclusive top of the dynamic heap: the end of RAM for this run. Runtime,
   *  not a macro, because RAM size is now configurable (retail 64 MB vs devkit
+@@ -452,6 +454,7 @@ HANDLE xbox_GetMappingHandle(void);
+ 
+ /* Carve a simulated stack for a spawned thread. Returns the Xbox VA of the
+  * stack top, or 0 when the pool is exhausted. */
++#define XBOX_THREAD_STACK_SIZE (512u * 1024u)
+ uint32_t xbox_AllocThreadStack(void);
+ 
+ /* A TIB and TLS block for a newly spawned guest thread, copied from the
 diff --git a/src/kernel/xbox_optical_mode.h b/src/kernel/xbox_optical_mode.h
 new file mode 100644
 index 0000000..ef0b6fe

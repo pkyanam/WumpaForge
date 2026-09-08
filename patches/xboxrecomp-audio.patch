@@ -11,11 +11,33 @@ index 68d44ef..a6c0471 100644
      find_package(SDL2 REQUIRED)
      target_link_libraries(xbox_apu PRIVATE platform SDL2::SDL2 m)
  endif()
+diff --git a/src/apu/apu.h b/src/apu/apu.h
+index f7b9f8f..399e8b9 100644
+--- a/src/apu/apu.h
++++ b/src/apu/apu.h
+@@ -71,6 +71,9 @@ void apu_mixer_get_state(int slot, uint32_t *byte_offset, int *active, int *loop
+ void apu_mixer_play(int slot, int looping);
+ void apu_mixer_stop(int slot);
+ 
++/* Update active voice parameters under the mixer lock. */
++void apu_mixer_set_parameters(int slot, uint32_t rate, float volume);
++
+ #ifdef __cplusplus
+ }
+ #endif
 diff --git a/src/apu/apu_core.c b/src/apu/apu_core.c
-index 459be77..aa8d276 100644
+index 459be77..92d3cf7 100644
 --- a/src/apu/apu_core.c
 +++ b/src/apu/apu_core.c
-@@ -212,9 +212,17 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
+@@ -36,6 +36,7 @@ MCPXAPUState *g_state = NULL;
+ static void mixer_init(void);
+ static void mixer_render(int16_t frame_buf[][2], int num_samples);
+ static APUMixerVoice g_mixer_voices[APU_MIXER_MAX_VOICES];
++static bool g_mixer_reserved[APU_MIXER_MAX_VOICES];
+ static volatile int g_mixer_active_count = 0;
+ static CRITICAL_SECTION g_mixer_cs;
+ static bool g_mixer_initialized = false;
+@@ -212,9 +213,17 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
  
      /* Try XAudio2 first (lower latency) */
      if (xa2_init()) {
@@ -33,7 +55,7 @@ index 459be77..aa8d276 100644
      fprintf(stderr, "[APU] XAudio2 unavailable, falling back to waveOut\n");
  
      WAVEFORMATEX wfx = { 0 };
-@@ -274,6 +282,32 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
+@@ -274,6 +283,32 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
          return;
      }
  
@@ -66,7 +88,7 @@ index 459be77..aa8d276 100644
      /* XAudio2 path: render and submit a buffer */
      if (xa2_is_active()) {
          int buf_size = xa2_get_buffer_size();
-@@ -574,7 +608,11 @@ void mcpx_apu_shutdown(MCPXAPUState *d)
+@@ -574,7 +609,11 @@ void mcpx_apu_shutdown(MCPXAPUState *d)
      fprintf(stderr, "[APU] Shutting down MCPX APU...\n");
  
      qemu_mutex_lock(&d->lock);
@@ -78,6 +100,40 @@ index 459be77..aa8d276 100644
      qatomic_set(&d->exiting, true);
      qemu_cond_signal(&d->cond);
      qemu_mutex_unlock(&d->lock);
+@@ -708,7 +747,8 @@ int apu_mixer_alloc_voice(void)
+     if (!g_mixer_initialized) mixer_init();
+     EnterCriticalSection(&g_mixer_cs);
+     for (int i = 0; i < APU_MIXER_MAX_VOICES; i++) {
+-        if (!g_mixer_voices[i].active && !g_mixer_voices[i].pcm_data) {
++        if (!g_mixer_reserved[i] && !g_mixer_voices[i].active && !g_mixer_voices[i].pcm_data) {
++            g_mixer_reserved[i] = true;
+             g_mixer_voices[i].volume = 1.0f;
+             g_mixer_voices[i].sample_rate = 44100;
+             g_mixer_voices[i].num_channels = 2;
+@@ -728,6 +768,7 @@ void apu_mixer_free_voice(int slot)
+     g_mixer_voices[slot].pcm_data = NULL;
+     g_mixer_voices[slot].pcm_bytes = 0;
+     g_mixer_voices[slot].play_offset = 0;
++    g_mixer_reserved[slot] = false;
+     LeaveCriticalSection(&g_mixer_cs);
+ }
+ 
+@@ -766,6 +807,15 @@ void apu_mixer_get_state(int slot, uint32_t *byte_offset, int *active, int *loop
+     LeaveCriticalSection(&g_mixer_cs);
+ }
+ 
++void apu_mixer_set_parameters(int slot, uint32_t rate, float volume)
++{
++    if (slot < 0 || slot >= APU_MIXER_MAX_VOICES) return;
++    EnterCriticalSection(&g_mixer_cs);
++    g_mixer_voices[slot].sample_rate = rate;
++    g_mixer_voices[slot].volume = volume;
++    LeaveCriticalSection(&g_mixer_cs);
++}
++
+ void apu_mixer_play(int slot, int looping)
+ {
+     if (g_audio_muted) return;
 diff --git a/src/apu/apu_xaudio2.c b/src/apu/apu_xaudio2.c
 index cd69e57..302b8ea 100644
 --- a/src/apu/apu_xaudio2.c
@@ -260,3 +316,838 @@ index cd69e57..302b8ea 100644
 +}
  
  #endif /* _WIN32 */
+diff --git a/src/audio/CMakeLists.txt b/src/audio/CMakeLists.txt
+index f2a3b78..52a7bf3 100644
+--- a/src/audio/CMakeLists.txt
++++ b/src/audio/CMakeLists.txt
+@@ -3,6 +3,7 @@
+ 
+ add_library(xbox_dsound STATIC
+     dsound_device.c
++    xbox_adpcm.c
+ )
+ 
+ target_include_directories(xbox_dsound PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+diff --git a/src/audio/dsound_device.c b/src/audio/dsound_device.c
+index f467511..5d96300 100644
+--- a/src/audio/dsound_device.c
++++ b/src/audio/dsound_device.c
+@@ -1,216 +1,268 @@
+-/**
+- * Xbox DirectSound → XAudio2 Compatibility Layer
+- *
+- * Implements the Xbox DirectSound interfaces. Currently provides
+- * stub sound buffer objects that accept all method calls silently.
+- * This allows the game to initialize audio and create buffers without
+- * crashing, while actual audio playback is deferred to a later phase.
+- *
+- * Architecture:
+- * - XAudio2 mastering voice for output (future)
+- * - Each DirectSound buffer maps to an XAudio2 source voice (future)
+- * - 3D audio emulated using X3DAudio (future)
+- */
+-
++/* Native DirectSound buffers: PCM16/Xbox ADPCM -> bounded APU software voices.
++ * Creation owns only buffer metadata/data. Mixer slots are allocated on Play
++ * and released on Stop, destruction, or reclamation after natural completion.
++ * Streaming and spatial effects remain separate, explicitly incomplete paths. */
+ #include "dsound_xbox.h"
++#include "xbox_adpcm.h"
+ #include "../apu/apu.h"
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
+ #include <math.h>
++#include <limits.h>
+ 
+-/* ================================================================
+- * Sound buffer stub implementation
+- *
+- * Returns a valid buffer object for every CreateSoundBuffer call.
+- * All audio methods are no-ops that return S_OK.
+- * ================================================================ */
++#define DSERR_BADFORMAT ((HRESULT)0x88780064u)
++#define DSERR_ALLOCATED ((HRESULT)0x8878000Au)
++extern MCPXAPUState *g_state;
+ 
+ typedef struct DSoundBuffer {
+     IDirectSoundBuffer8 iface;
+-    LONG    ref_count;
+-    void   *buffer_data;
+-    DWORD   buffer_size;
+-    LONG    volume;  /* hundredths of dB */
+-    DWORD   frequency;
+-    WORD    channels;     /* 1=mono, 2=stereo */
+-    WORD    bits_per_sample;
+-    int     mixer_slot;   /* APU mixer voice slot, -1 = none */
++    LONG ref_count;
++    void *buffer_data;
++    DWORD buffer_size;
++    int16_t *pcm_data;
++    DWORD pcm_frames, cursor_frames;
++    LONG volume;
++    DWORD frequency, original_frequency;
++    WORD channels, bits_per_sample, format_tag, block_align;
++    int mixer_slot, dirty, locked;
++    void *lock_pointer;
++    DWORD lock_bytes;
++    struct DSoundBuffer *next;
+ } DSoundBuffer;
+ 
+-static DSoundBuffer *buf_from_iface(IDirectSoundBuffer8 *iface)
++static SRWLOCK s_buffers_lock = SRWLOCK_INIT;
++static DSoundBuffer *s_buffers;
++static DSoundBuffer *buf_from_iface(IDirectSoundBuffer8 *iface) { return (DSoundBuffer *)iface; }
++static float linear_volume(LONG volume)
+ {
+-    return (DSoundBuffer *)iface;
++    return volume <= -9600 ? 0.0f : volume >= 0 ? 1.0f : powf(10.0f, volume / 2000.0f);
+ }
+-
+-static HRESULT __stdcall buf_QueryInterface(IDirectSoundBuffer8 *self, const IID *riid, void **ppv)
++static DWORD source_bytes(const DSoundBuffer *buf, DWORD frames)
+ {
+-    (void)self; (void)riid; (void)ppv;
+-    return E_NOINTERFACE;
++    return buf->format_tag == 0x69 ? frames / 64 * buf->block_align
++                                 : frames * buf->block_align;
+ }
+-
+-static ULONG __stdcall buf_AddRef(IDirectSoundBuffer8 *self)
++static void release_voice(DSoundBuffer *buf)
+ {
+-    return (ULONG)InterlockedIncrement(&buf_from_iface(self)->ref_count);
++    if (buf->mixer_slot < 0) return;
++    uint32_t position;
++    apu_mixer_get_state(buf->mixer_slot, &position, NULL, NULL);
++    buf->cursor_frames = position / (buf->channels * 2u);
++    apu_mixer_free_voice(buf->mixer_slot); /* stops under the mixer lock */
++    buf->mixer_slot = -1;
+ }
+-
+-static ULONG __stdcall buf_Release(IDirectSoundBuffer8 *self)
++static void reap_finished(void)
+ {
+-    DSoundBuffer *buf = buf_from_iface(self);
+-    LONG ref = InterlockedDecrement(&buf->ref_count);
+-    if (ref <= 0) {
+-        if (buf->mixer_slot >= 0) {
+-            apu_mixer_stop(buf->mixer_slot);
+-            apu_mixer_free_voice(buf->mixer_slot);
+-        }
+-        free(buf->buffer_data);
+-        free(buf);
++    for (DSoundBuffer *buf = s_buffers; buf; buf = buf->next) {
++        if (buf->mixer_slot < 0) continue;
++        int active;
++        apu_mixer_get_state(buf->mixer_slot, NULL, &active, NULL);
++        if (!active) release_voice(buf);
+     }
+-    return (ULONG)ref;
+ }
+-
+-static HRESULT __stdcall buf_SetBufferData(IDirectSoundBuffer8 *self, const void *pvBufferData, DWORD dwBufferBytes)
++static void free_data(DSoundBuffer *buf)
+ {
+-    DSoundBuffer *buf = buf_from_iface(self);
+-    apu_mixer_stop(buf->mixer_slot);
++    if ((void *)buf->pcm_data != buf->buffer_data) free(buf->pcm_data);
+     free(buf->buffer_data);
+     buf->buffer_data = NULL;
+-    buf->buffer_size = dwBufferBytes;
+-    if (pvBufferData && dwBufferBytes > 0) {
+-        buf->buffer_data = malloc(dwBufferBytes);
+-        if (buf->buffer_data)
+-            memcpy(buf->buffer_data, pvBufferData, dwBufferBytes);
+-    }
+-
+-    /* Update mixer voice with new buffer data */
+-    if (buf->mixer_slot >= 0 && buf->bits_per_sample == 16) {
+-        APUMixerVoice *v = apu_mixer_get_voice(buf->mixer_slot);
+-        if (v) {
+-            v->pcm_data = (const int16_t *)buf->buffer_data;
+-            v->pcm_bytes = buf->buffer_data ? dwBufferBytes : 0;
+-            v->play_offset = 0;
+-            v->num_channels = buf->channels;
+-            v->sample_rate = buf->frequency;
++    buf->pcm_data = NULL;
++    buf->buffer_size = buf->pcm_frames = 0;
++}
++static HRESULT decode_data(DSoundBuffer *buf)
++{
++    if (!buf->dirty) return S_OK;
++    if (buf->format_tag == 1) {
++        buf->pcm_data = buf->buffer_data;
++        buf->pcm_frames = buf->buffer_size / buf->block_align;
++    } else {
++        uint64_t frames = (uint64_t)buf->buffer_size / buf->block_align * 64;
++        uint64_t bytes = frames * buf->channels * sizeof(int16_t);
++        if (bytes > UINT32_MAX || bytes > SIZE_MAX) return E_OUTOFMEMORY;
++        int16_t *decoded = bytes ? malloc((size_t)bytes) : NULL;
++        if (bytes && !decoded) return E_OUTOFMEMORY;
++        if (bytes && !xbox_adpcm_decode(buf->buffer_data, buf->buffer_size,
++                                       buf->channels, decoded, (size_t)frames)) {
++            free(decoded);
++            return DSERR_BADFORMAT;
+         }
++        free(buf->pcm_data);
++        buf->pcm_data = decoded;
++        buf->pcm_frames = (DWORD)frames;
+     }
++    buf->dirty = 0;
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall buf_SetPlayRegion(IDirectSoundBuffer8 *self, DWORD dwPlayStart, DWORD dwPlayLength)
++static HRESULT replace_data(DSoundBuffer *buf, const void *data, DWORD bytes, int zero_fill)
+ {
+-    (void)self; (void)dwPlayStart; (void)dwPlayLength;
++    if (buf->locked || (!data && bytes && !zero_fill)) return E_INVALIDARG;
++    if (bytes % buf->block_align) return DSERR_BADFORMAT;
++    DSoundBuffer replacement = *buf;
++    replacement.buffer_data = bytes ? (zero_fill ? calloc(1, bytes) : malloc(bytes)) : NULL;
++    replacement.pcm_data = NULL;
++    replacement.buffer_size = bytes;
++    replacement.dirty = 1;
++    if (bytes && !replacement.buffer_data) return E_OUTOFMEMORY;
++    if (bytes && !zero_fill) memcpy(replacement.buffer_data, data, bytes);
++    HRESULT status = decode_data(&replacement);
++    if (status != S_OK) { free_data(&replacement); return status; }
++    release_voice(buf);
++    free_data(buf);
++    buf->buffer_data = replacement.buffer_data;
++    buf->buffer_size = replacement.buffer_size;
++    buf->pcm_data = replacement.pcm_data;
++    buf->pcm_frames = replacement.pcm_frames;
++    buf->cursor_frames = 0;
++    buf->dirty = 0;
+     return S_OK;
+ }
+ 
+-static HRESULT __stdcall buf_Lock(IDirectSoundBuffer8 *self, DWORD dwOffset, DWORD dwBytes,
+-    void **ppvAudioPtr1, DWORD *pdwAudioBytes1, void **ppvAudioPtr2, DWORD *pdwAudioBytes2, DWORD dwFlags)
++static HRESULT __stdcall buf_QueryInterface(IDirectSoundBuffer8 *self, const IID *riid, void **ppv)
++{
++    (void)self; (void)riid; if (ppv) *ppv = NULL; return E_NOINTERFACE;
++}
++static ULONG __stdcall buf_AddRef(IDirectSoundBuffer8 *self)
++{
++    return (ULONG)++buf_from_iface(self)->ref_count;
++}
++static ULONG __stdcall buf_Release(IDirectSoundBuffer8 *self)
+ {
+     DSoundBuffer *buf = buf_from_iface(self);
+-    (void)dwFlags;
+-
+-    if (!buf->buffer_data || buf->buffer_size == 0) {
+-        if (ppvAudioPtr1) *ppvAudioPtr1 = NULL;
+-        if (pdwAudioBytes1) *pdwAudioBytes1 = 0;
+-        if (ppvAudioPtr2) *ppvAudioPtr2 = NULL;
+-        if (pdwAudioBytes2) *pdwAudioBytes2 = 0;
+-        return E_FAIL;
++    LONG ref = --buf->ref_count;
++    if (ref <= 0) {
++        release_voice(buf);
++        DSoundBuffer **entry = &s_buffers;
++        while (*entry && *entry != buf) entry = &(*entry)->next;
++        if (*entry) *entry = buf->next;
++        free_data(buf);
++        free(buf);
+     }
+-
+-    /* Simple linear lock (no wraparound) */
+-    if (dwOffset >= buf->buffer_size) dwOffset = 0;
+-    if (dwBytes == 0 || dwOffset + dwBytes > buf->buffer_size)
+-        dwBytes = buf->buffer_size - dwOffset;
+-
+-    if (ppvAudioPtr1) *ppvAudioPtr1 = (BYTE *)buf->buffer_data + dwOffset;
+-    if (pdwAudioBytes1) *pdwAudioBytes1 = dwBytes;
+-    if (ppvAudioPtr2) *ppvAudioPtr2 = NULL;
+-    if (pdwAudioBytes2) *pdwAudioBytes2 = 0;
+-    return S_OK;
++    return (ULONG)ref;
+ }
+-
+-static HRESULT __stdcall buf_Unlock(IDirectSoundBuffer8 *self, void *p1, DWORD n1, void *p2, DWORD n2)
++static HRESULT __stdcall buf_SetBufferData(IDirectSoundBuffer8 *self, const void *data, DWORD bytes)
+ {
+-    (void)self; (void)p1; (void)n1; (void)p2; (void)n2;
+-    return S_OK;
++    return replace_data(buf_from_iface(self), data, bytes, 0);
+ }
+-
+-static HRESULT __stdcall buf_SetCurrentPosition(IDirectSoundBuffer8 *self, DWORD dwNewPosition)
++static HRESULT __stdcall buf_SetPlayRegion(IDirectSoundBuffer8 *self, DWORD start, DWORD length)
+ {
+-    return apu_mixer_set_position(buf_from_iface(self)->mixer_slot, dwNewPosition)
+-        ? S_OK : E_INVALIDARG;
++    (void)self; (void)start; (void)length;
++    return E_NOTIMPL;
+ }
+-
+-static HRESULT __stdcall buf_GetCurrentPosition(IDirectSoundBuffer8 *self, DWORD *pdwPlay, DWORD *pdwWrite)
++static HRESULT __stdcall buf_Lock(IDirectSoundBuffer8 *self, DWORD offset, DWORD bytes,
++    void **p1, DWORD *n1, void **p2, DWORD *n2, DWORD flags)
+ {
+     DSoundBuffer *buf = buf_from_iface(self);
+-    uint32_t cursor;
+-    apu_mixer_get_state(buf->mixer_slot, &cursor, NULL, NULL);
+-    if (pdwPlay)  *pdwPlay = cursor;
+-    if (pdwWrite) *pdwWrite = cursor;
++    if (p1) *p1 = NULL;
++    if (n1) *n1 = 0;
++    if (p2) *p2 = NULL;
++    if (n2) *n2 = 0;
++    if (flags) return E_NOTIMPL;
++    if (!p1 || !n1 || buf->locked || offset >= buf->buffer_size) return E_INVALIDARG;
++    if (!bytes) bytes = buf->buffer_size - offset;
++    if (bytes > buf->buffer_size - offset) return E_NOTIMPL; /* wrapped lock */
++    release_voice(buf); /* caller writes cannot race the mixer */
++    buf->locked = 1;
++    buf->dirty = 1;
++    buf->lock_pointer = (uint8_t *)buf->buffer_data + offset;
++    buf->lock_bytes = bytes;
++    *p1 = buf->lock_pointer;
++    *n1 = bytes;
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall buf_GetStatus(IDirectSoundBuffer8 *self, DWORD *pdwStatus)
++static HRESULT __stdcall buf_Unlock(IDirectSoundBuffer8 *self, void *p1, DWORD n1, void *p2, DWORD n2)
++{
++    DSoundBuffer *buf = buf_from_iface(self);
++    if (!buf->locked || p1 != buf->lock_pointer || n1 != buf->lock_bytes || p2 || n2)
++        return E_INVALIDARG;
++    buf->locked = 0;
++    return decode_data(buf);
++}
++static HRESULT __stdcall buf_SetCurrentPosition(IDirectSoundBuffer8 *self, DWORD position)
+ {
+-    int active, looping;
+-    apu_mixer_get_state(buf_from_iface(self)->mixer_slot, NULL, &active, &looping);
+-    if (pdwStatus) *pdwStatus = (active ? DSBSTATUS_PLAYING : 0) |
+-                                (looping ? DSBSTATUS_LOOPING : 0);
++    DSoundBuffer *buf = buf_from_iface(self);
++    if (position >= buf->buffer_size || position % buf->block_align) return E_INVALIDARG;
++    DWORD frame = position / buf->block_align * (buf->format_tag == 0x69 ? 64u : 1u);
++    if (buf->mixer_slot >= 0 && !apu_mixer_set_position(buf->mixer_slot, frame * buf->channels * 2u))
++        return E_INVALIDARG;
++    buf->cursor_frames = frame;
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall buf_Play(IDirectSoundBuffer8 *self, DWORD r1, DWORD r2, DWORD dwFlags)
++static HRESULT __stdcall buf_GetCurrentPosition(IDirectSoundBuffer8 *self, DWORD *play, DWORD *write)
+ {
+-    (void)r1; (void)r2;
+     DSoundBuffer *buf = buf_from_iface(self);
+-
+-    /* Start playback through APU mixer */
+     if (buf->mixer_slot >= 0) {
+-        apu_mixer_play(buf->mixer_slot, (dwFlags & DSBPLAY_LOOPING) ? 1 : 0);
++        uint32_t position; int active;
++        apu_mixer_get_state(buf->mixer_slot, &position, &active, NULL);
++        buf->cursor_frames = position / (buf->channels * 2u);
++        if (!active) release_voice(buf);
+     }
++    DWORD cursor = source_bytes(buf, buf->cursor_frames);
++    if (play) *play = cursor;
++    if (write) *write = cursor;
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall buf_Stop(IDirectSoundBuffer8 *self)
++static HRESULT __stdcall buf_GetStatus(IDirectSoundBuffer8 *self, DWORD *status)
+ {
++    if (!status) return E_INVALIDARG;
+     DSoundBuffer *buf = buf_from_iface(self);
++    int active = 0, looping = 0;
+     if (buf->mixer_slot >= 0) {
+-        apu_mixer_stop(buf->mixer_slot);
++        apu_mixer_get_state(buf->mixer_slot, NULL, &active, &looping);
++        if (!active) release_voice(buf);
+     }
++    *status = (active ? DSBSTATUS_PLAYING : 0) | (looping ? DSBSTATUS_LOOPING : 0);
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall buf_SetVolume(IDirectSoundBuffer8 *self, LONG lVolume)
++static HRESULT __stdcall buf_Play(IDirectSoundBuffer8 *self, DWORD r1, DWORD r2, DWORD flags)
+ {
+     DSoundBuffer *buf = buf_from_iface(self);
+-    buf->volume = lVolume;
+-
+-    /* Convert DirectSound volume (hundredths of dB, 0=max, -9600=min) to linear */
+-    if (buf->mixer_slot >= 0) {
+-        APUMixerVoice *v = apu_mixer_get_voice(buf->mixer_slot);
+-        if (v) {
+-            if (lVolume <= -9600) {
+-                v->volume = 0.0f;
+-            } else if (lVolume >= 0) {
+-                v->volume = 1.0f;
+-            } else {
+-                /* dB to linear: 10^(dB/2000) since lVolume is in hundredths of dB */
+-                v->volume = powf(10.0f, lVolume / 2000.0f);
+-            }
++    if (r1 || r2 || (flags & ~DSBPLAY_LOOPING)) return E_NOTIMPL;
++    if (!g_state || buf->locked || !buf->buffer_size) return E_FAIL;
++    HRESULT result = decode_data(buf);
++    if (result != S_OK) return result;
++    if (buf->mixer_slot < 0) {
++        buf->mixer_slot = apu_mixer_alloc_voice();
++        if (buf->mixer_slot < 0) {
++            reap_finished();
++            buf->mixer_slot = apu_mixer_alloc_voice();
+         }
++        if (buf->mixer_slot < 0) return DSERR_ALLOCATED;
++        APUMixerVoice *voice = apu_mixer_get_voice(buf->mixer_slot);
++        voice->pcm_data = buf->pcm_data;
++        voice->pcm_bytes = buf->pcm_frames * buf->channels * 2u;
++        voice->num_channels = buf->channels;
++        voice->sample_rate = buf->frequency;
++        voice->volume = linear_volume(buf->volume);
++        voice->play_offset = (uint64_t)buf->cursor_frames << 16;
+     }
++    apu_mixer_play(buf->mixer_slot, (flags & DSBPLAY_LOOPING) != 0);
++    int active;
++    apu_mixer_get_state(buf->mixer_slot, NULL, &active, NULL);
++    if (!active) { release_voice(buf); return E_FAIL; }
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall buf_SetFrequency(IDirectSoundBuffer8 *self, DWORD dwFrequency)
++static HRESULT __stdcall buf_Stop(IDirectSoundBuffer8 *self)
+ {
++    release_voice(buf_from_iface(self));
++    return S_OK;
++}
++static HRESULT __stdcall buf_SetVolume(IDirectSoundBuffer8 *self, LONG volume)
++{
++    if (volume < -10000 || volume > 0) return E_INVALIDARG;
+     DSoundBuffer *buf = buf_from_iface(self);
+-    buf->frequency = dwFrequency;
+-
+-    if (buf->mixer_slot >= 0) {
+-        APUMixerVoice *v = apu_mixer_get_voice(buf->mixer_slot);
+-        if (v) v->sample_rate = dwFrequency;
+-    }
++    buf->volume = volume;
++    if (buf->mixer_slot >= 0)
++        apu_mixer_set_parameters(buf->mixer_slot, buf->frequency, linear_volume(volume));
++    return S_OK;
++}
++static HRESULT __stdcall buf_SetFrequency(IDirectSoundBuffer8 *self, DWORD rate)
++{
++    DSoundBuffer *buf = buf_from_iface(self);
++    if (!rate) rate = buf->original_frequency;
++    if (rate < 100 || rate > 192000) return E_INVALIDARG;
++    buf->frequency = rate;
++    if (buf->mixer_slot >= 0)
++        apu_mixer_set_parameters(buf->mixer_slot, rate, linear_volume(buf->volume));
+     return S_OK;
+ }
+ 
+@@ -222,18 +274,186 @@ static HRESULT __stdcall buf_SetConeAngles(IDirectSoundBuffer8 *self, DWORD in,
+ static HRESULT __stdcall buf_SetConeOutsideVolume(IDirectSoundBuffer8 *self, LONG vol, DWORD dw) { (void)self; (void)vol; (void)dw; return S_OK; }
+ static HRESULT __stdcall buf_SetMixBins(IDirectSoundBuffer8 *self, const DSMIXBINS *pMixBins) { (void)self; (void)pMixBins; return S_OK; }
+ 
++static HRESULT __stdcall locked_buf_QueryInterface(IDirectSoundBuffer8 *self, const IID *riid, void **ppv)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_QueryInterface(self, riid, ppv);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static ULONG __stdcall locked_buf_AddRef(IDirectSoundBuffer8 *self)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    ULONG result = buf_AddRef(self);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static ULONG __stdcall locked_buf_Release(IDirectSoundBuffer8 *self)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    ULONG result = buf_Release(self);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetBufferData(IDirectSoundBuffer8 *self, const void *data, DWORD bytes)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetBufferData(self, data, bytes);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetPlayRegion(IDirectSoundBuffer8 *self, DWORD start, DWORD length)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetPlayRegion(self, start, length);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_Lock(IDirectSoundBuffer8 *self, DWORD offset, DWORD bytes,
++    void **p1, DWORD *n1, void **p2, DWORD *n2, DWORD flags)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_Lock(self, offset, bytes, p1, n1, p2, n2, flags);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_Unlock(IDirectSoundBuffer8 *self, void *p1, DWORD n1, void *p2, DWORD n2)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_Unlock(self, p1, n1, p2, n2);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetCurrentPosition(IDirectSoundBuffer8 *self, DWORD position)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetCurrentPosition(self, position);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_GetCurrentPosition(IDirectSoundBuffer8 *self, DWORD *play, DWORD *write)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_GetCurrentPosition(self, play, write);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_GetStatus(IDirectSoundBuffer8 *self, DWORD *status)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_GetStatus(self, status);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_Play(IDirectSoundBuffer8 *self, DWORD r1, DWORD r2, DWORD flags)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_Play(self, r1, r2, flags);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_Stop(IDirectSoundBuffer8 *self)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_Stop(self);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetVolume(IDirectSoundBuffer8 *self, LONG volume)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetVolume(self, volume);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetFrequency(IDirectSoundBuffer8 *self, DWORD rate)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetFrequency(self, rate);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetMaxDistance(IDirectSoundBuffer8 *self, float f, DWORD dw)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetMaxDistance(self, f, dw);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetMinDistance(IDirectSoundBuffer8 *self, float f, DWORD dw)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetMinDistance(self, f, dw);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetPosition(IDirectSoundBuffer8 *self, float x, float y, float z, DWORD dw)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetPosition(self, x, y, z, dw);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetVelocity(IDirectSoundBuffer8 *self, float x, float y, float z, DWORD dw)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetVelocity(self, x, y, z, dw);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetConeAngles(IDirectSoundBuffer8 *self, DWORD in, DWORD out, DWORD dw)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetConeAngles(self, in, out, dw);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetConeOutsideVolume(IDirectSoundBuffer8 *self, LONG vol, DWORD dw)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetConeOutsideVolume(self, vol, dw);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
++
++static HRESULT __stdcall locked_buf_SetMixBins(IDirectSoundBuffer8 *self, const DSMIXBINS *pMixBins)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = buf_SetMixBins(self, pMixBins);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
+ static const IDirectSoundBuffer8Vtbl g_buf_vtbl = {
+-    buf_QueryInterface, buf_AddRef, buf_Release,
+-    buf_SetBufferData, buf_SetPlayRegion,
+-    buf_Lock, buf_Unlock,
+-    buf_SetCurrentPosition, buf_GetCurrentPosition,
+-    buf_GetStatus,
+-    buf_Play, buf_Stop,
+-    buf_SetVolume, buf_SetFrequency,
+-    buf_SetMaxDistance, buf_SetMinDistance,
+-    buf_SetPosition, buf_SetVelocity,
+-    buf_SetConeAngles, buf_SetConeOutsideVolume,
+-    buf_SetMixBins,
++    locked_buf_QueryInterface, locked_buf_AddRef, locked_buf_Release,
++    locked_buf_SetBufferData, locked_buf_SetPlayRegion,
++    locked_buf_Lock, locked_buf_Unlock,
++    locked_buf_SetCurrentPosition, locked_buf_GetCurrentPosition,
++    locked_buf_GetStatus,
++    locked_buf_Play, locked_buf_Stop,
++    locked_buf_SetVolume, locked_buf_SetFrequency,
++    locked_buf_SetMaxDistance, locked_buf_SetMinDistance,
++    locked_buf_SetPosition, locked_buf_SetVelocity,
++    locked_buf_SetConeAngles, locked_buf_SetConeOutsideVolume,
++    locked_buf_SetMixBins,
+ };
+ 
+ /* ================================================================
+@@ -249,65 +469,63 @@ static HRESULT __stdcall ds_QueryInterface(IDirectSound8 *self, const IID *riid,
+ static ULONG __stdcall ds_AddRef(IDirectSound8 *self)  { (void)self; return 1; }
+ static ULONG __stdcall ds_Release(IDirectSound8 *self) { (void)self; return 0; }
+ 
+-static HRESULT __stdcall ds_CreateSoundBuffer(IDirectSound8 *self, const DSBUFFERDESC *desc, IDirectSoundBuffer8 **ppBuffer, void *pUnkOuter)
++static HRESULT __stdcall ds_CreateSoundBuffer(IDirectSound8 *self, const DSBUFFERDESC *desc,
++    IDirectSoundBuffer8 **output, void *outer)
+ {
+-    DSoundBuffer *buf;
+-    (void)self; (void)pUnkOuter;
+-
+-    if (!ppBuffer) return E_INVALIDARG;
+-
+-    buf = (DSoundBuffer *)calloc(1, sizeof(*buf));
++    (void)self;
++    if (!output) return E_INVALIDARG;
++    *output = NULL;
++    if (!desc || !desc->lpwfxFormat || outer) return E_INVALIDARG;
++    const XBOX_WAVEFORMATEX *format = desc->lpwfxFormat;
++    if ((format->nChannels != 1 && format->nChannels != 2) ||
++        format->nSamplesPerSec < 100 || format->nSamplesPerSec > 192000)
++        return DSERR_BADFORMAT;
++    if (format->wFormatTag == 1) {
++        if (format->wBitsPerSample != 16 || format->nBlockAlign != format->nChannels * 2)
++            return DSERR_BADFORMAT;
++    } else if (format->wFormatTag == 0x69) {
++        uint16_t samples;
++        if (format->cbSize < 2 || format->wBitsPerSample != 4 ||
++            format->nBlockAlign != format->nChannels * 36) return DSERR_BADFORMAT;
++        /* Xbox ADPCMWAVEFORMAT appends its WORD at offset18, inside the padding
++         * of the local host WAVEFORMATEX typedef. Read its actual wire offset. */
++        memcpy(&samples, (const uint8_t *)format + 18, sizeof(samples));
++        if (samples != 64) return DSERR_BADFORMAT;
++    } else {
++        return DSERR_BADFORMAT;
++    }
++    DSoundBuffer *buf = calloc(1, sizeof(*buf));
+     if (!buf) return E_OUTOFMEMORY;
+-
+     buf->iface.lpVtbl = &g_buf_vtbl;
+     buf->ref_count = 1;
+-    buf->volume = 0;         /* Full volume (0 dB) */
+-    buf->frequency = 44100;  /* Default sample rate */
+-    buf->channels = 2;
+-    buf->bits_per_sample = 16;
+-
+-    /* Extract format from WAVEFORMATEX if provided */
+-    if (desc && desc->lpwfxFormat) {
+-        XBOX_WAVEFORMATEX *wfx = (XBOX_WAVEFORMATEX *)desc->lpwfxFormat;
+-        buf->channels = wfx->nChannels;
+-        buf->frequency = wfx->nSamplesPerSec;
+-        buf->bits_per_sample = wfx->wBitsPerSample;
+-    }
+-
+-    /* Allocate a mixer voice slot */
+-    buf->mixer_slot = apu_mixer_alloc_voice();
+-    if (buf->mixer_slot >= 0) {
+-        APUMixerVoice *v = apu_mixer_get_voice(buf->mixer_slot);
+-        if (v) {
+-            v->num_channels = buf->channels;
+-            v->sample_rate = buf->frequency;
+-        }
+-    }
+-
+-    /* Pre-allocate buffer if size specified */
+-    if (desc && desc->dwBufferBytes > 0) {
+-        buf->buffer_data = calloc(1, desc->dwBufferBytes);
+-        buf->buffer_size = desc->dwBufferBytes;
+-    }
+-
+-    static int create_log_count = 0;
+-    if (create_log_count < 30) {
+-        fprintf(stderr, "[DSOUND] CreateSoundBuffer: %u bytes, %d ch, %u Hz, %d-bit → mixer slot %d\n",
+-                desc ? desc->dwBufferBytes : 0, buf->channels, buf->frequency,
+-                buf->bits_per_sample, buf->mixer_slot);
+-        create_log_count++;
+-    }
+-
+-    *ppBuffer = &buf->iface;
++    buf->mixer_slot = -1;
++    buf->channels = format->nChannels;
++    buf->bits_per_sample = format->wBitsPerSample;
++    buf->format_tag = format->wFormatTag;
++    buf->block_align = format->nBlockAlign;
++    buf->frequency = buf->original_frequency = format->nSamplesPerSec;
++    HRESULT result = replace_data(buf, NULL, desc->dwBufferBytes, 1);
++    if (result != S_OK) { free(buf); return result; }
++    buf->next = s_buffers;
++    s_buffers = buf;
++    *output = &buf->iface;
+     return S_OK;
+ }
++static HRESULT __stdcall locked_ds_CreateSoundBuffer(IDirectSound8 *self, const DSBUFFERDESC *desc,
++    IDirectSoundBuffer8 **output, void *outer)
++{
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    HRESULT result = ds_CreateSoundBuffer(self, desc, output, outer);
++    ReleaseSRWLockExclusive(&s_buffers_lock);
++    return result;
++}
+ 
+ static HRESULT __stdcall ds_CreateSoundStream(IDirectSound8 *self, const DSSTREAMDESC *desc, IDirectSoundStream **ppStream, void *pUnkOuter)
+ {
+     (void)self; (void)desc; (void)pUnkOuter;
+-    /* Streams are more complex - stub for now */
++    /* No stream engine yet: never return success with a NULL stream. */
+     if (ppStream) *ppStream = NULL;
+-    return S_OK;
++    return E_NOTIMPL;
+ }
+ 
+ static HRESULT __stdcall ds_SetMixBinHeadroom(IDirectSound8 *self, DWORD dwMixBin, DWORD dwHeadroom)
+@@ -362,7 +580,7 @@ static const IDirectSound8Vtbl g_ds_vtbl = {
+     ds_QueryInterface,
+     ds_AddRef,
+     ds_Release,
+-    ds_CreateSoundBuffer,
++    locked_ds_CreateSoundBuffer,
+     ds_CreateSoundStream,
+     ds_SetMixBinHeadroom,
+     ds_SetPosition,
+@@ -381,6 +599,6 @@ HRESULT xbox_DirectSoundCreate(void *pGuid, IDirectSound8 **ppDS, void *pUnkOute
+     (void)pGuid; (void)pUnkOuter;
+     if (!ppDS) return E_INVALIDARG;
+     *ppDS = &g_dsound;
+-    fprintf(stderr, "Audio: DirectSound created (stub - no audio output)\n");
++    fprintf(stderr, "Audio: DirectSound PCM16/Xbox ADPCM buffers (streams/effects incomplete)\n");
+     return S_OK;
+ }
+diff --git a/src/audio/xbox_adpcm.c b/src/audio/xbox_adpcm.c
+new file mode 100644
+--- /dev/null
++++ b/src/audio/xbox_adpcm.c
+@@ -0,0 +1,56 @@
++/* Xbox IMA ADPCM, 64-frame blocks. Algorithm/framing cross-checked against
++ * vgmstream decode_xbox_ima; see docs/ADPCM.md in the native title workspace.
++ * Integer shifts preserve the reference IMA expansion's rounding. */
++#include "xbox_adpcm.h"
++
++int xbox_adpcm_decode(const uint8_t *source, size_t bytes, unsigned channels,
++                      int16_t *output, size_t output_frames)
++{
++    static const int steps[89] = {
++        7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,
++        50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,
++        230,253,279,307,337,371,408,449,494,544,598,658,724,796,
++        876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,
++        2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,
++        7845,8630,9493,10442,11487,12635,13899,15289,16818,18500,
++        20350,22385,24623,27086,29794,32767
++    };
++    static const int adjustment[8] = {-1,-1,-1,-1,2,4,6,8};
++    if ((channels != 1 && channels != 2) || !source || !output) return 0;
++    size_t block_bytes = 36u * channels;
++    if (!bytes || bytes % block_bytes || bytes / block_bytes > output_frames / 64u)
++        return 0;
++    /* Validate headers first, so malformed data cannot partly replace output. */
++    for (size_t block = 0; block < bytes; block += block_bytes)
++        for (unsigned ch = 0; ch < channels; ++ch)
++            if (source[block + ch * 4 + 2] > 88 || source[block + ch * 4 + 3])
++                return 0;
++    for (size_t block = 0; block < bytes; block += block_bytes) {
++        for (unsigned ch = 0; ch < channels; ++ch) {
++            const uint8_t *header = source + block + ch * 4;
++            int predictor = (int16_t)(header[0] | (header[1] << 8));
++            int index = header[2];
++            output[ch] = (int16_t)predictor;
++            for (unsigned frame = 1; frame < 64; ++frame) {
++                unsigned nibble = frame - 1;
++                size_t byte = block + 4 * channels + (nibble / 8) * 4 * channels
++                            + ch * 4 + (nibble % 8) / 2;
++                unsigned code = (source[byte] >> ((nibble & 1) * 4)) & 15;
++                int step = steps[index], delta = step >> 3;
++                if (code & 1) delta += step >> 2;
++                if (code & 2) delta += step >> 1;
++                if (code & 4) delta += step;
++                predictor += (code & 8) ? -delta : delta;
++                if (predictor < -32768) predictor = -32768;
++                if (predictor > 32767) predictor = 32767;
++                index += adjustment[code & 7];
++                if (index < 0) index = 0;
++                if (index > 88) index = 88;
++                output[frame * channels + ch] = (int16_t)predictor;
++            }
++        }
++        /* Last high nibble is deliberately unused: Xbox emits 64, not 65. */
++        output += 64 * channels;
++    }
++    return 1;
++}
+diff --git a/src/audio/xbox_adpcm.h b/src/audio/xbox_adpcm.h
+new file mode 100644
+--- /dev/null
++++ b/src/audio/xbox_adpcm.h
+@@ -0,0 +1,11 @@
++#ifndef XBOX_ADPCM_H
++#define XBOX_ADPCM_H
++#include <stddef.h>
++#include <stdint.h>
++/* 36 bytes per channel encode exactly 64 frames, including the predictor.
++ * Stereo stores both four-byte headers, then groups of four bytes per channel.
++ * Returns 1 on success. Rejects partial blocks, bad indices and short output;
++ * output is interleaved signed 16-bit PCM. No allocation or global state. */
++int xbox_adpcm_decode(const uint8_t *source, size_t bytes, unsigned channels,
++                      int16_t *output, size_t output_frames);
++#endif

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("name", help="Diagnostic log name, e.g. boot-08")
-    parser.add_argument("--seconds", type=int, default=25)
+    parser.add_argument("--seconds", type=int, default=10)
     parser.add_argument("--break-at", action="append", default=[])
     args = parser.parse_args()
     if Path(args.name).name != args.name or not 1 <= args.seconds <= 60:
@@ -25,7 +25,8 @@ def main():
     command += ["-o", "run", "-o", "thread backtrace all", "-o", "quit",
                 "-k", "thread backtrace all", "-k", "quit", "--",
                 str(ROOT / "build/native/wrath_native"), str(ROOT / "local/assets")]
-    env = dict(os.environ, WRATH_BOOT_TIMEOUT=str(args.seconds), RECOMP_WATCHDOG_SECS="5")
+    env = dict(os.environ, WRATH_BOOT_TIMEOUT=str(args.seconds + 5),
+               RECOMP_WATCHDOG_SECS=str(args.seconds))
     with log.open("w") as output:
         result = subprocess.run(command, cwd=ROOT, env=env, stdout=output,
                                 stderr=subprocess.STDOUT)
