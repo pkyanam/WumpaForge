@@ -3,7 +3,32 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot28, research complete and intro hold measured
+## Latest checkpoint: boot30, original copyright screen visible
+- Commit174ede7 fixes compatible comparison-state joins. Lift29 corrects actual
+  WAV parser138567 and reduces unknown flag branches70→57. Original parser now
+  reads fmt/data chunks, confirmed in boot29. Native regression tests pass.
+- Commit0a7faa5 adds bounded actual GPU diagnostics. Boot29 draw1 renders stars;
+  draw2 covers all pixels with black and near depth~0.592803. This explained the
+  black frame while the original intro was held, without changing render state.
+- Commit0a16572 connects real packet streaming. Native decode, completion,
+  pause/resume/flush/queue/lifetime tests pass (UBSan and actual producer thread).
+  Full build30 and bootstrap30 passed. Manual exclusions now90.
+- Boot30 clears original audio gate, advances animation300→347.5 at0.5/update,
+  and actual frame180 shows original copyright text over a starfield. Captured
+  and viewed local/reports/game-frame-180-boot30.png. Title/menu/gameplay not yet
+  verified. Sound output quality not heard/verified; debug run reports overloads.
+- New exact stop: unresolved original callback31E20 at34820→34C40→34CA0→79060→
+  7A310→7AB90→7AC40→7ACC0→2D950. Runtime agent audits/adds seed from original
+  emitter callback table199C1C and call34A82. Root owns next analyze/lift/build.
+- No game intentionally left running. Audio/graphics sources frozen; no pending
+  production compile. docs/research/FLAG-FALLBACK-AUDIT.md and CSV inventory57
+  remaining flag branches; some are decoded data/tail aliases, others real gaps.
+  In particular input6E130 has two mixed/back-edge joins needing faithful ZF work.
+- Goal remains active. Next: compile the evidenced callback and re-run through
+  original intro toward menu. Preserve max2 build jobs, native-only CPU and original
+  assets/control flow; later verify undisturbed sound and physical BT controllers.
+
+## Previous checkpoint: boot28, research complete and intro hold measured
 - Research completed in bcd1249; docs/research/README.md links four primary-source
   audits. Graphics implementation before the pause is86b9630. Decision: continue
   current AOT/native SDK route with targeted decomp references, no wholesale pivot.
