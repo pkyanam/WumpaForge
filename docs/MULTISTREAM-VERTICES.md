@@ -87,12 +87,18 @@ scene advances. No additional SDK exclusion addresses are required:102580,
 
 ## Story08 range diagnostics
 
-Story08 renders the chamber but first rejects v6/stream1 on a newly linked
-88-instruction program (144 indexed vertices, stream0 stride56). This differs
-from the earlier supported69-instruction shader. The existing exact zero-use
-proof currently bypasses fetches only when the secondary handle is absent; a
-stale bound buffer could therefore still reject even if its input is irrelevant.
-That is a hypothesis until the next live range/constant capture.
+Story08 renders the chamber but rejects v6/stream1 (144 indexed vertices,
+stream0 stride56). A nearby link message suggested88 instructions; the exact
+Story09 stop instead confirms the69-instruction shader. Its retained secondary
+buffer is1280 bytes with stride160; indices0..47 require7532 bytes. Captured
+c122=(0,0,0,0) makes every use of v6 an exact zero multiplication. The strict
+dead-input proof returns1 for the entire actual program and live constant bank.
+
+The same proof now runs before secondary fetches regardless of whether the
+retained handle is absent or bound. This fixes irrelevant stale-buffer rejection
+without relaxing any required fetch bounds. The proof is recomputed on every
+draw; GLSL and constant values are unchanged. Nonzero, near-zero, unsupported
+arithmetic and other live uses still require valid real data.
 
 Secondary-fetch and indexed-draw rejection messages are capped at16 each per
 process. The secondary diagnostic reports the resource handle/type/data/size,
@@ -100,4 +106,28 @@ stream and declaration offsets, stride, effective index range, required byte end
 current c122, and exact dead-input proof result. `WRATH_BREAK_STREAM_ERROR=1`
 stops at the first failed gather through `shader_error`, allowing the existing
 shader probe to capture the actual state. This diagnostic does not alter bounds,
-fetches, constants, shader code or game progression.
+constants or shader code.
+
+Validation passed in `local/reports/null-texture-smoke.log`: the GPU fixture uses
+the observed1280-byte/stride160/index47 range and confirms expected pixels at
+zero weight, strict rejection at1e-30 and1, and identical pixels after changing
+back to−0. `local/reports/story09-dead-input-gpu.log` additionally exercises the
+actual69 instructions and192 captured vectors on the native GPU. Transform
+feedback compares all29 output components for two finite synthetic v6 inputs:
+all match with captured zero weight and differ after live c122.x=1. Fixture data
+are generated from the ignored capture, not embedded in committed test code.
+
+To reproduce the captured-program component test after the combined smoke:
+
+```sh
+python3 - <<'PY'
+import json, struct
+j = json.load(open('local/reports/story-09-shader.json'))
+open('local/reports/story09-vertex-words.bin', 'wb').write(
+    struct.pack('<276I', *(w for row in j['words'] for w in row)))
+open('local/reports/story09-vertex-constants.bin', 'wb').write(
+    struct.pack('<768I', *j['vertex_constants_bits']))
+PY
+clang -std=c11 -O0 -Wall -Wextra -Werror -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 tools/tests/nv2a_vertex.c src/nv2a_vertex.c src/nv2a_vertex_input.c -L/opt/homebrew/lib -lSDL2 -lepoxy -o build/nv2a-vertex-test
+build/nv2a-vertex-test local/reports/boot14-shader-objects.bin local/reports/story09-vertex-words.bin local/reports/story09-vertex-constants.bin > local/reports/story09-dead-input-gpu.log 2>&1
+```

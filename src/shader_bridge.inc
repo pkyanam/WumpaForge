@@ -254,15 +254,16 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
         glDisableVertexAttribArray(i); glVertexAttrib4f(i,0,0,0,1);
         if (!(p->vertex.input_mask&(1u<<i))) continue;
         Nv2aVertexSlot *slot=&s_vertex_object.slots[i];
-        /* An absent stream has no universal default. Omit its fetch only if
-         * all input uses are provably annihilated by live zero constants.
+        /* A secondary stream may retain a buffer from another mesh. Omit its
+         * fetch only if all uses are annihilated by live exact zero constants,
+         * whether the retained handle is absent, in bounds or too small.
          * nv_mul explicitly returns zero even for zero times Inf/NaN. */
-        if (slot->stream && slot->stream<16 && !read32(0x10F288+12*slot->stream) &&
+        if (slot->stream && slot->stream<16 &&
             nv2a_vertex_input_is_dead(&s_vertex_object.words[0][0],s_vertex_object.instruction_count,i,s_vertex_constants)) {
             static unsigned traces;
             if (traces<16 && getenv("WRATH_TRACE_STREAMS")) {
                 ++traces;
-                fprintf(stderr,"[wrath streams] unbound input%u stream%u has only exact zero-multiply uses; fetch unnecessary\n",i,slot->stream);
+                fprintf(stderr,"[wrath streams] input%u stream%u has only exact zero-multiply uses; fetch unnecessary\n",i,slot->stream);
             }
             continue;
         }

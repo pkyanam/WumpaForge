@@ -75,6 +75,41 @@ static void test_relative(void)
     assert(!nv2a_vertex_generate(&words[0][0],7,source,sizeof(source),&info,error,sizeof(error)) && strstr(error,"ARL routed"));
     puts("PASS: GPU ARL exact floor, negative/swizzled inputs, zero/nonzero vector masks, paired old A0, relative bounds and untouched vector temporary");
 }
+static void test_captured_dead_input_gpu(const uint32_t *words,size_t count,const float captured[192][4])
+{
+    Nv2aVertexInfo info;
+    assert(nv2a_vertex_generate(words,count,source,sizeof(source),&info,error,sizeof(error)));
+    GLuint shader=compile(source),program=glCreateProgram();glAttachShader(program,shader);
+    const char *feedback[]={"gl_Position","vD0","vD1","vT0","vT1","vT2","vT3","vFog"};
+    glTransformFeedbackVaryings(program,8,feedback,GL_INTERLEAVED_ATTRIBS);
+    glLinkProgram(program);GLint ok;glGetProgramiv(program,GL_LINK_STATUS,&ok);assert(ok);glUseProgram(program);
+    glUniform4f(glGetUniformLocation(program,"u_nv2a_viewport"),0,0,640,480);
+    glUniform2f(glGetUniformLocation(program,"u_nv2a_depth"),0,16777215);
+    GLuint vao,buffer;glGenVertexArrays(1,&vao);glBindVertexArray(vao);
+    glVertexAttrib4f(0,1,2,3,1);glVertexAttrib4f(1,0,.5f,0,1);
+    glVertexAttrib4f(2,0,1,0,1);glVertexAttrib4f(3,0,0,0,1);
+    glVertexAttrib4f(4,1,1,1,1);glVertexAttrib4f(5,.25f,.5f,0,1);
+    glGenBuffers(1,&buffer);glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER,buffer);
+    glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER,29*sizeof(float),NULL,GL_STREAM_READ);
+    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER,0,buffer);
+    float constants[192][4];memcpy(constants,captured,sizeof(constants));
+    for(unsigned live=0;live<2;++live) {
+        if(live)constants[122][0]=1;
+        assert(nv2a_vertex_input_is_dead(words,count,6,constants)==!live);
+        glUniform4fv(glGetUniformLocation(program,"u_vconstants"),192,&constants[0][0]);
+        float result[2][29];
+        for(unsigned i=0;i<2;++i) {
+            glVertexAttrib4f(6,i?100:0,i?-200:0,i?300:0,1);
+            glBeginTransformFeedback(GL_POINTS);glDrawArrays(GL_POINTS,0,1);glEndTransformFeedback();
+            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER,0,sizeof(result[i]),result[i]);
+            for(unsigned j=0;j<29;++j)assert(isfinite(result[i][j]));
+        }
+        assert((memcmp(result[0],result[1],sizeof(result[0]))!=0)==live);
+    }
+    assert(glGetError()==GL_NO_ERROR);
+    glDeleteBuffers(1,&buffer);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);glDeleteShader(shader);
+    puts("PASS: captured69-instruction shader on native GPU: all29 outputs independent of v6 at captured zero weight, differ after live weight1");
+}
 static void test_dead_input_gpu(void)
 {
     uint32_t words[][4]={
@@ -245,6 +280,7 @@ int main(int argc,char **argv)
         if(argc>3) {
             float constants[192][4];
             f=fopen(argv[3],"rb"); assert(f); assert(fread(constants,sizeof(constants),1,f)==1); fclose(f);
+            test_captured_dead_input_gpu(&game[0][0],count,constants);
             assert(nv2a_vertex_input_is_dead(&game[0][0],count,6,constants));
             constants[122][0]=1e-30f;
             assert(!nv2a_vertex_input_is_dead(&game[0][0],count,6,constants));

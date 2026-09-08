@@ -63,6 +63,41 @@ static void test_multistream(void)
     assert(gather_vertex_attribute(1,4,12,3,&fetch,&gathered)==0);
     for(unsigned i=0;i<3;i++)assert(!memcmp(gathered+i*12,colors[0].color,12));free(gathered);
     stream[0]=16;call(0x102580,stream,3);assert(g_eax==(uint32_t)D3DERR_INVALIDCALL);
+    /* Story09: retained1280-byte stream1/stride160, indexed0..47. The real
+     * shader multiplies every v6 use by c122.x=0. A stale bound buffer must
+     * not reject this exact-dead input; live nonzero constants still reject. */
+    create[0]=1280;call(0x100D70,create,5);assert(g_eax==0);
+    uint32_t stale=read32(create[4]);
+    stream[0]=1;stream[1]=stale;stream[2]=160;call(0x102580,stream,3);assert(g_eax==0);
+    write32(0x10F290,0);
+    write32(object+8,3);write32(object+12,13);write32(object+0x18+6*16,0);
+    uint32_t dead_words[][4]={
+        {0,(1u<<21)|0x1b,2u<<26,(15u<<12)|(1u<<11)},
+        {0,(1u<<21)|(121u<<13)|0x1b,3u<<26,15u<<24},
+        {0,(4u<<21)|(122u<<13)|(6u<<9),(3u<<26)|(0x1bu<<17)|(2u<<11)|(0x1bu<<2),
+            (1u<<28)|(15u<<12)|(1u<<11)|(3u<<3)|1}
+    };
+    write32(object+0x114,(12u<<18)|0xB00);memcpy(guest_ptr(object+0x118),dead_words,sizeof(dead_words));
+    write32(object+0x148,0);call(0x102940,shader,1);assert(g_eax==0);
+    const float baseline[4]={.25f,.5f,.75f,1};memcpy(s_vertex_constants[121],baseline,sizeof(baseline));
+    memset(s_vertex_constants[122],0,sizeof(s_vertex_constants[122]));
+    const uint16_t stale_indices[]={0,47,1};
+    struct VertexFetch stale_fetch={.indices=(const uint8_t *)stale_indices};
+    assert(gather_vertex_attribute(1,0,12,3,&stale_fetch,&gathered)==D3DERR_INVALIDCALL);
+    call(0x100EA0,clear,6);
+    assert(draw_vertices_data_fetch(5,3,positions+1,16,&stale_fetch)==0);
+    glReadPixels(60,240-50,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+    assert(pixel[0]==64 && pixel[1]==128 && pixel[2]==191);
+    s_vertex_constants[122][0]=1e-30f;
+    assert(draw_vertices_data_fetch(5,3,positions+1,16,&stale_fetch)==D3DERR_INVALIDCALL);
+    s_vertex_constants[122][0]=1;
+    assert(draw_vertices_data_fetch(5,3,positions+1,16,&stale_fetch)==D3DERR_INVALIDCALL);
+    s_vertex_constants[122][0]=-0.0f;
+    assert(draw_vertices_data_fetch(5,3,positions+1,16,&stale_fetch)==0);
+    glReadPixels(60,240-50,1,1,GL_RGBA,GL_UNSIGNED_BYTE,other);assert(!memcmp(pixel,other,4));
+    uint32_t stale_release[]={stale};call(0x103AD0,stale_release,1);
+    stream[1]=secondary;stream[2]=0;call(0x102580,stream,3);assert(!resource(stale));
+    puts("PASS: retained1280-byte/stride160 stream with index47, exactzero GPU output and live nonzero/nearzero bounds rejection");
     /* One resource bound twice survives unbinding either stream. */
     stream[0]=2;stream[2]=20;call(0x102580,stream,3);assert(g_eax==0 && resource(secondary)->bindings==2);
     uint32_t release[]={secondary};call(0x103AD0,release,1);assert(resource(secondary));
