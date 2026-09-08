@@ -62,8 +62,8 @@ static HRESULT draw_indexed_vertices(uint32_t type,uint32_t count,uint32_t indic
         return D3DERR_INVALIDCALL;
     /* The API accepts a literal CPU pointer, even with no index buffer bound.
      * If it points into a known resource, also enforce that resource's extent. */
-    for (unsigned i=0;i<RESOURCE_LIMIT;++i) {
-        struct Resource *r=&s_resources[i];
+    for (unsigned i=0;i<resource_capacity();++i) {
+        struct Resource *r=resource_at(i);
         if (r->handle && r->type==RESOURCE_INDEX_BUFFER && indices>=r->data &&
             (uint64_t)indices<=(uint64_t)r->data+r->bytes &&
             (uint64_t)indices+(uint64_t)count*2>(uint64_t)r->data+r->bytes)

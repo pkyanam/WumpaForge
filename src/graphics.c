@@ -635,7 +635,12 @@ void sub_00100C40(void)
  * serialized into the 12/20-byte Xbox resource headers. */
 extern uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment);
 extern void xbox_HeapFree(uint32_t address);
-#define RESOURCE_LIMIT 1024
+#define RESOURCE_PAGE_SLOTS 256u
+#ifdef WRATH_GRAPHICS_SMOKE_TEST
+#define RESOURCE_MAX_PAGES 8u /* Exercise bounded exhaustion in the smoke test. */
+#else
+#define RESOURCE_MAX_PAGES 128u
+#endif
 #define RESOURCE_TEXTURE 1
 #define RESOURCE_VERTEX_BUFFER 2
 #define RESOURCE_SURFACE 3
@@ -643,7 +648,7 @@ extern void xbox_HeapFree(uint32_t address);
 #define RESOURCE_CUBE_TEXTURE 5
 #define RESOURCE_PALETTE 6
 #define RESOURCE_INDEX_BUFFER 7
-static struct Resource {
+struct Resource {
     uint32_t handle, data, bytes, width, height, levels, format, pitch, owner;
     uint32_t offsets[13], pitches[13], sizes[13];
     unsigned type, references, bindings;
@@ -661,7 +666,19 @@ static struct Resource {
     uint64_t upload_serial;
     IDirect3DTexture8 *texture;
     IDirect3DVertexBuffer8 *vertex_buffer;
-} s_resources[RESOURCE_LIMIT];
+};
+/* arg() holds the device lock through finish(). Pages never move or disappear:
+ * e.g. GetCubeMapSurface retains its parent pointer while allocating a child. */
+static struct Resource *s_resource_pages[RESOURCE_MAX_PAGES];
+static unsigned s_resource_page_count;
+static unsigned resource_capacity(void)
+{
+    return s_resource_page_count * RESOURCE_PAGE_SLOTS;
+}
+static struct Resource *resource_at(unsigned index)
+{
+    return &s_resource_pages[index / RESOURCE_PAGE_SLOTS][index % RESOURCE_PAGE_SLOTS];
+}
 static uint32_t s_texture_handles[4], s_stream_handle, s_stream_stride, s_fvf;
 static uint32_t s_palette_handles[4];
 static uint64_t s_palette_revision;
@@ -689,15 +706,45 @@ static const uint8_t *texture_snapshot_capture(struct Resource *r)
 
 static struct Resource *resource(uint32_t handle)
 {
-    for (unsigned i = 0; i < RESOURCE_LIMIT; ++i)
-        if (s_resources[i].handle == handle && handle) return &s_resources[i];
+    if (!handle) return NULL;
+    for (unsigned i = 0; i < resource_capacity(); ++i) {
+        struct Resource *r = resource_at(i);
+        if (r->handle == handle) return r;
+    }
     return NULL;
+}
+static void diagnose_resource_exhaustion(const char *reason)
+{
+    static unsigned reports;
+    if (reports++ >= 8) return;
+    unsigned live = 0, types[8] = {0};
+    uint64_t references = 0, bindings = 0, bytes = 0;
+    for (unsigned i = 0; i < resource_capacity(); ++i) {
+        const struct Resource *r = resource_at(i);
+        if (!r->handle) continue;
+        ++live; ++types[r->type < 8 ? r->type : 0];
+        references += r->references; bindings += r->bindings; bytes += r->bytes;
+    }
+    fprintf(stderr,"[wrath graphics] resource allocation failed: %s live=%u capacity=%u max=%u metadata_bytes=%zu texture=%u vertex=%u surface=%u depth=%u cube=%u palette=%u index=%u other=%u refs=%llu bindings=%llu described_guest_bytes=%llu\n",
+            reason, live, resource_capacity(), RESOURCE_PAGE_SLOTS * RESOURCE_MAX_PAGES,
+            (size_t)resource_capacity() * sizeof(struct Resource), types[1], types[2],
+            types[3], types[4], types[5], types[6], types[7], types[0],
+            (unsigned long long)references, (unsigned long long)bindings,
+            (unsigned long long)bytes);
 }
 static struct Resource *new_resource(void)
 {
-    for (unsigned i = 0; i < RESOURCE_LIMIT; ++i)
-        if (!s_resources[i].handle) return &s_resources[i];
-    return NULL;
+    for (unsigned i = 0; i < resource_capacity(); ++i) {
+        struct Resource *r = resource_at(i);
+        if (!r->handle) return r;
+    }
+    if (s_resource_page_count == RESOURCE_MAX_PAGES) {
+        diagnose_resource_exhaustion("page-limit"); return NULL;
+    }
+    struct Resource *page = calloc(RESOURCE_PAGE_SLOTS, sizeof(*page));
+    if (!page) { diagnose_resource_exhaustion("host-allocation"); return NULL; }
+    s_resource_pages[s_resource_page_count++] = page;
+    return page;
 }
 static void update_common(struct Resource *r)
 {
@@ -1063,7 +1110,8 @@ void sub_000FE9C0(void) /* CreateTexture(w,h,levels,usage,format,pool,out), ret2
     uint32_t width = arg(0), height = arg(1), levels = arg(2), format = arg(4), output = arg(6);
     int linear, bpp = format_info(format, &linear);
     struct Resource *r = new_resource();
-    if (!s_device || !graphics_thread() || !output || !r || bpp < 0 || !width || !height ||
+    if (!r) { if (output) write32(output, 0); finish(28, 0x8007000Eu); return; }
+    if (!s_device || !graphics_thread() || !output || bpp < 0 || !width || !height ||
         width > 4096 || height > 4096 || (!linear && ((width & (width - 1)) || (height & (height - 1))))) {
         fprintf(stderr, "[wrath graphics] unsupported texture %ux%u format 0x%X\n", width, height, format);
         finish(28, (uint32_t)D3DERR_INVALIDCALL); return;
@@ -1817,6 +1865,7 @@ static void test_state(uint32_t method, uint32_t value)
     assert(g_eax==0);
 }
 #include "../tools/test_index_bridge.inc"
+#include "../tools/test_resource_pages.inc"
 #include "../tools/test_immediate_bridge.inc"
 
 static void test_cube_resources(void)
@@ -2368,6 +2417,7 @@ int main(void)
     test_shader_bridge();
     test_mixed_shader_bridge();
     test_viewport_constants();
+    test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();
     SDL_Quit();
