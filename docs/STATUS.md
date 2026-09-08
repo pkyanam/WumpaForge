@@ -3,49 +3,46 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot22, virtual releases were leaking guest heap
-- Correct original Universal splash and fade verified from actual GPU capture.
-  **No Crash title/menu, 3D scene, or gameplay pixels verified.** Frame40 has not
-  been captured. Original XBE CPU code is ahead-of-time compiled ARM64.
-- Native CGL thread handoff and paced presentation pass component tests and actual
-  game loading worker2BF30. Main/worker graphics calls are serialized; Cocoa/SDL
-  event handling remains on the main thread. See D3D integration documentation.
-- Main guest stack now follows the actual64KiB XBE request with256KiB minimum;
-  timer stacks are separate lazy allocations. Heap53.875MiB preserves retail64MiB
-  and physical aliases. Memory milestone committedec13329, prior graphics2cb2142.
-- Boot22 passes boot21 indexed GPU pushbuffer stall and P8 texture rejections.
-  INDEX16 native draw expansion uses literal index pointers plus base vertex;
-  palette resources and P8 Morton/mip expansion support distinct stage palettes.
-  Native combined GPU smoke passes, including real indexed geometry readback and
-  palette colors/alpha/mips/cache/lifetimes. Evidence transcript:
-  `local/reports/graphics-palette-smoke.log`; docs/INDEXED-DRAWS.md gives exact ABI.
-- Boot22 then fails another heap allocation, first81396 bytes with56453920 used
-  of56492032. Main later crashes through FBE99/EEE8F/EDD33 after repeated failures;
-  loading worker is sleeping normally after native draw. First OOM heap dump:
- 1350 live records totaling56371699 bytes,0 free records (`boot22-heap-blocks.bin`).
-- Root discovered a real leak: bridge_NtFreeVirtualMemory passed guest32-bit field
-  pointers to host64-bit APIs. Host MEM_RELEASE(size0) returns success without
-  freeing any guest heap block and overwrites adjacent guest bytes. Breakpoint
-  confirms actual MEM_RELEASE from game intro cleanup throughF0D65/F160C/F4F49/
-  9E3F0/3CFE0/AA5A0/AAEF0/87BF0 (`boot-22-vmfree.log`).
-- Root replaced that bridge with checked guest heap release and exactDWORD outputs;
-  bounded decommit zeroes discarded pages while retaining reservation under the
-  existing commit model. Focused virtual_free_bridge.c test passes output canaries,
-  ownership errors, release and decommit bounds. mac_runtime added best-fit heap
-  splitting, aligned prefix/suffix reuse, compact coalescing and tail rewind;
-  fragmentation, record-capacity and existing worker/stack tests pass.
-- mac_runtime is refreshing cumulative runtime.patch to include both changes.
-  Root will build23 and run the next bounded actual game launch; do not claim
-  these component results prove menu completion. No game/debugger intentionally
-  left running after the boot22 diagnostic captures.
+## Latest checkpoint: boot24, loading done but thread exit status stays active
+- Native ARM64 original XBE startup displays the Universal splash/fade, then a
+  green loading object. Actual GPU frame40 captured and viewed:
+  `local/reports/game-frame-40-boot23.png`. No verified Crash title/menu/gameplay
+  yet; visual correctness beyond the initial splash still needs assessment.
+- Indexed draws and P8 palette textures implemented and GPU-tested; milestone
+  df0f086. Per-stage palettes, mip decode, vertex base/index pointers, texture and
+  buffer lifetimes are tested. Programmable vertex/pixel shaders and native CGL
+  worker handoff are integrated. See D3D/INDEXED-DRAWS/shader docs.
+- Real virtual-memory release leak fixed, with guestDWORD output canaries; heap
+  allocator now splits and coalesces ranges. Commit6afd888. Boot23 uses roughly
+ 36.7MiB of53.875MiB during loading and passes prior OOM. Retail64MiB/aliases stay
+  unchanged. Main stack256KiB follows64KiB XBE request, timer stacks independent.
+- Two original callbacks2B880/2B950 were missing from discovery. Both registered
+  in2BBD0 via79B00/79AF0, stored23B87C/23B874, called79CE0/797F4. Seeds carry exact
+  entry/registration evidence. Root analyzed/lifted/built and boot24 executes them.
+- Boot24 completes asset loading and logs PsTerminateSystemThread status0 for the
+  loading worker. Main then loops2C210..2C228 in GetExitCodeThreadECB2B comparing
+  output against259, despite worker exit. Latest kernel call ordinal246 is
+  ObReferenceObjectByHandle. This is the verified next boundary, not incomplete
+  asset loading. Exact all-thread snapshot: `local/reports/boot-24.log`.
+- mac_runtime agent owns thread object/exit status fix, including exact ECB2B
+  ETHREAD fields and native worker status/lifetime. Root owns next build/boot and
+  integration. No game/debugger left running after boot24. Native audio agent and
+  controller agent are idle; reuse only for a concrete disjoint task.
+- A prior boot23 stayed on a guest CS longer than another same-binary run. Read-only
+  lock audit found no demonstrated lock-order cycle and original worker sleeps16ms
+  after outer release. Do not change mutex policy without evidence. If it recurs,
+  inspect shadow depth immediately after guest2BFF4 leave/before2BFF8 Sleep.
+  The diagnostic cs->OwningThread field is unset in POSIX and misleading; use the
+  shadow slot owner/depth. Boot24 has balanced enter/leave counters after worker exit.
+- tools/boot.py now stops at the watchdog report before process exit, preserving
+  all native thread stacks on loading stalls. It retains crash -k backtraces.
 - Explicit graphics gaps include mixed fixed/programmed shader pairs, advanced
   dependent texture modes, fog parameters, volume textures, packed attributes,
-  stream>0 and fixed-pipeline P8 at stages1..3 (diagnostic). Programmable P8 stages
-  are implemented. Preserve graphics.patch d3d CMake OpenGL framework linkage.
-- Audio backend/SDK bridge have isolated tests, but audio bridge is unlinked;
-  no in-game audio verified. SDL controller bridge virtual tests pass; physical
-  Xbox/DualSense Bluetooth input remains untested. App bundle is stale; package
-  current binary with tools/package.py when ready. Assets/ISO stay ignored.
+  stream>0 and fixed P8 stages1..3. Programmable P8 stages are implemented.
+- Audio bridge is still unlinked despite isolated native backend/SDK tests; no
+  in-game audio verified. SDL controller bridge virtual tests pass, physical
+  Xbox/DualSense Bluetooth input untested. App bundle stale; package when ready.
+  Original ISO/assets/generated outputs remain ignored; max2 build jobs.
 
 The older numbered checkpoints below are historical; this section is current.
 

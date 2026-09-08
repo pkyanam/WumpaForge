@@ -38,6 +38,14 @@ compilable console binary with a working native game.
   authorized. Verify that game CPU instructions execute as compiled ARM64 code.
 - Do not publish assets or contact others without user authorization.
 
+## Guest ABI and memory conventions
+- Guest pointer/size fields remain DWORDs on arm64. Read and write them explicitly;
+  never pass their addresses to host APIs expecting pointer-sized output fields.
+- Guest virtual releases return exact owned blocks through xbox_HeapFreeChecked.
+  Preserve tested heap splitting/coalescing and image-derived stack sizing.
+- Keep actual callback registration evidence with extra AOT function seeds.
+  Unresolved code must be compiled or implemented faithfully, never silently skipped.
+
 ## Native graphics conventions
 - The original game renders its loading screen from worker2BF30. Serialize native
   graphics/resource access across game threads; do not reinstate a blanket main

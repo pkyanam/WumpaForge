@@ -413,3 +413,30 @@ function discovery. No memory or alias expansion was necessary.
 clang -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,-dead_strip -Ithird_party/xboxrecomp/src tools/tests/virtual_free_bridge.c -o build/virtual-free-bridge-test
 build/virtual-free-bridge-test
 ```
+
+## Boot23: registered asset callback missing from AOT discovery
+
+After correcting virtual releases and heap reuse, the parent observed boot23
+asset loading reach a heap frontier around36.7 million bytes within53.875 MiB,
+without the previous OOM. The next actual abort was an unresolved compiled call
+to0x2B880 on the main thread (`local/reports/boot-23-stall.log`). This address is
+an original cdecl callback, not a substitute for another target:
+
+- Game initialization sub_2BBD0 pushes0x2B880 at0x2BBDA and calls0x79B00 at0x2BBDF.
+- The setter stores that exact address to global0x23B87C at0x79B04.
+- sub_79CB0 loads the global at0x79CD6, pushes its object argument at0x79CDF,
+  calls EAX at0x79CE0, and cleans the argument at0x79CE2.
+- The entry follows the previous function's RET at0x2B87E and one alignment NOP.
+  It reserves eight local bytes, reads the stack argument and iterates object
+  records; its balanced epilogue returns at0x2B943.
+
+The exact entry was added to `config/seed-functions.json`. Evidence comes from
+original XBE disassembly in `local/reports/disasm/asm/text.asm`. The parent owns
+analysis, lifting and the rebuilt game check; no runtime dispatch alias is used.
+
+The same registration routine installs another independent callback0x2B950:
+PUSH at0x2BBE4, setter0x79AF0, global0x23B874, indirect call at0x797F4 with five
+cdecl stack arguments. It follows RET0x2B943 plus alignment NOPs and returns at
+0x2BB3F after restoring its0x98-byte local frame. This adjacent entry is also
+absent from the current function inventory. With parent coordination, it was
+also added to the seed list before the next analysis/build.

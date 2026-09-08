@@ -1,5 +1,13 @@
 [
   {
+    "start": "0x0002B880",
+    "evidence": "Original callback registered by sub_0002BBD0: PUSH 0x2B880 at 0x2BBDA, CALL 0x79B00 at 0x2BBDF; setter stores the address at global 0x23B87C. sub_00079CB0 loads that global at 0x79CD6 and calls EAX at 0x79CE0 with one cdecl object argument. Independent entry follows RET at 0x2B87E and one alignment NOP; balanced local frame returns at 0x2B943. Boot23 main thread aborts on unresolved compiled call 0x2B880 after asset loading."
+  },
+  {
+    "start": "0x0002B950",
+    "evidence": "Original callback registered alongside 0x2B880 in sub_0002BBD0: PUSH 0x2B950 at 0x2BBE4, CALL setter 0x79AF0 at 0x2BBE9, storing global 0x23B874 at 0x79AF4. Original indirect call [0x23B874] at 0x797F4 passes five cdecl stack arguments and cleans 0x14 bytes at 0x797FE. Independent entry follows RET 0x2B943 and alignment NOPs; reserves 0x98 local bytes and returns through balanced epilogue at 0x2BB3F."
+  },
+  {
     "start": "0x0002BF30",
     "evidence": "Worker entry pushed at 0x2C03C into CreateThread (0xECC6A) by sub_0002C020. Boot18 PsCreateSystemThreadEx #2 passes it as ctx1 to XAPI thread trampoline0xECBD2, then aborts on missing AOT dispatch. Prior function RET at0x2BF2A followed by five alignment NOPs; entry saves EBX/EBP/ESI/EDI and loops until stop flag0x1BAA90, then calls ExitThread0xECB19."
   },

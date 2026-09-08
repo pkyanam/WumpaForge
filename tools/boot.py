@@ -19,6 +19,13 @@ def main():
     reports.mkdir(parents=True, exist_ok=True)
     log = reports / f"{args.name}.log"
     command = ["lldb", "--batch", "-o", "breakpoint set -n bridge_HalReturnToFirmware"]
+    # Stop after the watchdog sleep, before it exits the process. A live loading
+    # stall needs all native thread stacks; an exit alone loses that evidence.
+    watchdog_source = ROOT / "third_party/xboxrecomp/src/kernel/xbox_memory_layout.c"
+    for line_number, line in enumerate(watchdog_source.read_text().splitlines(), 1):
+        if 'fprintf(stderr, "[WATCHDOG]' in line:
+            command += ["-o", f"breakpoint set -f xbox_memory_layout.c -l {line_number}"]
+            break
     for symbol in args.break_at:
         command += ["-o", f"breakpoint set -n {symbol}"]
     # LLDB's -o commands stop after a crash; -k is required for that backtrace.
