@@ -54,5 +54,9 @@
   {
     "start": "0x0005DA30",
     "evidence": "Audio worker entry pushed by sub_000B99D0 for CreateThread; prior function ends in RET8 at 0x5DA24, followed by alignment NOPs."
+  },
+  {
+    "start": "0x00086BC0",
+    "evidence": "Boot46 unresolved actual thread entry: original87962 pushes86BC0 into CreateThread ECC6A at87969, observed ECBD2 worker ctx1=86BC0. Independent aligned entry follows RET86BBA and five NOPs. Saves ESI/EDI, reads sole parameter atESP+0C after two pushes, calls86A60, updates under original critical section4EA440, waits on23C460 with16ms sleeps, and calls thread-exit ECB19 at86C2A. No interpreter or fabricated callback; AOT compile original body."
   }
 ]

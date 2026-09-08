@@ -90,6 +90,41 @@ def dump(debugger, destination):
     filename = process.ReadMemory(base + 0x561740, 256, error)
     if error.Success():
         out["game_state"]["level_filename"] = filename.split(b"\0", 1)[0].decode("utf-8", "replace")
+    # Read allocated native metadata pages in bulk; no getter or game code runs.
+    pages = target.FindFirstGlobalVariable("s_resource_pages")
+    page_count = target.FindFirstGlobalVariable("s_resource_page_count")
+    if pages.IsValid() and page_count.IsValid():
+        count = page_count.GetValueAsUnsigned()
+        summary = {"allocated_pages": count, "capacity": count * 256,
+                   "live": 0, "by_type": {}, "guest_bytes": 0}
+        if count <= pages.GetNumChildren():
+            for i in range(count):
+                pointer = pages.GetChildAtIndex(i)
+                kind = pointer.GetType().GetPointeeType()
+                size = kind.GetByteSize()
+                offsets = {kind.GetFieldAtIndex(j).GetName():
+                           kind.GetFieldAtIndex(j).GetOffsetInBytes()
+                           for j in range(kind.GetNumberOfFields())}
+                required = ("handle", "type", "bytes", "references", "bindings")
+                if not size or not all(k in offsets for k in required):
+                    summary["error"] = "Resource debug layout unavailable"
+                    break
+                data = process.ReadMemory(pointer.GetValueAsUnsigned(), size * 256, error)
+                if error.Fail():
+                    summary["error"] = error.GetCString()
+                    break
+                for slot in range(256):
+                    fields = {k: int.from_bytes(data[slot*size+offsets[k]:
+                                                      slot*size+offsets[k]+4], "little")
+                              for k in required}
+                    if fields["handle"]:
+                        summary["live"] += 1
+                        summary["guest_bytes"] += fields["bytes"]
+                        name = str(fields["type"])
+                        summary["by_type"][name] = summary["by_type"].get(name, 0) + 1
+        else:
+            summary["error"] = "Invalid resource page count"
+        out["native_resources"] = summary
     # At shader_error, walk back to the real native draw, without evaluating game
     # functions. Optimized-away parameters are explicitly unavailable.
     for frame in process.GetSelectedThread():
