@@ -85,5 +85,7 @@ clang -std=c11 -O1 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-fiel
 build/input/test_viewport_constants > local/reports/viewport-constants-smoke.log 2>&1
 ```
 
-Exit0. This component result establishes projection and update behavior; parent
-owns the next actual logo captures and shared graphics.c integration commit.
+Exit0. Build43 also passes. Actual native framebuffer captures from boot43
+visibly verify both Traveller's Tales (frame900) and the Crash title with NEW GAME /
+LOAD GAME (frame1800). Images are under local/reports/boot43-frames. Gameplay and
+other shader paths remain unverified.

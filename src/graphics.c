@@ -49,6 +49,7 @@ static UINT s_width, s_height, s_target_width, s_target_height;
 static int s_depth_available;
 static HRESULT initialize_depth_surface(uint32_t format);
 static void initialize_render_defaults(void);
+static void update_viewport_constants(void);
 static D3DVIEWPORT8 s_viewport;
 
 static void *guest_ptr(uint32_t address)
@@ -163,6 +164,14 @@ void sub_000FD6E0(void)
     write32(0x10C550, 1);
     write32(GUEST_SWAP_COUNT, 0);
     memcpy(guest_ptr(GUEST_VIEWPORT), &s_viewport, sizeof(s_viewport));
+    /* Single-sample native targets use the retail unit raster scale. Viewport
+     * methods alias physical shader constants58/59; initialize their inputs. */
+    const float depth_scale=16777215.0f, raster_scale[2]={1.0f,1.0f};
+    const float screen_offset[2]={0.53125f,0.53125f}; /* 1001D0 + XBE10B000. */
+    memcpy(guest_ptr(GUEST_DEVICE+0x450),&depth_scale,sizeof(depth_scale));
+    memcpy(guest_ptr(GUEST_DEVICE+0x458),raster_scale,sizeof(raster_scale));
+    memcpy(guest_ptr(GUEST_DEVICE+0x9E8),screen_offset,sizeof(screen_offset));
+    update_viewport_constants();
     /* Retail SetTransform FEA20 writes ten row-major matrices at device+750.
      * The original CreateDevice initializes these to identity. */
     for (unsigned transform=0; transform<10; ++transform)
@@ -428,6 +437,7 @@ void sub_000FF860(void)
         s_viewport = vp;
         glViewport(vp.X, s_target_height - vp.Y - vp.Height, vp.Width, vp.Height);
         memcpy(guest_ptr(GUEST_VIEWPORT), &vp, sizeof(vp));
+        update_viewport_constants();
     }
     finish(4, (uint32_t)result);
 }
@@ -517,29 +527,50 @@ void sub_00100EA0(void)
 }
 
 
-/* Opt-in diagnostic: save the real native backbuffer immediately before its
- * requested one-based presentation. This does not inject any game pixels. */
+/* Opt-in diagnostic: save real native backbuffers at selected presentations.
+ * At most16 captures per run; this never injects game pixels. */
 static void capture_frame(uint32_t frame)
 {
-    static int configured, attempted;
-    static uint32_t requested;
-    static const char *path;
+    static int configured;
+    static uint32_t requested[16], attempted;
+    static unsigned count;
+    static const char *single_path, *directory;
     if (!configured) {
         configured=1;
         const char *number=getenv("WRATH_CAPTURE_FRAME");
-        path=getenv("WRATH_CAPTURE_PATH");
-        if (number || path) {
+        const char *numbers=getenv("WRATH_CAPTURE_FRAMES");
+        single_path=getenv("WRATH_CAPTURE_PATH");
+        directory=getenv("WRATH_CAPTURE_DIRECTORY");
+        if (numbers || directory) {
+            if (number || single_path || !numbers || !*numbers || !directory || directory[0]!='/') goto invalid_capture;
+            while (*numbers) {
+                char *end=NULL;
+                unsigned long value=strtoul(numbers,&end,10);
+                if (count==16 || end==numbers || !value || value>UINT32_MAX ||
+                    (*end && *end!=',') || (*end==',' && !end[1])) goto invalid_capture;
+                for (unsigned i=0;i<count;++i) if (requested[i]==value) goto invalid_capture;
+                requested[count++]=(uint32_t)value;
+                numbers=*end?end+1:end;
+            }
+        } else if (number || single_path) {
             char *end=NULL;
             unsigned long value=number?strtoul(number,&end,10):0;
-            if (!number || !*number || !end || *end || !value || value>UINT32_MAX || !path || path[0]!='/') {
-                fprintf(stderr,"[wrath graphics] capture requires positive WRATH_CAPTURE_FRAME and absolute WRATH_CAPTURE_PATH\n");
-                return;
-            }
-            requested=(uint32_t)value;
+            if (!number || !*number || !end || *end || !value || value>UINT32_MAX || !single_path || single_path[0]!='/') goto invalid_capture;
+            requested[count++]=(uint32_t)value;
         }
     }
-    if (!requested || attempted || frame!=requested) return;
-    attempted=1;
+    unsigned selected;
+    for (selected=0;selected<count;++selected)
+        if (frame==requested[selected] && !(attempted&(1u<<selected))) break;
+    if (selected==count) return;
+    attempted|=1u<<selected;
+    char generated_path[4096];
+    const char *path=single_path;
+    if (directory) {
+        int n=snprintf(generated_path,sizeof(generated_path),"%s/frame-%06u.bmp",directory,frame);
+        if (n<0 || (size_t)n>=sizeof(generated_path)) goto invalid_capture;
+        path=generated_path;
+    }
     size_t pitch=(size_t)s_width*4, bytes=pitch*s_height;
     uint8_t *pixels=malloc(bytes), *row=malloc(pitch);
     if (!pixels || !row) {
@@ -569,6 +600,10 @@ static void capture_frame(uint32_t frame)
         fprintf(stderr,"[wrath graphics] captured actual frame%u %ux%u to %s\n",frame,s_width,s_height,path);
     if (surface) SDL_FreeSurface(surface);
     free(row); free(pixels);
+    return;
+invalid_capture:
+    count=0;
+    fprintf(stderr,"[wrath graphics] capture requires FRAME+absolute PATH or up to16 comma-separated FRAMES+absolute DIRECTORY\n");
 }
 
 /* DWORD WINAPI Swap(flags): return observed swap count, not HRESULT. */
@@ -1441,6 +1476,7 @@ void sub_000FEF20(void) /* SetRenderTarget(color,depth), ret8. NULL color keeps 
     s_device->lpVtbl->SetViewport(s_device,&s_viewport);
     glViewport(0,0,r->width,r->height);
     memcpy(guest_ptr(GUEST_VIEWPORT),&s_viewport,sizeof(s_viewport));
+    update_viewport_constants();
     finish(8,0);
 }
 
@@ -1982,6 +2018,7 @@ static void test_shader_bridge(void)
     assert(!resource(texture));assert(glGetError()==GL_NO_ERROR);
 }
 #include "../tools/test_mixed_shader_bridge.inc"
+#include "../tools/test_viewport_constants.inc"
 #include "../tools/test_texture_snapshot.inc"
 
 int main(void)
@@ -2313,6 +2350,7 @@ int main(void)
     test_immediate_bridge();
     test_shader_bridge();
     test_mixed_shader_bridge();
+    test_viewport_constants();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();
     SDL_Quit();

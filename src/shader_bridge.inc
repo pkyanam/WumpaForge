@@ -11,6 +11,28 @@ static Nv2aPixelDef s_pixel_definition;
 static float s_vertex_constants[192][4];
 static uint32_t s_pixel_constants[16];
 static float s_pixel_eye_vector[3];
+static float viewport_depth_scale(void)
+{
+    float scale; memcpy(&scale,guest_ptr(GUEST_DEVICE+0x450),sizeof(scale)); return scale;
+}
+static void update_viewport_constants(void)
+{
+    /* Original FE2B0 emits NV097 0xAF0/0xA20. These methods write the same
+     * hardware bank as shader c58/c59, independently of the SDK CPU cache. */
+    float raster[2],bias[2];
+    memcpy(raster,guest_ptr(GUEST_DEVICE+0x458),sizeof(raster));
+    memcpy(bias,guest_ptr(GUEST_DEVICE+0x9E8),sizeof(bias));
+    if ((read32(GUEST_DEVICE+8)&0x8000) && read32(0x10F02C)) {
+        bias[0]-=0.5f; bias[1]-=0.5f;
+    }
+    float *scale=s_vertex_constants[58],*offset=s_vertex_constants[59];
+    scale[0]=s_viewport.Width*raster[0]*0.5f;
+    scale[1]=s_viewport.Height*raster[1]*-0.5f;
+    scale[2]=(s_viewport.MaxZ-s_viewport.MinZ)*viewport_depth_scale(); scale[3]=0;
+    offset[0]=s_viewport.X*raster[0]+bias[0]+scale[0];
+    offset[1]=s_viewport.Y*raster[1]+bias[1]-scale[1];
+    offset[2]=s_viewport.MinZ*viewport_depth_scale(); offset[3]=0;
+}
 static int shader_range(uint32_t address, size_t size)
 {
     return address >= 0x1000 && address < 0x4000000 && size <= 0x4000000-address;
@@ -37,6 +59,7 @@ static void shader_set_vertex(uint32_t handle)
     write32(GUEST_DEVICE+0x380,object); write32(GUEST_DEVICE+0x384,handle);
     write32(GUEST_DEVICE+0x388,0);
     write32(0x10EC10,read32(0x10EC10)|0x1670);
+    update_viewport_constants(); /* Original SetVertexShader ->102670->FE2B0. */
 }
 void sub_00102AA0(void) /* SetVertexShaderConstant(signedIndex,data,vectorCount), ret12. */
 {
@@ -242,7 +265,7 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
     glUseProgram(p->program);
     glUniform4fv(glGetUniformLocation(p->program,"u_vconstants"),192,&s_vertex_constants[0][0]);
     glUniform4f(glGetUniformLocation(p->program,"u_nv2a_viewport"),s_viewport.X,s_viewport.Y,s_viewport.Width,s_viewport.Height);
-    glUniform2f(glGetUniformLocation(p->program,"u_nv2a_depth"),s_viewport.MinZ*16777215.0f,s_viewport.MaxZ*16777215.0f);
+    glUniform2f(glGetUniformLocation(p->program,"u_nv2a_depth"),s_viewport.MinZ*viewport_depth_scale(),s_viewport.MaxZ*viewport_depth_scale());
     float colors[18][4];
     for (unsigned i=0;i<8;++i) { shader_rgba(pixel.constant0[i],colors[i*2]); shader_rgba(pixel.constant1[i],colors[i*2+1]); }
     shader_rgba(pixel.final_constant0,colors[16]); shader_rgba(pixel.final_constant1,colors[17]);
@@ -281,7 +304,11 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
     }
     glActiveTexture(GL_TEXTURE0);
     xbox_D3D8GLApplyRenderStates();
+    extern uint64_t xbox_D3D8GLProfileDrawBegin(void);
+    extern void xbox_D3D8GLProfileDrawEnd(uint64_t);
+    uint64_t profile_draw=xbox_D3D8GLProfileDrawBegin();
     glDrawArrays(primitive,0,count);
+    xbox_D3D8GLProfileDrawEnd(profile_draw);
     for (unsigned i=0;i<4;++i) glBindSampler(i,previous_samplers[i]);
     GLenum error=glGetError(); if(error) { char msg[40];snprintf(msg,sizeof(msg),"GL error0x%X",error);shader_error("draw",msg); }
     return 0;

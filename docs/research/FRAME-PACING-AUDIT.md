@@ -140,3 +140,40 @@ without GL or guest code. It reported exactly60.00fps,16.667ms interval,
 binds, matching its independent synthetic clock schedule. Logs:
 `local/reports/graphics-profile-smoke.log`, `local/reports/frame-profile-unit.log`.
 No full game build or launch was run by this subtask.
+
+## Context and draw submission timing extension
+
+After boot41 reduced texture upload costs, slow windows still spent about24ms in
+inter-present wall work but only10ms of current-thread CPU. The next opt-in
+extension adds `[wrath context profile]` at the same60-present boundary. Counts
+are total outer context acquisitions/releases and GL draws in that window;
+duration fields are average milliseconds **per presented frame**, not per call.
+It separately measures waiting for the shared mutex, CGLLockContext,
+CGLSetCurrentContext binding, clearing the context, CGLUnlockContext, and mutex
+unlock. Recursive acquisitions do not inflate the outer handoff counts. TLS
+accumulators remain safe when timing the release after the shared mutex unlocks.
+The environment setting is cached per thread, avoiding an initial lookup race.
+
+Native fixed glDrawArrays/glDrawElements and programmed glDrawArrays are timed
+around the actual driver entry only. This measures CPU wall duration until the
+call returns; it is not GPU execution time. Shader setup, uploads and state calls
+are deliberately outside `draw_driver_ms`. No glFinish, GPU query or altered
+ownership is introduced. First-window counters can include startup; the present
+call's final context release naturally lands in the following window.
+
+The existing main/worker context regression passed with `WRATH_PROFILE=1`,
+including shared pixel readbacks, recursive acquisition, worker presentation,
+context detachment and pacing. Log:
+`local/reports/graphics-context-profile-test.log`. The cumulative graphics patch
+preserves existing CMake/backend edits and passes reverse-apply validation.
+Programmed draw instrumentation touches only the glDrawArrays wrapper; the
+parallel viewport-constant changes remain owned by the controller agent.
+
+`event_pumps` and `event_pump_ms` in the context aggregate additionally measure
+all event-pump passes after the16ms throttle, including those reached through
+normal SDK acquisition rather than Present. The count excludes throttle-skipped
+calls and worker early returns; time spans acquire, SDL polling and release.
+It is average wall milliseconds per presented frame. Present's pump duration can
+overlap this category, so the two are not additive. Only syntax/format checking
+and graphics-patch reverse validation were run for this small extension; no new
+launch or broad regression run was needed.

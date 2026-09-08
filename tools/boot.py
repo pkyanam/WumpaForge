@@ -17,8 +17,8 @@ def main():
     parser.add_argument("--probe-shader", action="store_true",
                         help="Export live shader state at a failure or bounded stop")
     args = parser.parse_args()
-    if Path(args.name).name != args.name or not 1 <= args.seconds <= 60:
-        parser.error("Use a plain log name and a duration from 1 to 60 seconds")
+    if Path(args.name).name != args.name or not 1 <= args.seconds <= 180:
+        parser.error("Use a plain log name and a duration from 1 to 180 seconds")
     reports = ROOT / "local/reports"
     reports.mkdir(parents=True, exist_ok=True)
     log = reports / f"{args.name}.log"
