@@ -43,6 +43,14 @@ int main(void)
  data[1]=0x3FFFF0;assert(call(0x13755A,data,3)==(uint32_t)E_INVALIDARG);
  uint32_t fx[]={device,0,0,0,0x12000};assert(call(0x136605,fx,5)==(uint32_t)E_NOTIMPL && read32(0x12000)==0);
  assert(call(0x137AA4,cb,2)==(uint32_t)E_NOTIMPL && read32(0x12000)==0);
+
+ /* Real producer thread completes native packets without DoWork/status polling. */
+ uint32_t sd[]={0,3,0x12100,0,0,0};memcpy(ptr(0x12200),sd,24);
+ assert(call(0x137AA4,cb,2)==0);uint32_t stream_handle=read32(0x12000);
+ uint32_t sp[]={0x13000,108,0x12300,0x12304,0,0};memcpy(ptr(0x12400),sp,24);
+ uint32_t process[]={stream_handle,0x12400,0};assert(call(0x136427,process,3)==0);
+ SDL_Delay(40);assert(__atomic_load_n((uint32_t*)ptr(0x12304),__ATOMIC_ACQUIRE)==0 && read32(0x12300)==108);
+ uint32_t stream_release[]={stream_handle};assert(call(0x136287,stream_release,1)==0);
  for(unsigned i=0;i<252;++i){uint32_t release[]={handles[i]};assert(call(0x135BFE,release,1)==0);}
  uint32_t release[]={device};assert(call(0x135BE8,release,1)==0 && !s_apu);
  wrath_audio_shutdown();free(mem);puts("PASS: guest32 constructors, 252 buffers, native playback/pitch/format changes, checked stack/output/cursor ABI, explicit limitations, cleanup");

@@ -211,7 +211,7 @@ boundaries (the separate XWaveFileCreateMediaObject stays recompiled):
 | 1366BC | buffer cursors | 12 | actual producer cursor, serialized DWORD outputs |
 | 136702 | DoWork | 0 | reap actual completed buffer voices |
 | 136605 | effects image | 20 | E_NOTIMPL and NULL descriptor |
-| 137AA4 | output stream create | 8 | E_NOTIMPL and NULL stream |
+| 137AA4 | output stream create | 8 | native bounded PCM/ADPCM packet stream |
 | 135C14 | full HRTF | 0 | void API, explicit unsupported diagnostic |
 | 136648 | buffer pitch | 8 | checked absolute pitch-to-native-rate conversion |
 | 136D3D | buffer max distance | 12 | E_NOTIMPL |
@@ -223,8 +223,8 @@ boundaries (the separate XWaveFileCreateMediaObject stays recompiled):
 | 1374E1 | listener position | 20 | E_NOTIMPL |
 | 137516 | listener rolloff | 12 | E_NOTIMPL |
 | 13753A | I3DL2 listener | 12 | E_NOTIMPL |
-| 1366F8 | stream volume | 8 | E_NOTIMPL |
-| 1366FD | stream pause | 8 | E_NOTIMPL |
+| 1366F8 | stream volume | 8 | checked native volume |
+| 1366FD | stream pause | 8 | native pause/resume; other modes unsupported |
 
 Additional ABI evidence: `136D21` adjusts the buffer by -0x1C and calls `136B8C`,
 which reaches `136A17`/`1368D0` and the wave-format copy at `138428`. Game `B8DA0`
@@ -363,3 +363,91 @@ Both ordinary SDL-dummy tests and the memory-sanitized backend test passed. The
 sanitized run uses the actual APU/mixer with a test-only output sink to avoid SDL's
 pre-main dynamic-loader failure; it does not validate audible output. See ADPCM.md
 for its command. No additional manual addresses are needed for these changes.
+
+
+## Boot28/29 audio hold and native packet streams (2026-09-08)
+
+The intro freeze is now tied to concrete original instructions. `2C330` holds
+animation rate zero while `[1BAA2C]` is set and either the current cut has audio
+and `AA590(4) != 1`, or intro zero still has byte `[56082E] == 2`. `AA590` tails
+`EC770`, which reads channel4 index/kind at `427A10/427A14`. Kind2/index0 selects
+stream wrapper `427A58 + A480 = 431ED8`. `5D4B0` returns1 when wrapper byte+24
+says source feeding, or its real stream GetStatus has PLAYING10000 or PAUSED20000
+without STARVED40000. It does not equate READY bit1 with playing.
+
+Boot28 showed channel0/kind2, mode255, fade0, position300 and rate0. The WAV
+reader's original `138552 CMP [EBP-4],45564157; JMP138567; JE13856E` was lifted
+into an unassigned `_flags` condition at the join; this rejected a correct WAVE
+header with E_FAIL. The runtime agent corrected join flag recovery. Root's boot29
+then read fmt/data chunks and reached the expected former stream E_NOTIMPL at
+return `5D8E7`. No animation hold or sound status was forced to advance.
+
+The native bridge now implements the seven original stream vtable methods listed
+above, plus the existing public volume/pause wrappers. Root must exclude all seven
+addresses during lifting as well as include them in native dispatch. Guest object
+word0 points to the unchanged original seven-entry vtable at16B70C. The backend
+uses host objects; no host pointer is written to guest RAM.
+
+Each stream lazily reserves one of64 mixer voices on first nonempty packet. It
+accepts up to its declared packet count, capped64, and4MiB decoded queued PCM per
+voice; current game streams declare3 packets. Packets are copied/decoded once,
+then freed when consumed or flushed. The game's0x9000-byte mono/stereo ADPCM
+packets each decode to128KiB, so three attached packets require384KiB per stream.
+The render loop carries fractional sample position across packet boundaries,
+without an artificial pause between packets. An empty queue produces silence;
+only submitting real data restarts it. Status exposes actual queue/paused/EOS
+state, and READY indicates remaining bounded queue capacity.
+
+Completion runs from the native APU mixer after its source frames have been mixed.
+It writes completed source bytes followed by SUCCESS status using release stores.
+This advances at the existing bounded output queue's producer position, which can
+lead audible output by that queue's latency. It is independent of guest DoWork.
+Pending remains8000000A until consumption; Flush/final Release cancels remaining
+packets with E_ABORT80004004, clears their completed size, and synchronizes with
+the mixer before freeing objects. The title supplies status pointers and NULL
+completed-size pointers. The cancellation completed-size convention is not verified
+against Xbox hardware; exact partial byte reporting outside this title remains a
+limitation. Cxbx's packet manager publishes full packet size on flush, so its
+cancellation-size behavior differs and should not be silently claimed equivalent.
+
+The title uses NULL callback/context/mixbins/event/timestamp. Nonzero callback,
+event, timestamp, routing/spatial flags and synchronized pause modes remain explicit
+errors. Pause0/1 preserves actual queued data and source position. Discontinuity
+marks the current queue as ending, so draining it finishes rather than reporting
+an unexpected starvation. Shutdown first cancels all stream packets while guest
+RAM is still mapped. Guest workers must be joined before teardown; a callback only
+writes completion fields and frees its host context, and never runs guest code or
+re-enters the mixer.
+
+Validation: `tools/test_audio_stream.c` drives the exact public guest ABI and
+production mixer deterministically. It verifies three consecutive PCM packets,
+ADPCM output against the existing synthetic vgmstream golden fixture, fractional
+22050Hz boundaries, queue rejection, pending/success byte counts, pause/resume,
+starvation/EOS, flush and ref lifetimes. It passed with UBSan. ASan could not run
+through this installed SDL2-compat/SDL3 loader (startup modal error, test process
+terminated), so no ASan result is claimed. `tools/test_audio_bridge.c` additionally
+passed its252-buffer regression and a real SDL dummy/APU producer stream-completion
+test without polling DoWork. No in-game stream playback or audible game sound has
+yet been verified at this checkpoint.
+
+Root integration validation: full build30 and bootstrap30 passed. Boot30 reads
+real ADPCM stream packets, clears the original audio gate, and advances animation
+300→315.5→347.5 at increment0.5. Actual GPU frame180 shows the original copyright
+screen over stars. Execution later stops at uncompiled callback31E20, not at
+stream creation. Audible output quality remains unverified; LLDB-heavy run logs
+CoreAudio overload messages, so smooth playback needs a later undisturbed run.
+
+Reproduce the deterministic test with the existing platform library:
+
+```sh
+clang -std=c11 -O1 -g -fsanitize=undefined -Ithird_party/xboxrecomp/src -Ithird_party/xboxrecomp/src/apu -Ithird_party/xboxrecomp/src/nv2a $(pkg-config --cflags sdl2) tools/test_audio_stream.c third_party/xboxrecomp/src/audio/dsound_device.c third_party/xboxrecomp/src/audio/xbox_adpcm.c third_party/xboxrecomp/src/apu/apu_vp.c third_party/xboxrecomp/src/apu/apu_dsp.c third_party/xboxrecomp/src/apu/apu_xaudio2.c build/native/third_party/xboxrecomp/src/platform/libplatform.a $(pkg-config --libs sdl2) -o build/test_audio_stream
+./build/test_audio_stream
+```
+
+API constants/layouts were cross-checked with the
+[Cxbx stream types](https://github.com/Cxbx-Reloaded/Cxbx-Reloaded/blob/master/src/core/hle/DSOUND/XbDSoundTypes.h),
+[stream methods](https://github.com/Cxbx-Reloaded/Cxbx-Reloaded/blob/master/src/core/hle/DSOUND/DirectSound/DirectSoundStream.cpp)
+and [packet manager](https://github.com/Cxbx-Reloaded/Cxbx-Reloaded/blob/master/src/core/hle/DSOUND/DirectSound/DSStream_PacketManager.cpp),
+read2026-09-08; implementation is original code following the retail4361 ABI,
+not a source copy of their GPL implementation. The existing ADPCM reference
+revision/golden-generation provenance remains in ADPCM.md.

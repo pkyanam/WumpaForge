@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 extern _Thread_local uint32_t g_eax, g_esp;
@@ -28,6 +29,15 @@ static struct Buffer {
     IDirectSoundBuffer8 *native;
     uint8_t format[20];
 } s_buffers[AUDIO_OBJECTS];
+
+#define AUDIO_STREAMS 64
+static struct Stream { uint32_t guest; IDirectSoundStream *native; } s_streams[AUDIO_STREAMS];
+static struct Stream *find_stream(uint32_t guest)
+{
+    for (unsigned i = 0; i < AUDIO_STREAMS; ++i)
+        if (s_streams[i].native && s_streams[i].guest == guest) return &s_streams[i];
+    return NULL;
+}
 
 static void *ptr(uint32_t address) { return (void *)((uintptr_t)address + g_xbox_mem_offset); }
 static int range(uint32_t address, size_t bytes)
@@ -76,6 +86,7 @@ static void stop_if_unused(void)
 {
     if (s_device_refs) return;
     for (unsigned i = 0; i < AUDIO_OBJECTS; ++i) if (s_buffers[i].native) return;
+    for (unsigned i = 0; i < AUDIO_STREAMS; ++i) if (s_streams[i].native) return;
     if (s_apu) { mcpx_apu_shutdown(s_apu); s_apu = NULL; }
     s_device = NULL;
 }
@@ -206,16 +217,111 @@ static void effects(void)
     if (!range(output, 4)) { finish(20, E_INVALIDARG); return; }
     write32(output, 0); finish(20, unsupported("DSP effect image"));
 }
+
 static void stream(void)
 {
-    uint32_t output = arg(1);
+    uint32_t desc = arg(0), output = arg(1);
     if (!range(output, 4)) { finish(8, E_INVALIDARG); return; }
-    write32(output, 0); finish(8, unsupported("ADPCM packet stream"));
+    write32(output, 0);
+    if (!s_device || !range(desc, 24)) { finish(8, E_INVALIDARG); return; }
+    if (read32(desc + 12) || read32(desc + 16) || read32(desc + 20)) {
+        finish(8, unsupported("stream callback/context/mixbins")); return;
+    }
+    XBOX_WAVEFORMATEX format; uint8_t serialized[20];
+    if (!read_format(read32(desc + 8), &format, serialized)) { finish(8, AUDIO_BADFORMAT); return; }
+    struct Stream *s = NULL;
+    for (unsigned i = 0; i < AUDIO_STREAMS; ++i) if (!s_streams[i].native) { s = &s_streams[i]; break; }
+    if (!s) { finish(8, E_OUTOFMEMORY); return; }
+    DSSTREAMDESC native = {0};
+    native.dwFlags = read32(desc); native.dwMaxAttachedPackets = read32(desc + 4);
+    native.lpwfxFormat = &format;
+    if (!s->guest) s->guest = xbox_HeapAlloc(16, 16);
+    if (!s->guest) { finish(8, E_OUTOFMEMORY); return; }
+    HRESULT hr = s_device->lpVtbl->CreateSoundStream(s_device, &native, &s->native, NULL);
+    if (hr >= 0) {
+        memset(ptr(s->guest), 0, 16);
+        write32(s->guest, 0x16B70C); /* Original retail4361 seven-method XMO vtable. */
+        write32(output, s->guest);
+    }
+    finish(8, hr);
 }
+static void stream_ref(int release)
+{
+    struct Stream *s = find_stream(arg(0));
+    if (!s) { finish(4, 0); return; }
+    ULONG refs = release ? xbox_DirectSoundStreamRelease(s->native) : xbox_DirectSoundStreamAddRef(s->native);
+    if (!refs) { s->native = NULL; memset(ptr(s->guest), 0, 16); stop_if_unused(); }
+    finish(4, refs);
+}
+static void stream_info(void)
+{
+    struct Stream *s = find_stream(arg(0)); uint32_t output = arg(1), info[4];
+    if (!s || !range(output, 16)) { finish(8, E_INVALIDARG); return; }
+    HRESULT hr = xbox_DirectSoundStreamInfo(s->native, info);
+    if (hr >= 0) memcpy(ptr(output), info, sizeof(info));
+    finish(8, hr);
+}
+static void stream_status(void)
+{
+    struct Stream *s = find_stream(arg(0)); uint32_t output = arg(1), status;
+    if (!s || !range(output, 4)) { finish(8, E_INVALIDARG); return; }
+    HRESULT hr = xbox_DirectSoundStreamStatus(s->native, &status);
+    if (hr >= 0) write32(output, status);
+    finish(8, hr);
+}
+struct StreamCompletion { uint32_t *completed, *status; };
+static void stream_complete(void *context, uint32_t status, uint32_t bytes)
+{
+    struct StreamCompletion *c = context;
+    if (c->completed) __atomic_store_n(c->completed, bytes, __ATOMIC_RELEASE);
+    if (c->status) __atomic_store_n(c->status, status, __ATOMIC_RELEASE);
+    free(c);
+}
+static void stream_process(void)
+{
+    struct Stream *s = find_stream(arg(0)); uint32_t packet = arg(1);
+    if (!s || !range(packet, 24) || arg(2)) { finish(12, E_INVALIDARG); return; }
+    uint32_t data = read32(packet), bytes = read32(packet + 4);
+    uint32_t completed = read32(packet + 8), status = read32(packet + 12);
+    if ((bytes && !range(data, bytes)) ||
+        (completed && (!range(completed, 4) || (completed & 3))) ||
+        (status && (!range(status, 4) || (status & 3)))) { finish(12, E_INVALIDARG); return; }
+    if (read32(packet + 16) || read32(packet + 20)) {
+        finish(12, unsupported("stream packet event/timestamp")); return;
+    }
+    struct StreamCompletion *c = malloc(sizeof(*c));
+    if (!c) { finish(12, E_OUTOFMEMORY); return; }
+    c->completed = completed ? ptr(completed) : NULL;
+    c->status = status ? ptr(status) : NULL;
+    uint32_t old_completed = completed ? read32(completed) : 0;
+    uint32_t old_status = status ? read32(status) : 0;
+    if (completed) write32(completed, 0);
+    if (status) write32(status, 0x8000000A); /* XMP_STATUS_PENDING */
+    HRESULT hr = xbox_DirectSoundStreamProcess(s->native, bytes ? ptr(data) : NULL,
+                                              bytes, stream_complete, c);
+    if (hr < 0) {
+        if (completed) write32(completed, old_completed);
+        if (status) write32(status, old_status);
+        free(c);
+    }
+    finish(12, hr);
+}
+static void stream_control(unsigned operation)
+{
+    struct Stream *s = find_stream(arg(0)); HRESULT hr;
+    unsigned bytes = operation < 2 ? 4 : 8;
+    if (!s) { finish(bytes, E_INVALIDARG); return; }
+    if (operation == 0) hr = xbox_DirectSoundStreamDiscontinuity(s->native);
+    else if (operation == 1) hr = xbox_DirectSoundStreamFlush(s->native);
+    else if (operation == 2) hr = xbox_DirectSoundStreamVolume(s->native, (int32_t)arg(1));
+    else hr = xbox_DirectSoundStreamPause(s->native, arg(1));
+    finish(bytes, hr);
+}
+
 static void do_work(void)
 {
     /* The native producer advances playback independently. Querying actually
-     * reaps completed voices; output stream completions are not synthesized. */
+     * reaps completed buffer voices; packet completion runs in the mixer. */
     for (unsigned i = 0; i < AUDIO_OBJECTS; ++i) if (s_buffers[i].native) {
         DWORD status; s_buffers[i].native->lpVtbl->GetStatus(s_buffers[i].native, &status);
     }
@@ -248,8 +354,15 @@ BRIDGE(00137497, finish(32, unsupported("listener orientation")))
 BRIDGE(001374E1, finish(20, unsupported("listener position")))
 BRIDGE(00137516, finish(12, unsupported("listener rolloff")))
 BRIDGE(0013753A, finish(12, unsupported("I3DL2 listener")))
-BRIDGE(001366F8, finish(8, unsupported("stream volume")))
-BRIDGE(001366FD, finish(8, unsupported("stream pause")))
+BRIDGE(001366F8, stream_control(2))
+BRIDGE(001366FD, stream_control(3))
+BRIDGE(00136240, stream_ref(0))
+BRIDGE(00136287, stream_ref(1))
+BRIDGE(001362D5, stream_info())
+BRIDGE(001363D6, stream_status())
+BRIDGE(00136427, stream_process())
+BRIDGE(0013633C, stream_control(0))
+BRIDGE(00136389, stream_control(1))
 #undef BRIDGE
 
 recomp_func_t wrath_audio_lookup(uint32_t address)
@@ -263,6 +376,8 @@ recomp_func_t wrath_audio_lookup(uint32_t address)
     ENTRY(00136648); ENTRY(00136D3D); ENTRY(00136D61); ENTRY(00136D85);
     ENTRY(00136CED); ENTRY(00136D09); ENTRY(00137497); ENTRY(001374E1);
     ENTRY(00137516); ENTRY(0013753A); ENTRY(001366F8); ENTRY(001366FD);
+    ENTRY(00136240); ENTRY(00136287); ENTRY(001362D5); ENTRY(001363D6);
+    ENTRY(00136427); ENTRY(0013633C); ENTRY(00136389);
     default: return NULL;
     }
 #undef ENTRY
@@ -275,6 +390,14 @@ void wrath_audio_shutdown(void)
         if (s_buffers[i].native) s_buffers[i].native->lpVtbl->Release(s_buffers[i].native);
         if (s_buffers[i].guest) xbox_HeapFree(s_buffers[i].guest);
         memset(&s_buffers[i], 0, sizeof(s_buffers[i]));
+    }
+    for (unsigned i = 0; i < AUDIO_STREAMS; ++i) {
+        if (s_streams[i].native) {
+            xbox_DirectSoundStreamFlush(s_streams[i].native);
+            while (xbox_DirectSoundStreamRelease(s_streams[i].native)) {}
+        }
+        if (s_streams[i].guest) xbox_HeapFree(s_streams[i].guest);
+        memset(&s_streams[i], 0, sizeof(s_streams[i]));
     }
     s_device_refs = 0; stop_if_unused();
     if (s_device_guest) xbox_HeapFree(s_device_guest);
