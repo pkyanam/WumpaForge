@@ -3,7 +3,7 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot20, loading exceeds guest heap budget
+## Latest checkpoint: boot21, indexed loading draw reaches original GPU wait
 - Correct original Universal splash verified from actual GPU capture
   `local/reports/game-frame-15-fixed.png`, plus its fade in `game-frame-25.png`.
   **No Crash title/menu, 3D scene, or gameplay pixels verified.**
@@ -20,14 +20,20 @@ Run the supplied game natively on Apple Silicon without emulation. **Native star
   the returned pointer without a NULL check (9E386 REP STOSD), corrupting low guest
   memory. Worker then calls the now-zero import15AA64 from3A7F0. Do NOT alias the
   zero call target or hide allocation failure.
-- Runtime currently reserves an oversized8MiB main stack above the9.3MiB XBE.
-  Actual XBE StackCommit at header0x130 is64KiB; original CreateThreadECC6A uses
-  this when requested stack size is0, as main and loading worker do. mac_runtime
-  agent is implementing image-derived stack sizing with256KiB minimum and moving
-  compatibility worker stacks into independent heap allocations. Keep retail64MiB
-  RAM and its physical aliases; do not expand to128MiB speculatively.
-- Root will build with at most2 jobs and run bounded boot21 after focused runtime
-  checks. No game/debugger is intentionally left running after boot20.
+- Runtime now sizes main guest stack from the XBE request with256KiB minimum;
+  timer stacks are separate lazy heap allocations. Actual XBE StackCommit is64KiB.
+  Heap now53.875MiB, recovering7.5MiB with a live timer. Retail64MiB and physical
+  aliases unchanged. Separation/capacity/planner tests pass; bootstrap idempotent.
+- Boot21 passes the previous heap failure and continues texture/asset loading.
+  It reports unsupported P8 texture format0xB, then watchdog finds main waiting
+  for loading worker's guest lock. Worker is in101BC0 DrawIndexedVertices through
+  original GPU pushbuffer routines103330..108F40. This indexed draw is the next
+  verified critical path, not a native mutex deadlock. Exact all-thread evidence:
+  `local/reports/boot-21-stall.log`. No frame40 capture yet.
+- controller_support agent owns native P8/palette implementation; native_audio
+  agent owns isolated src/index_bridge.inc. Root owns draw_vertices_data refactor,
+  lookup/manual-exclusion integration and next build/boot. Resource type6 reserved
+  for palettes,7 for index buffers. No game/debugger left running after sampling.
 - Known later graphics gaps: mixed fixed/programmed shader stages, indexed draws,
   advanced dependent texture modes, fog parameters, volume textures, packed vertex
   formats. Implement the next actually reached boundary, not guessed features.
@@ -35,8 +41,8 @@ Run the supplied game natively on Apple Silicon without emulation. **Native star
   format,pool,out)ret20, gameINDEX16fmt2C; SetIndicesFFEA0(buffer,baseVertex)ret8;
   DrawIndexedVertices101BC0(type,indexCount,uint16DataPointer)ret12. Game writes
   indexbuffer.Data directly. Actual fetch index+baseVertex. Not implemented yet.
-- Shader/cube/worker seed milestone committed292caa1. Native threaded graphics
-  handoff is tested and ready for a separate commit; memory fix is in progress.
+- Shader/cube/worker seed milestone committed292caa1; native threaded graphics
+  handoff committed2cb2142. Memory budget correction is tested in boot21.
 - Audio backend and SDK bridge have isolated tests, but audio bridge is unlinked;
   no in-game audio verified. SDL controller bridge is integrated and virtual tests
   pass; physical Xbox/DualSense Bluetooth input remains untested.

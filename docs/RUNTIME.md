@@ -278,3 +278,54 @@ Parent runs the next analyze/lift/build step. Evidence is in
 `local/reports/boot-18.log` and `local/reports/disasm/asm/text.asm` at the addresses
 above. The next execution may expose the worker's own subsystem requirements;
 this seed does not claim those are already implemented.
+
+## Boot20 guest memory budget correction
+
+Boot20's allocation of 4,279,360 bytes failed after the runtime had consumed
+46,256,276 of its 48,365,568-byte guest heap. The parent confirmed that original
+game routine 0x0009E386 then clears the returned allocation without testing NULL,
+overwriting low guest memory/imports and provoking the worker's later call to
+address zero. The missing-call symptom therefore must not be repaired with a
+dispatch alias or fabricated function.
+
+The supplied XBE's StackCommit DWORD at file offset0x130 is 0x10000 (64 KiB).
+Original CreateThread wrapper 0x000ECC6A loads guest [0x10130] when its stack-size
+argument is zero; both the initial game thread and worker0x2BF30 request that
+default. The prior compatibility main stack reserved 8 MiB despite guest frames
+retaining their original sizes; AOT-generated C frames use separate host stacks.
+
+The loader now reserves max(XBE StackCommit,256 KiB), rounded up to 64 KiB. This
+retains four times the title's requested guest stack while honoring larger XBE
+requirements. It rejects missing mandatory header bytes before mapping memory,
+reads StackCommit with memcpy, computes aligned sizes in 64 bits and rejects
+overflow/exhausted layouts. The existing four-argument planner remains as a
+legacy 8 MiB wrapper; actual loading uses the explicit stack-size planner.
+
+Simply reducing the main-stack constant would have broken the old timer/USB
+worker pool: its sixteen fixed 256 KiB slices began inside the main-stack region.
+Those slots now allocate independent guest-heap blocks only when used, retain
+their bounded sixteen-slot limit, and release their blocks when freed. The timer
+TIB records the actual allocated stack limit and frees its slot if TIB allocation
+fails. The existing guest-game worker allocation path remains independently
+heap-backed at 512 KiB per live worker.
+
+For this image, the revised stack is0x009E0000..0x00A1FFFF, initial ESP0x00A1FFF0,
+and heap0x00A20000..0x03FFFFFF: 56,492,032 bytes (53.875 MiB), a gain of7.75 MiB
+before one live timer consumes256 KiB. RAM remains64 MiB; physical-address
+aliases, RAM masks, and game addresses are unchanged. No128 MiB compatibility
+heap or duplicated graphics-surface changes were needed for this correction.
+
+`tools/tests/runtime_stack_budget.c` uses the actual allocator/worker pool. It
+passed all sixteen simultaneous stack allocations, exhaustion, distinct stack
+storage, an untouched main-stack canary, frees, and replay of the reported
+46,256,276-byte pressure plus the failing4,279,360-byte request and one live timer.
+The final replay heap cursor was0x03A91CE0, within retail RAM. The planner test also
+passed explicit64 KiB requests, rounding0x41001 to0x50000, and overflow rejection.
+Evidence: `local/reports/runtime-stack-budget-test.log` and
+`local/reports/runtime-layout-test.log`. The parent owns rebuilt-game boot21;
+these tests do not establish a completed full game load.
+
+```sh
+clang -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,-dead_strip -Ithird_party/xboxrecomp/src tools/tests/runtime_stack_budget.c third_party/xboxrecomp/src/kernel/kernel_thread.c third_party/xboxrecomp/src/platform/win32_compat.c -o build/runtime-stack-budget-test
+build/runtime-stack-budget-test
+```

@@ -23,7 +23,7 @@ index ade9b08..42926eb 100644
  /* KeTickCount - exported as a data pointer, not a function */
  extern volatile ULONG xbox_KeTickCount;
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 2d996b1..09d9717 100644
+index 2d996b1..29b59c8 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -26,6 +26,7 @@
@@ -122,7 +122,19 @@ index 2d996b1..09d9717 100644
          ExitThread(exit_status);
      }
  }
-@@ -2386,13 +2390,14 @@ static void bridge_write_iostatus(uint32_t ios_va, NTSTATUS status, uint32_t inf
+@@ -2195,9 +2199,11 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+             fprintf(stderr, "  [KERNEL] timer thread has no TIB; "
+                             "timer DPCs will not run\n");
+             fflush(stderr);
++            xbox_worker_stack_free(slot);
+             return 0;
+         }
+         g_fs_base = tib;
++        BRIDGE_MEM32(tib+8)=g_esp+16-XBOX_WORKER_STACK_SIZE;
+     }
+ 
+     for (;;) {
+@@ -2386,13 +2392,14 @@ static void bridge_write_iostatus(uint32_t ios_va, NTSTATUS status, uint32_t inf
  #define BRIDGE_HANDLE_MASK 0x00FFFFFFu
  #define BRIDGE_HANDLE_MAX  16384
  static HANDLE s_handle_table[BRIDGE_HANDLE_MAX];
@@ -139,7 +151,7 @@ index 2d996b1..09d9717 100644
      for (i = 1; i < BRIDGE_HANDLE_MAX; i++)
          if (s_handle_table[i] == NULL) {
              s_handle_table[i] = h;
-@@ -2418,6 +2423,8 @@ static HANDLE bridge_read_handle(uint32_t va)
+@@ -2418,6 +2425,8 @@ static HANDLE bridge_read_handle(uint32_t va)
          return (i > 0 && i < BRIDGE_HANDLE_MAX) ? s_handle_table[i] : NULL;
      }
      /* Untagged value: synthetic/dummy handle -- pass through unchanged. */
@@ -148,7 +160,7 @@ index 2d996b1..09d9717 100644
      return (HANDLE)(uintptr_t)token;
  }
  
-@@ -2441,6 +2448,8 @@ static HANDLE bridge_resolve_handle(uint32_t token)
+@@ -2441,6 +2450,8 @@ static HANDLE bridge_resolve_handle(uint32_t token)
          return (i > 0 && i < BRIDGE_HANDLE_MAX) ? s_handle_table[i] : NULL;
      }
      /* Untagged: synthetic/dummy handle -- pass through unchanged. */
@@ -157,7 +169,7 @@ index 2d996b1..09d9717 100644
      return (HANDLE)(uintptr_t)token;
  }
  
-@@ -2451,6 +2460,7 @@ static HANDLE bridge_take_handle(uint32_t token)
+@@ -2451,6 +2462,7 @@ static HANDLE bridge_take_handle(uint32_t token)
          if (i > 0 && i < BRIDGE_HANDLE_MAX) {
              HANDLE h = s_handle_table[i];
              s_handle_table[i] = NULL;
@@ -165,7 +177,7 @@ index 2d996b1..09d9717 100644
              return h;
          }
      }
-@@ -2494,6 +2504,13 @@ static NTSTATUS bridge_create_file_impl(
+@@ -2494,6 +2506,13 @@ static NTSTATUS bridge_create_file_impl(
  
      if (NT_SUCCESS(st)) {
          bridge_write_handle(handle_va, h);
@@ -179,7 +191,7 @@ index 2d996b1..09d9717 100644
          bridge_write_iostatus(iostatus_va, ios.Status, (uint32_t)ios.Information);
      } else {
          bridge_write_iostatus(iostatus_va, st, 0);
-@@ -2619,7 +2636,7 @@ static void bridge_NtCreateFile(void)
+@@ -2619,7 +2638,7 @@ static void bridge_NtCreateFile(void)
          char host[MAX_PATH * 2];
          size_t n = 0;
  
@@ -188,7 +200,7 @@ index 2d996b1..09d9717 100644
  
          while (n < sizeof(host) - 1 && w[n]) {
              host[n] = (char)w[n];
-@@ -3163,6 +3180,40 @@ static void bridge_NtDeviceIoControlFile(void)
+@@ -3163,6 +3182,40 @@ static void bridge_NtDeviceIoControlFile(void)
      uint32_t out_va  = STACK_ARG(8);
      uint32_t out_len = STACK_ARG(9);
  
@@ -229,7 +241,7 @@ index 2d996b1..09d9717 100644
      if (ioctl == IOCTL_DISK_GET_DRIVE_GEOMETRY) {
          /* DISK_GEOMETRY: Cylinders (LARGE_INTEGER), MediaType,
           * TracksPerCylinder, SectorsPerTrack, BytesPerSector -- 24 bytes. */
-@@ -4429,12 +4480,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
+@@ -4429,12 +4482,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
   * The source resolves through the table, DuplicateHandle produces a real
   * native handle, and the target lands via bridge_write_handle as a fresh
   * token -- same shape as NtCreateEvent. DUPLICATE_CLOSE_SOURCE also closes
@@ -246,7 +258,7 @@ index 2d996b1..09d9717 100644
      HANDLE dup = NULL;
      DWORD opts = 0;
  
-@@ -4450,7 +4502,20 @@ static void bridge_NtDuplicateObject(void)
+@@ -4450,7 +4504,20 @@ static void bridge_NtDuplicateObject(void)
          g_eax = 0xC0000001u;   /* STATUS_UNSUCCESSFUL */
          return;
      }
@@ -605,6 +617,53 @@ index b2a6bf1..4015777 100644
 +{
 +    return xbox_translate_path_mode(path, out, size, FALSE);
 +}
+diff --git a/src/kernel/kernel_thread.c b/src/kernel/kernel_thread.c
+index 17cb31f..dd415a9 100644
+--- a/src/kernel/kernel_thread.c
++++ b/src/kernel/kernel_thread.c
+@@ -417,23 +417,36 @@ static HANDLE g_game_thread = NULL;
+ void  xbox_set_game_thread(void *h) { g_game_thread = (HANDLE)h; }
+ void *xbox_thread_debug_handle(void) { return (void *)g_game_thread; }
+ 
+-/* One bit per worker stack slice. Interlocked because a host-driven title can
++/* One allocation per worker stack slot. Interlocked because a host-driven title can
+  * allocate a slice from the host thread while recompiled code allocates one for
+  * a spawned worker, so the allocator itself must be thread-safe. */
+-static volatile LONG g_worker_stack_used[XBOX_WORKER_STACK_COUNT];
++/* 0=free, -1=allocation in progress, positive=guest heap allocation base. */
++static volatile LONG g_worker_stack_base[XBOX_WORKER_STACK_COUNT];
+ 
+ int xbox_worker_stack_alloc(void)
+ {
+     int i;
+     for (i = 0; i < XBOX_WORKER_STACK_COUNT; i++) {
+-        if (InterlockedCompareExchange(&g_worker_stack_used[i], 1, 0) == 0)
+-            return i;
++        if (InterlockedCompareExchange(&g_worker_stack_base[i], -1, 0) == 0) {
++            uint32_t base=xbox_HeapAlloc(XBOX_WORKER_STACK_SIZE,4096);
++            InterlockedExchange(&g_worker_stack_base[i],(LONG)base);
++            return base ? i : -1;
++        }
+     }
+     return -1;  /* all slices in use */
+ }
+ 
+ void xbox_worker_stack_free(int slot)
+ {
+-    if (slot >= 0 && slot < XBOX_WORKER_STACK_COUNT)
+-        InterlockedExchange(&g_worker_stack_used[slot], 0);
++    if (slot >= 0 && slot < XBOX_WORKER_STACK_COUNT) {
++        LONG base=InterlockedExchange(&g_worker_stack_base[slot],0);
++        if(base>0)xbox_HeapFree((uint32_t)base);
++    }
++}
++
++uint32_t xbox_worker_stack_top(int slot)
++{
++    if(slot<0 || slot>=XBOX_WORKER_STACK_COUNT)return 0;
++    LONG base=InterlockedCompareExchange(&g_worker_stack_base[slot],0,0);
++    return base>0 ? (uint32_t)base+XBOX_WORKER_STACK_SIZE-16 : 0;
+ }
 diff --git a/src/kernel/nv2a_pb_scan.c b/src/kernel/nv2a_pb_scan.c
 index e9b6344..4bec709 100644
 --- a/src/kernel/nv2a_pb_scan.c
@@ -618,7 +677,7 @@ index e9b6344..4bec709 100644
  #include <stdint.h>
  #include <stdlib.h>
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index fe24fdc..9e708f1 100644
+index fe24fdc..b452adf 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -15,6 +15,14 @@
@@ -657,7 +716,22 @@ index fe24fdc..9e708f1 100644
      }
      return 0;
  }
-@@ -1033,6 +1046,16 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -984,6 +997,14 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+     DWORD old_protect;
+     const uint8_t *xbe = (const uint8_t *)xbe_data;
+ 
++    /* Every mandatory field read below, including StackCommit at0x130, must
++     * exist before reservation/copying starts. Later optional fields have
++     * their own size checks. */
++    if (!xbe || xbe_size < 0x134) {
++        fprintf(stderr,"xbox_MemoryLayoutInit: truncated mandatory XBE header\n");
++        return FALSE;
++    }
++
+     if (g_memory_base) {
+         fprintf(stderr, "xbox_MemoryLayoutInit: already initialized\n");
+         return FALSE;
+@@ -1033,6 +1054,16 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       * Windows 11 where low addresses are often reserved), try page-aligned
       * addresses upward until we find a free region.
       */
@@ -674,7 +748,7 @@ index fe24fdc..9e708f1 100644
      {
          static const uintptr_t try_bases[] = {
              XBOX_BASE_ADDRESS,      /* 0x00010000 - original Xbox address */
-@@ -1043,7 +1066,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1043,7 +1074,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
              0,                      /* sentinel - let OS choose */
          };
  
@@ -683,7 +757,7 @@ index fe24fdc..9e708f1 100644
              LPVOID hint = try_bases[i] ? (LPVOID)try_bases[i] : NULL;
              g_memory_base = MapViewOfFileEx(
                  g_mapping_handle,
-@@ -1064,6 +1087,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1064,6 +1095,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          }
      }
  
@@ -692,7 +766,7 @@ index fe24fdc..9e708f1 100644
      if (!g_memory_base) {
          fprintf(stderr, "xbox_MemoryLayoutInit: failed to map base view (%zu KB)\n",
                  g_memory_size / 1024);
-@@ -1229,6 +1254,44 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1229,6 +1262,47 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                  sections_loaded, num_sections, total_bytes);
      }
  
@@ -705,6 +779,8 @@ index fe24fdc..9e708f1 100644
 +                              + *(const uint32_t *)(xbe + 0x10c);
 +        uint64_t image_end = declared_end > g_xbox_image_hi ? declared_end : g_xbox_image_hi;
 +        uint32_t tls_dir_va = *(const uint32_t *)(xbe + XBE_TLS_ADDR_OFFSET);
++        uint32_t requested_stack;
++        memcpy(&requested_stack,xbe+0x130,sizeof(requested_stack));
 +        uint64_t tls_total = 0;
 +        if (tls_dir_va) {
 +            if (g_memory_size < 24 || tls_dir_va > g_memory_size - 24) goto bad_runtime_layout;
@@ -714,7 +790,8 @@ index fe24fdc..9e708f1 100644
 +                         & ~UINT64_C(15)) + 4u;
 +        }
 +        if (image_end > UINT32_MAX || tls_total > UINT32_MAX || g_memory_size > UINT32_MAX
-+            || !xbox_plan_runtime_layout((uint32_t)image_end, (uint32_t)tls_total,
++            || !xbox_plan_runtime_layout_with_stack((uint32_t)image_end, (uint32_t)tls_total,
++                                         requested_stack,
 +                                         (uint32_t)g_memory_size, &g_xbox_runtime_layout))
 +            goto bad_runtime_layout;
 +        g_fs_base = XBOX_TIB_MAIN;
@@ -737,7 +814,7 @@ index fe24fdc..9e708f1 100644
      /*
       * Parse the kernel thunk table address from the XBE header.
       * The XBE stores KernelImageThunkAddress at offset 0x0158, XOR-encrypted.
-@@ -1338,7 +1401,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1338,7 +1412,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
           * only worked while page zero was mapped. Pointing at real zeroed
           * memory says the same thing to the title and survives that page being
           * unmapped, which is what makes a genuine null dereference visible. */
@@ -746,7 +823,7 @@ index fe24fdc..9e708f1 100644
          memset(XBOX_VA(FAKE_PRCB_VA), 0, 0x400);
          MEM32_INIT(XBOX_FS_BASE + 0x20, FAKE_PRCB_VA);
          #undef FAKE_PRCB_VA
-@@ -1346,11 +1409,11 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1346,11 +1420,11 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          /*
           * fs:[0x28] - Thread local storage / RW engine context.
           * The RW engine reads [fs:[0x28] + 0x28] to get a pointer
@@ -762,7 +839,7 @@ index fe24fdc..9e708f1 100644
  
          MEM32_INIT(XBOX_FS_BASE + 0x28, FAKE_TLS_VA);
          /* TLS[0x28] = pointer to RW data area */
-@@ -1384,8 +1447,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1384,8 +1458,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
           * Every guest thread therefore shares LastError. Give this a per-thread
           * allocation when a title is observed to care.
           */
@@ -773,7 +850,7 @@ index fe24fdc..9e708f1 100644
          {
              DWORD tls_dir_va = *(const DWORD *)(xbe + XBE_TLS_ADDR_OFFSET);
  
-@@ -1855,6 +1918,15 @@ void xbox_MemoryLayoutShutdown(void)
+@@ -1855,6 +1929,15 @@ void xbox_MemoryLayoutShutdown(void)
          CloseHandle(g_mapping_handle);
          g_mapping_handle = NULL;
      }
@@ -789,7 +866,7 @@ index fe24fdc..9e708f1 100644
      fprintf(stderr, "xbox_MemoryLayoutShutdown: released\n");
  }
  
-@@ -1921,7 +1993,7 @@ ptrdiff_t xbox_GetMemoryOffset(void)
+@@ -1921,7 +2004,7 @@ ptrdiff_t xbox_GetMemoryOffset(void)
   * Returns Xbox VAs within the mapped region so MEM32() works correctly.
   * No free support (bump-only for now).
   */
@@ -798,7 +875,17 @@ index fe24fdc..9e708f1 100644
  
  static int g_heap_alloc_count = 0;
  
-@@ -1945,10 +2017,19 @@ static int g_heap_block_count = 0;
+@@ -1938,17 +2021,26 @@ static int g_heap_block_count = 0;
+ /*
+  * Simulated stacks for spawned threads.
+  *
+- * The main thread owns the top of the XBOX_STACK region and grows down; worker
+- * stacks are carved from the bottom upward so the two cannot meet until the
+- * whole 8 MB is gone. Xbox VAs, not host memory: recompiled code addresses its
++ * The main thread owns the image-sized XBOX_STACK region and grows down; worker
++ * stacks are separate live heap allocations. Xbox VAs, not host memory:
++ * recompiled code addresses its
+  * stack through MEM32() like any other Xbox pointer.
   */
  uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment);
  
@@ -820,7 +907,7 @@ index fe24fdc..9e708f1 100644
  
  /* A TIB and TLS block for a newly spawned guest thread.
   *
-@@ -1991,6 +2072,7 @@ uint32_t xbox_AllocThreadTib(void)
+@@ -1991,6 +2083,7 @@ uint32_t xbox_AllocThreadTib(void)
      memset(TIB_VA(thread_data), 0, g_tls_thread_size);
  
      *(uint32_t *)TIB_VA(tib + 0x00) = 0xFFFFFFFFu;   /* own SEH chain    */
@@ -828,7 +915,7 @@ index fe24fdc..9e708f1 100644
      *(uint32_t *)TIB_VA(block)      = thread_data;   /* slot 0           */
      *(uint32_t *)TIB_VA(tib + 0x04) = block + total; /* fs:[4], see above*/
  
-@@ -2002,7 +2084,8 @@ uint32_t xbox_AllocThreadStack(void)
+@@ -2002,7 +2095,8 @@ uint32_t xbox_AllocThreadStack(void)
  {
      uint32_t base;
  
@@ -838,7 +925,7 @@ index fe24fdc..9e708f1 100644
          return 0;
      }
  
-@@ -2021,9 +2104,10 @@ uint32_t xbox_AllocThreadStack(void)
+@@ -2021,9 +2115,10 @@ uint32_t xbox_AllocThreadStack(void)
       * for small ones.
       */
      base = xbox_HeapAlloc(XBOX_THREAD_STACK_SIZE, 4096);
@@ -851,7 +938,7 @@ index fe24fdc..9e708f1 100644
  
      /* Top of the slice, 16-byte aligned, growing down. */
      return base + XBOX_THREAD_STACK_SIZE - 16;
-@@ -2048,8 +2132,7 @@ void xbox_FreeThreadStack(uint32_t stack_top)
+@@ -2048,8 +2143,7 @@ void xbox_FreeThreadStack(uint32_t stack_top)
      if (!stack_top)
          return;
      xbox_HeapFree(stack_top + 16 - XBOX_THREAD_STACK_SIZE);
@@ -861,7 +948,7 @@ index fe24fdc..9e708f1 100644
  }
  
  /* Bump allocator over the contiguous window mapped at XBOX_CONTIG_BASE.
-@@ -2104,7 +2187,7 @@ uint32_t xbox_ContiguousAllocatedBytes(void)
+@@ -2104,7 +2198,7 @@ uint32_t xbox_ContiguousAllocatedBytes(void)
  }
  
  
@@ -870,7 +957,7 @@ index fe24fdc..9e708f1 100644
  {
      uint32_t result;
  
-@@ -2213,7 +2296,7 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
+@@ -2213,7 +2307,7 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
   * forward is asking about the block that contains it. Returns 0 for an address
   * this heap never handed out, which is what "not one of mine" has to look like.
   */
@@ -879,7 +966,7 @@ index fe24fdc..9e708f1 100644
  {
      int i;
  
-@@ -2229,7 +2312,7 @@ uint32_t xbox_HeapBlockSize(uint32_t xbox_va)
+@@ -2229,7 +2323,7 @@ uint32_t xbox_HeapBlockSize(uint32_t xbox_va)
      return 0;
  }
  
@@ -888,7 +975,7 @@ index fe24fdc..9e708f1 100644
  {
      static int frees = 0, matched = 0;
  
-@@ -2273,6 +2356,31 @@ void xbox_HeapFree(uint32_t xbox_va)
+@@ -2273,6 +2367,31 @@ void xbox_HeapFree(uint32_t xbox_va)
      }
  }
  
@@ -921,7 +1008,7 @@ index fe24fdc..9e708f1 100644
  {
      return g_mapping_handle;
 diff --git a/src/kernel/xbox_memory_layout.h b/src/kernel/xbox_memory_layout.h
-index fd83afb..a75fb4f 100644
+index fd83afb..2f98ad0 100644
 --- a/src/kernel/xbox_memory_layout.h
 +++ b/src/kernel/xbox_memory_layout.h
 @@ -24,6 +24,7 @@
@@ -942,6 +1029,15 @@ index fd83afb..a75fb4f 100644
  #define XBOX_KERNEL_DATA_SIZE   4096   /* 4 KB - plenty for all data exports */
  
  /* Offsets within the kernel data area */
+@@ -313,7 +315,7 @@ typedef union RecompXmm {
+ } RecompXmm;
+ #endif
+ 
+-#define XBOX_STACK_SIZE     (8 * 1024 * 1024)
++#define XBOX_STACK_SIZE     (g_xbox_runtime_layout.stack_size)
+ 
+ /** Base VA of the stack area (above last XBE section). */
+ /* Where the fake TIB lives -- the linear address fs: is based at.
 @@ -342,7 +344,7 @@ typedef union RecompXmm {
  extern RECOMP_TLS uint32_t g_fs_base;
  #define XBOX_FS_BASE        g_fs_base
@@ -951,16 +1047,33 @@ index fd83afb..a75fb4f 100644
  
  /** Initial ESP value (top of stack, 16-byte aligned). */
  #define XBOX_STACK_TOP      (XBOX_STACK_BASE + XBOX_STACK_SIZE - 16)
-@@ -368,7 +370,7 @@ extern RECOMP_TLS uint32_t g_fs_base;
-  * adding it changes nothing for them.
+@@ -361,28 +363,22 @@ extern RECOMP_TLS uint32_t g_fs_base;
+  * code from the host's own message-loop thread, that thread needs a guest stack
+  * (its g_esp starts at 0), which is what a worker slice provides.
+  *
+- * These slices carve the low end of the same 8 MB stack region xbox_AllocThreadStack
+- * uses, and a title uses one model or the other -- never both -- so they do not
+- * coexist at runtime. For a title that never calls xbox_worker_stack_alloc
+- * (every default-model title), this is unused address space and dead code, so
+- * adding it changes nothing for them.
++ * Timer/USB callbacks also use these stacks. Allocate them from the guest heap
++ * only when used; they must not overlap the image-sized main stack region.
   */
  #define XBOX_WORKER_STACK_SIZE   (256 * 1024)
 -#define XBOX_WORKER_STACK_BASE   XBOX_STACK_BASE             /* 0x00780000 */
-+#define XBOX_WORKER_STACK_BASE   XBOX_STACK_BASE
- #define XBOX_WORKER_STACK_COUNT  16                          /* 4 MB total */
- #define XBOX_WORKER_STACK_END    (XBOX_WORKER_STACK_BASE + \
-                                   XBOX_WORKER_STACK_SIZE * XBOX_WORKER_STACK_COUNT)
-@@ -382,7 +384,7 @@ extern RECOMP_TLS uint32_t g_fs_base;
+-#define XBOX_WORKER_STACK_COUNT  16                          /* 4 MB total */
+-#define XBOX_WORKER_STACK_END    (XBOX_WORKER_STACK_BASE + \
+-                                  XBOX_WORKER_STACK_SIZE * XBOX_WORKER_STACK_COUNT)
++#define XBOX_WORKER_STACK_COUNT  16
+ 
+ /** Top (initial esp) of worker stack slice n, 16-byte aligned, growing down. */
+-#define XBOX_WORKER_STACK_TOP(n) (XBOX_WORKER_STACK_BASE + \
+-                                  XBOX_WORKER_STACK_SIZE * ((n) + 1) - 16)
++uint32_t xbox_worker_stack_top(int slot);
++#define XBOX_WORKER_STACK_TOP(n) xbox_worker_stack_top(n)
+ 
+ /* ================================================================
+  * Xbox dynamic heap (for MmAllocateContiguousMemory, etc.)
   * ================================================================ */
  
  /** Base VA of the dynamic heap area (above stack). */
@@ -969,7 +1082,7 @@ index fd83afb..a75fb4f 100644
  
  /** Exclusive top of the dynamic heap: the end of RAM for this run. Runtime,
   *  not a macro, because RAM size is now configurable (retail 64 MB vs devkit
-@@ -452,6 +454,7 @@ HANDLE xbox_GetMappingHandle(void);
+@@ -452,6 +448,7 @@ HANDLE xbox_GetMappingHandle(void);
  
  /* Carve a simulated stack for a spawned thread. Returns the Xbox VA of the
   * stack top, or 0 when the pool is exhausted. */
@@ -1021,10 +1134,10 @@ index 0000000..ef0b6fe
 +#endif
 diff --git a/src/kernel/xbox_runtime_layout.h b/src/kernel/xbox_runtime_layout.h
 new file mode 100644
-index 0000000..a15ceea
+index 0000000..7e61554
 --- /dev/null
 +++ b/src/kernel/xbox_runtime_layout.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,45 @@
 +#ifndef XBOX_RUNTIME_LAYOUT_H
 +#define XBOX_RUNTIME_LAYOUT_H
 +#include <stdint.h>
@@ -1033,18 +1146,22 @@ index 0000000..a15ceea
 + * The image keeps its original VAs. Only compatibility storage moves. */
 +typedef struct XboxRuntimeLayout {
 +    uint32_t rw_data, kernel_data, tls_struct, prcb;
-+    uint32_t tls_block, tls_thread, stack_base, heap_base;
++    uint32_t tls_block, tls_thread, stack_base, heap_base, stack_size;
 +} XboxRuntimeLayout;
 +
-+static inline int xbox_plan_runtime_layout(uint32_t image_end, uint32_t tls_bytes,
-+                                           uint32_t mapped_size,
++static inline int xbox_plan_runtime_layout_with_stack(uint32_t image_end, uint32_t tls_bytes,
++                                           uint32_t requested_stack, uint32_t mapped_size,
 +                                           XboxRuntimeLayout *layout)
 +{
 +    uint64_t base = ((uint64_t)image_end + 0xffffu) & ~UINT64_C(0xffff);
 +    uint64_t tls_block = base + 0x70000u;
 +    uint64_t tls_thread = (tls_block + tls_bytes + 63u) & ~UINT64_C(63);
 +    uint64_t stack = (tls_thread + 64u + 0xffffu) & ~UINT64_C(0xffff);
-+    uint64_t heap = stack + (8u * 1024u * 1024u);
++    /* Guest frames retain Xbox sizes; native C frames live on the host stack.
++     * Retain at least 256KB compatibility headroom, honoring larger XBE needs. */
++    uint64_t stack_size = requested_stack < 0x40000u ? 0x40000u : requested_stack;
++    stack_size = (stack_size + 0xffffu) & ~UINT64_C(0xffff);
++    uint64_t heap = stack + stack_size;
 +    if (!layout || image_end < 0x10000u || heap >= mapped_size) return 0;
 +    layout->rw_data = (uint32_t)base;
 +    layout->kernel_data = (uint32_t)(base + 0x40000u);
@@ -1054,7 +1171,16 @@ index 0000000..a15ceea
 +    layout->tls_thread = (uint32_t)tls_thread;
 +    layout->stack_base = (uint32_t)stack;
 +    layout->heap_base = (uint32_t)heap;
++    layout->stack_size = (uint32_t)stack_size;
 +    return 1;
++}
++
++/* Retain the original planner contract for existing external callers. Actual
++ * XBE loading uses the explicit stack-size planner above. */
++static inline int xbox_plan_runtime_layout(uint32_t image_end, uint32_t tls_bytes,
++                                           uint32_t mapped_size, XboxRuntimeLayout *layout)
++{
++    return xbox_plan_runtime_layout_with_stack(image_end,tls_bytes,8u*1024u*1024u,mapped_size,layout);
 +}
 +#endif
 diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
