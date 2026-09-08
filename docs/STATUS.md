@@ -1,6 +1,28 @@
 # Status — 2026-09-08
 
-## Current: build50/story08, chamber now renders and plays beyond prior stop
+## Current: story08 completed; story09 identifies stale inactive character input
+- User specifically requests the winter/penguin level in area1. This refines the
+  first-realm playable milestone; keyboard remains available input. User confirms
+  story kept playing with missing components, then crashed at its end.
+- Story08 all11 original scene boundaries completed in365.153s. Both dialogue tracks
+  played; native video sustained~60FPS. Masks/environment observed on actual frames.
+  Full rendering correctness remains false: many character draws were rejected.
+  33 SDL underrun callbacks over fullrun; modest offsets remain, no multi-second drift.
+- Actual post-story stop: fixed pixel stage0 COLOROP4 ALPHAOP4 invalid binding at
+  movie=-1, cut_on0, level37, fade82, swaps24305. mac_runtime owns original SDK
+  null-texture combiner passthrough behavior and bound/unbound GPU regression.
+- c99de6a adds bounded stream/index diagnostics and WRATH_BREAK_STREAM_ERROR.
+  Build51/story09 catches first failed fetch atscene2/swaps3323: shader69instructions,
+  v6 FLOAT3stream1, handle2D4E160 data2D51980 bytes1280 stride160, indices0..47,
+  requiredend7532. Crucially exactdeadproof=1 and c122=(0,0,0,0): stale bound
+  secondary data is provably irrelevant. controller_support owns applying that
+  exactproof to bound buffers, with nonzero-weight/bounds GPU regressions.
+- No game runs now. Build51 is packaged. Next combined frozen fixes/build52 then
+  story10: verify character rendering before testing original skip and hub entry,
+  navigate to first winter level through original game controls. No fake asset load
+  substitutions or weakened live-input bounds. Root owns builds/launch/UI.
+
+## Earlier: build50/story08, chamber now renders and plays beyond prior stop
 - a987ae4 implements original shader constant mode0/1 and programmable fog modes
   using original SDK coefficients. Combined native GPU tests pass; build50 arm64
   packaged successfully, no additional lift needed.
