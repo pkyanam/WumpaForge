@@ -47,6 +47,7 @@ def dump(debugger, destination):
             value("s_vertex_constants").GetLoadAddress() - base, 192 * 4),
         "texture_states": [words(0x10EC18 + stage * 128, 32)
                            for stage in range(4)],
+        "render_state_cache": words(0x10EE18, 146),
         "stream_records": [dict(zip(("stride", "offset", "handle"),
                                     words(0x10F280 + stream * 12, 3)))
                            for stream in range(16)],

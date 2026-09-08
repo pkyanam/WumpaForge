@@ -1,6 +1,30 @@
 # Status — 2026-09-08
 
-## Current: story05, real keyboard navigation and first backstory scenes
+## Current: story07, 60 FPS station/corridor and next character boundary
+- Build49 integrates the real secondary vertex streams, paged resources and exact
+  P8 palette change detection. Actual original New Game -> default DONE works via
+  keyboard/Computer Use. All11 story instances load; station and corridor complete.
+- Palette rebind/lock no longer invalidates identical texture bytes. Station and
+  corridor run60FPS with zero repeat texture uploads; corridor audio advances6.6293s
+  against6.633s animation/vblank time. No audio underruns/overflows. Small initial
+  audio offset (~0.15–0.19s plus output queue) remains under audit, not claimed fixed.
+- Story07 crosses the previous stream1 deformation failure and stops at original
+  SetShaderConstantMode1026F0(1), caller398CA, movie1 scene2 position1.5. Original
+  mode1 enables the existing192 physical constants without clearing/remapping them.
+  controller_support owns faithful mode0/1 transition support and GPU regression.
+- Story06 attract Level7 crosses the fog-color setter and reaches enabled distance
+  fog unsupported in shader_bridge.inc. mac_runtime owns native linear fog using
+  original SDK coefficients and actual oFog output, with GPU regression.
+- Root added all146 cached render states to shader_probe.py for read-only fog
+  diagnosis. No game is running; build49 app is current. Next integrate frozen
+  mode/fog work, build50 with at most2jobs, package only while no game runs, then
+  story08 >=480s with sparse story/shader probes. Enter New Game promptly before
+  attract timeout; get_app_state can relaunch a closed app, so check PID first.
+- First-realm playable gameplay and physical Bluetooth tests remain unverified.
+  User has no controller now: proceed using keyboard; original A/Start skipping
+  remains the intended intro choice, to be tested after full playback advances.
+
+## Earlier: story05, real keyboard navigation and first backstory scenes
 - User confirms keyboard navigation works and the backstory space station/audio
   played, then drifted and stopped before characters. Root also verified actual
   automated Space -> New Game -> default DONE -> Space with build48. e0076f3 fixes
