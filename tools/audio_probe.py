@@ -29,17 +29,20 @@ def capture(debugger):
     def variable(name, expression_first=False):
         # LLDB's global lookup often cannot materialize Mach-O TLS; a simple
         # variable expression in the selected stopped thread works in that case.
-        # Never permit an expression to execute target code to obtain a value.
-        options = lldb.SBExpressionOptions()
-        options.SetExecutionPolicy(lldb.eExecutionPolicyNever)
-        options.SetTimeoutInMicroSeconds(100000)
         attempts = (('expression', 'global') if expression_first
                     else ('global', 'expression'))
         failures = []
         for method in attempts:
             try:
-                value = (frame.EvaluateExpression(name, options) if method == 'expression'
-                         else target.FindFirstGlobalVariable(name))
+                if method == 'expression':
+                    options = lldb.SBExpressionOptions()
+                    # Apple LLDB lacks SetExecutionPolicy. Disable expression
+                    # JIT and evaluate only the fixed variable names above.
+                    options.SetAllowJIT(False)
+                    options.SetTimeoutInMicroSeconds(100000)
+                    value = frame.EvaluateExpression(name, options)
+                else:
+                    value = target.FindFirstGlobalVariable(name)
                 result = _integer(value)
                 if result is not None:
                     return result

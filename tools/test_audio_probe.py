@@ -26,7 +26,7 @@ class Value:
 
 
 class Options:
-    def SetExecutionPolicy(self, policy): assert policy == 7
+    def SetAllowJIT(self, enabled): assert enabled is False
     def SetTimeoutInMicroSeconds(self, timeout): assert timeout <= 100000
 
 

@@ -31,8 +31,8 @@ script audio_probe.dump(lldb.debugger, 'local/reports/audio-stop.json')
 
 The probe uses the selected stopped frame's simple TLS variable expressions
 (`g_esi`, `g_eax`, `g_ecx`, `g_esp` and other GPRs), then bounded memory reads.
-Expression execution policy is Never, so failed debugger materialization cannot
-run target code. Missing/optimized values are independent errors; original
+Expression JIT is disabled using Apple LLDB's `SetAllowJIT(False)`; only the
+fixed simple variable names are evaluated, with no call expressions. Missing/optimized values are independent errors; original
 wrapper/vtable captures still proceed. No guest or native audio methods run.
 
 It captures all six 68-byte original wrappers at `431ED8`, each wrapper's file
@@ -45,5 +45,11 @@ registered native bridge object, whose DWORD0 is16B70C and method+0C is1363D6.
 Validation: `python3 -m py_compile tools/audio_probe.py` and
 `python3 tools/test_audio_probe.py` passed. The latter is a mocked debugger
 fixture covering TLS fallback, unavailable values, independent memory failure,
-and exact bounded object/vtable reads. Real stopped-game probe validation is
+and exact bounded object/vtable reads. The installed Apple LLDB also passed import and capture against an empty target,
+recording unavailable fields without aborting. Real stopped-game validation is
 pending the parent's coordinated next capture.
+
+The first startup-only run survived its15-second watchdog. Its probe initially
+failed because Apple LLDB does not expose upstream SetExecutionPolicy. The option
+setup now uses the verified host API and sits inside per-field error handling.
+No audio failure was reproduced by that run.
