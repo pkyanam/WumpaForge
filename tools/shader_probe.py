@@ -35,6 +35,7 @@ def dump(debugger, destination):
     out = {
         "vertex_handle": integers(value("s_vertex_handle")),
         "pixel_handle": integers(value("s_pixel_handle")),
+        "texture_handles": integers(value("s_texture_handles")),
         "swap_count": words(0x10C110 + 0x2AC4, 1)[0],
         "instruction_count": count,
         "words": integers(obj.GetChildMemberWithName("words"))[:count],
@@ -104,7 +105,10 @@ def dump(debugger, destination):
     if pages.IsValid() and page_count.IsValid():
         count = page_count.GetValueAsUnsigned()
         summary = {"allocated_pages": count, "capacity": count * 256,
-                   "live": 0, "by_type": {}, "guest_bytes": 0}
+                   "live": 0, "by_type": {}, "guest_bytes": 0, "bound_records": []}
+        bound_handles = set(out["texture_handles"]) | {
+            stream["handle"] for stream in out["stream_records"]}
+        bound_handles.discard(0)
         if count <= pages.GetNumChildren():
             for i in range(count):
                 pointer = pages.GetChildAtIndex(i)
@@ -113,7 +117,8 @@ def dump(debugger, destination):
                 offsets = {kind.GetFieldAtIndex(j).GetName():
                            kind.GetFieldAtIndex(j).GetOffsetInBytes()
                            for j in range(kind.GetNumberOfFields())}
-                required = ("handle", "type", "bytes", "references", "bindings")
+                required = ("handle", "type", "data", "bytes", "width", "height",
+                            "levels", "format", "pitch", "references", "bindings")
                 if not size or not all(k in offsets for k in required):
                     summary["error"] = "Resource debug layout unavailable"
                     break
@@ -126,6 +131,8 @@ def dump(debugger, destination):
                                                       slot*size+offsets[k]+4], "little")
                               for k in required}
                     if fields["handle"]:
+                        if fields["handle"] in bound_handles:
+                            summary["bound_records"].append(fields)
                         summary["live"] += 1
                         summary["guest_bytes"] += fields["bytes"]
                         name = str(fields["type"])
