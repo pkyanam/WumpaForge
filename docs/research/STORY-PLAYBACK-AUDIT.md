@@ -170,3 +170,26 @@ and cumulative scene animationframes/30 at matched boundaries. Pair the existing
 per60-present profile lines by swaps/vblank. Sparse debugger stops affect timing;
 separate any stop-related discontinuity from sustained render slowness. No audio
 implementation adjustment is justified solely by the earlier codec/header audit.
+
+### Story05 measured result
+
+`local/reports/story-05.log` enables both existing profilers. Station scene0
+profile frame3504→3684 reports animation9→99 (3.000 nominal seconds), while
+vblank3861→4370 advances509/60=8.483 seconds: **5.483 seconds of additional
+animation lag** across those180 rendered frames. The first3504 report straddles
+loading, so its aggregate15.79FPS is not a pure station measurement. Subsequent
+full station windows are20.24,22.49,21.06FPS, with38.2–42.5ms/frame attributed
+to texture upload work. `audio_gate=0` and step0.5 throughout these windows.
+
+Contemporaneous AUDIO-OUTPUT lines show nonzero output,512–1024 queued stereo
+frames (10.7–21.3ms), underruns unchanged at2 and overflows0. The three pending
+original packet slots and loaded-byte totals reproduce story04's lower bounds.
+The corridor subsequently runs58.94–60.00FPS; this slows further divergence but
+does not erase the preceding station offset. The combined evidence identifies
+render throughput as a concrete cause of this audio lead. It does not support
+changing audio sample rate, codec or completion status to hide the slowdown.
+
+Story05 had imported the preceding probe version before the native counter
+extension was written. Its boundary snapshots therefore lack an exact simultaneous
+native source cursor; do not claim that enhanced measurement already ran. Commit
+7a67c77 prepares that check for a later run or explicit debugger module reload.
