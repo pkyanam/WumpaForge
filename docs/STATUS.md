@@ -1,6 +1,28 @@
 # Status — 2026-09-08
 
-## Current: story11/12 hub passes morph; programmable texture adjustment next
+## Current: build54 texture adjustment passes; hub reflection shader and audio audit
+-6c1494c implements original PS_ADJUST_TEXTUREMODES flag100: unbound PROJECT modes
+  becomeNONE and boundsamplers adapt to resourceheader dimensions. NONE isRGBA0001.
+  Bound/null/rebind and fullGPUtests pass. Native linker retained unusedsampler
+  locations, so cacheduniformlookup alone is not relied on forcompatibility.
+- Build54/story14 passes prior missingstage and reaches hubnormal-map reflection:
+  modes[1,17,17,12], dotmapping111, inputtexture0, flags1FF. Stage0normal128x128,
+  stage3cube128x128. mac_runtime implements actualDOTPRODUCT/DOT_RFLCT_SPEC stages;
+  controller independently verifies originalpairedshader/dataflow/testvectors.
+- Story13 had a separate earlyaudio worker failure~8.4s/movie0/swaps67: original
+  5DABB GetStatus indirectcall0 in5DA30. Story14 startup succeeded. native_audio owns
+  faithful lifetime/publication investigation; no speculativeaudiochange yet.
+  New audio_probe.py reads TLS/wrappers/vtables/native slots withouttargetexecution,
+  tolerating unavailablefields. Root starts15s audio-startup-01/session85259 to
+  seek reproduction while graphics work continues. AllUI/game launches remainroot.
+- Computer Use get_app_state autorelaunched exited app twice (97310 and7717), both
+  alreadygone when root attemptedtargetedSIGTERM. AlwayscheckactualdebugPID/log
+  beforeUI; no independentdemo is protected/current. Story14session85624ended.
+- Pixelprobe nowcapturesactivedefinition successfully (story14). Story12 failed
+  optionalredundantconstantshadowread wasremoved7e1b56a. Build54packaged, nextbuild55
+  afterreflectionGPUchecks; then normalNewGame/skip→hub→ArcticAntics(Level7/Demo0).
+
+## Earlier: story11/12 hub passes morph; programmable texture adjustment next
 -16fe0e9 implements a conservative component dependency proof through registers,
   masks, paired instructions, ARL/relative constants and exactzero multiplication.
   CPU edges/fullrenderer smoke/actual88shader nativeGPU tests pass, including
