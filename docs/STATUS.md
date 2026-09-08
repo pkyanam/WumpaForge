@@ -1,18 +1,33 @@
 # Status — 2026-09-08
 
-## Active user demo — leave it running
-- User requested another demo to show their dad. Standalone frozen copy launched
-  as PID94972 from build/demo/wrath_native with local/assets. Verified running,
-  Mach-O arm64, native640x480 GL4.1 Metal device and audio packets playing.
-  Log local/reports/dad-demo.log; PID file local/reports/dad-demo.pid.
-- All watchdog/profile/trace/capture environment options were removed. Do not
-  terminate or replace this demo, or start another game alongside it, while the
-  user is showing it. Continue source/research work without interfering. The copy
-  permits development builds to change independently. Await user steering or its
-  natural exit before another game launch.
-- Boot42 diagnostic was stopped deliberately to make room for this demo;
-  session81225 exited. User called the prior closure a crash, but boot41 ended at
-  the configured watchdog breakpoint, not a new game failure.
+## Current checkpoint: boot43, verified title/menu and next gameplay blocker
+- The user's standalone family demo naturally exited after ~109 seconds at a real
+  unresolved null call. PID94972 is gone; no protected/live demo remains. Boot43
+  reproduces the same loading failure under LLDB. No game is running at checkpoint.
+- The viewport constant fix restores the Traveller's Tales model/logo and the
+  Crash Bandicoot: The Wrath of Cortex title. Actual GPU captures were inspected:
+  local/reports/boot43-frames/frame-000900.png and frame-001800.png. The latter
+  visibly contains NEW GAME / LOAD GAME. Title/menu launch is now verified.
+- Boot43 stops at original call3B460 through a D3DX mesh vtable slot+38 resolving
+  to0. Stack3B2E0 ->9A6C0 ->A9960 ->A9BF0 ->A9D40 ->A9F60 ->7AF50 ->1DBC0 ->87870.
+  State Level7, Demo1 identifies attract-demo loading; gameplay remains unverified.
+  Original mesh constructors initialize nonzero slots111140/11115D. Capture the
+  live registers/mesh table/object/vtable next; never bypass the null call.
+- All2267 extracted files match SHA-256 of their original ISO extents; report
+  local/reports/asset-sha256-verification.json. Boot43 missing cubemaps are optional
+  in original1DEA0; missing stuff/xloading.nux falls back to existing xloading.nus
+  in A9F60. These misses do not explain the mesh crash.
+- Audio is audible, but full-speed sync remains unfinished. Heavy boot43 windows
+  run30–40FPS. At30FPS, work31.5ms wall/12.4ms CPU, context0.86ms, event0.04ms,
+  draw submission0.97ms, upload5.28ms. Profile remaining waits before optimization.
+- User's next milestone: playable first-realm level (at least one of the first
+  five), optional viewing/skipping of original intro/story, keyboard/mouse and
+  Xbox/DualSense gamepads, optimized performance. Three active agent assignments:
+  controller_support owns input; native_audio owns mesh crash/runtime/probe;
+  mac_runtime owns performance profiling. Root integrates and runs the game.
+  Keep at most2 compiler jobs total and no concurrent game launches.
+- Build43 and combined GPU viewport/cache/driver fixtures pass. Current uncommitted
+  integration includes viewport source, diagnostics, asset audit and frame capture.
 
 ## Latest implementation checkpoint: boot41, cache improvement and live scene1
 - 4c06da8 adds exact encoded-byte texture/palette snapshots, capped64MiB with
@@ -39,7 +54,7 @@
   save/load and clean shutdown verification remain. Preserve the live dad demo.
 
 ## Goal
-Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
+Run the supplied game natively on Apple Silicon without emulation. **Native title/menu verified; playable gameplay remains the current blocker.**
 
 ## Latest checkpoint: boot39, audible audio; video slow and second stream next
 - User confirms the new run has audible publisher intro, but video runs below

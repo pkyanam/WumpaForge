@@ -9,6 +9,11 @@ graphics, audio, and system-call compatibility layers is acceptable. Use the
 xboxrecomp static pipeline and runtime as needed; no CPU interpreter/JIT fallback.
 Wireless Xbox One/Series X and PS5 DualSense controllers paired through macOS
 Bluetooth must be supported. SDL's game-controller mappings are the host interface.
+Keyboard and mouse controls are also required, scoped to the focused game window.
+The next playable milestone is at least one of the first five levels in the first
+realm, with the original intro/story available to watch or skip. Maintain correct
+assets, audio synchronization and a 60 FPS performance target; report measured
+performance and unverified physical hardware honestly.
 The user permits subagents when they speed the work up; use bounded disjoint tasks.
 Do not equate a native emulator executable, title-screen mockup, asset viewer, or
 compilable console binary with a working native game.
