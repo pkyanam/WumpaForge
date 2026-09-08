@@ -3,7 +3,42 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot35, Traveller's Tales animation; vertex ARL next
+## Latest checkpoint: boot39, audible audio; video slow and second stream next
+- User confirms the new run has audible publisher intro, but video runs below
+  full speed and audio/video are out of sync. Treat this as an actual remaining
+  defect, not completed audio/video integration. mac_runtime audits render/present
+  pacing and proposes bounded low-overhead measurements for the next root run.
+- Root read-only CoreAudio probe confirms MacBook Air Speakers, master mute0,
+  volume1.0,48000Hz. tools/audio_output_probe.c never changes settings.
+- Boot36 revealed every stream Process returned80070057; boot37 captured actual
+  packet data80000000,36864bytes,status431EE4. The native bridge rejected the
+  separate allocated contiguous-memory window. 0d5a232 fixes bounded validation
+  while preserving high addresses. UBSan sparse-memory regression verifies actual
+  ADPCM output from80000000 with deliberately different low-memory bytes.
+- Boot39 accepts original44.1kHz mono ADPCM and emits actual native PCM. Last
+  audio trace:961792 callback frames,1604910 nonzero samples,peak32768,one underrun,
+  zero overflows. The earlier boot30 gate advancement did not prove playback;
+  it was silently rejecting packets until this fix. User hearing is now confirmed.
+- 3bdd8eb adds nine verified emission seeds; analyze/lift36 and generated compile
+  pass. dfb7813 restores actual render defaults; full component GPU tests pass.
+  5b3d519 adds ARL and relative constants, with actual69-instruction GPU compilation
+  and matrix-index transform-feedback tests. Full builds38/39 pass.
+- Boot39 links that69-instruction native shader, then stops at782 swaps on its
+  vertex declaration: used attribute6 is FLOAT3 in stream1; current binder accepts
+  stream0 only. Same original mesh as prior ARL failure. Live declarations, program
+  and constants: local/reports/boot-39-shader.json. Stride optimized away, so actual
+  vertex byte capture is explicitly unavailable. controller_support owns the
+  demonstrated next stream binding contract and graphics/index/shader integration.
+- Boot36 used new audio diagnostics/generated callbacks with prior graphics/vertex
+  objects to avoid concurrent edits; boot38/39 are consistent full builds. All
+  sessions3543/65368/35412/93466 have exited; no game intentionally running.
+  tools/boot.py --probe-shader plus tools/shader_probe.py now captures state at an
+  actual shader boundary or bounded stop, including slots and vertices if available.
+- No verified Crash title/menu/gameplay. Physical Bluetooth controllers, frame rate
+  and sync, save/load, sound quality and clean shutdown remain. Goal active; max2
+  compile jobs. Root coordinates all game launches and integration builds.
+
+## Previous checkpoint: boot35, Traveller's Tales animation
 - User-requested live preview ran build31 once (user-launch-01.log) and naturally
   stopped at the known mixed shader failure. Session96785 exited134; no game left
   running. Estimate communicated: hours to days for menu, days to weeks for reliable

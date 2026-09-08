@@ -14,6 +14,8 @@ def main():
     parser.add_argument("--break-at", action="append", default=[])
     parser.add_argument("--probe-intro", action="store_true",
                         help="Read-only matched intro and first draw snapshots")
+    parser.add_argument("--probe-shader", action="store_true",
+                        help="Export live shader state at a failure or bounded stop")
     args = parser.parse_args()
     if Path(args.name).name != args.name or not 1 <= args.seconds <= 60:
         parser.error("Use a plain log name and a duration from 1 to 60 seconds")
@@ -21,6 +23,11 @@ def main():
     reports.mkdir(parents=True, exist_ok=True)
     log = reports / f"{args.name}.log"
     command = ["lldb", "--batch", "-o", "breakpoint set -n bridge_HalReturnToFirmware"]
+    shader_dump = []
+    if args.probe_shader:
+        command += ["-o", f"command script import {ROOT / 'tools/shader_probe.py'}",
+                    "-o", "breakpoint set -n shader_error"]
+        shader_dump = [f"script shader_probe.dump(lldb.debugger, {str(reports / (args.name + '-shader.json'))!r})"]
     if args.probe_intro:
         command += ["-o", f"command script import {ROOT / 'tools/intro_probe.py'}",
                     "-o", "script intro_probe.install(lldb.debugger)"]
@@ -34,8 +41,11 @@ def main():
     for symbol in args.break_at:
         command += ["-o", f"breakpoint set -n {symbol}"]
     # LLDB's -o commands stop after a crash; -k is required for that backtrace.
-    command += ["-o", "run", "-o", "thread backtrace all", "-o", "quit",
-                "-k", "thread backtrace all", "-k", "quit", "--",
+    command += ["-o", "run"]
+    for flag in ("-o", "-k"):
+        for action in [*shader_dump, "thread backtrace all", "quit"]:
+            command += [flag, action]
+    command += ["--",
                 str(ROOT / "build/native/wrath_native"), str(ROOT / "local/assets")]
     env = dict(os.environ, WRATH_BOOT_TIMEOUT=str(args.seconds + 5),
                RECOMP_WATCHDOG_SECS=str(args.seconds))
