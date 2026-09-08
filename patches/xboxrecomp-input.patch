@@ -1,0 +1,479 @@
+diff --git a/src/input/CMakeLists.txt b/src/input/CMakeLists.txt
+index caef326..4e7bb06 100644
+--- a/src/input/CMakeLists.txt
++++ b/src/input/CMakeLists.txt
+@@ -9,7 +9,7 @@ target_include_directories(xbox_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+ if(WIN32)
+     target_link_libraries(xbox_input PUBLIC platform xinput)
+ else()
+-    find_package(SDL2 REQUIRED)
++    find_package(SDL2 2.0.18 REQUIRED)
+     target_link_libraries(xbox_input PUBLIC platform SDL2::SDL2)
+ endif()
+ 
+diff --git a/src/input/README.md b/src/input/README.md
+index dc20ffd..b0f5e67 100644
+--- a/src/input/README.md
++++ b/src/input/README.md
+@@ -1,137 +1,42 @@
+-# xbox_input — Xbox Gamepad to XInput
+-
+-Maps the Xbox controller API to Windows XInput. The original Xbox used `XInputGetState` with a slightly different structure layout than the XInput API on Windows. This layer translates between them.
+-
+-## Files
+-
+-| File | LOC | Purpose |
+-|------|-----|---------|
+-| `xinput_xbox.h` | 189 | Public header — types, button constants, function prototypes |
+-| `xinput_device.c` | 23 | Implementation (maps Xbox calls to Windows XInput) |
+-
+-## Quick Start
+-
+-```c
+-#include "xinput_xbox.h"
+-
+-// Initialize input system
+-xbox_InputInit();
+-
+-// Poll controller state (port 0-3)
+-XBOX_INPUT_STATE state;
+-if (xbox_InputGetState(0, &state) == 0) {
+-    // Digital buttons
+-    if (state.Gamepad.wButtons & XBOX_GAMEPAD_START)
+-        pause_game();
+-
+-    // Analog buttons (0-255 pressure)
+-    uint8_t trigger_r = state.Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER];
+-    if (trigger_r > XBOX_ANALOG_BUTTON_THRESHOLD)
+-        accelerate(trigger_r / 255.0f);
+-
+-    // Stick axes (-32768 to +32767)
+-    float steer = state.Gamepad.sThumbLX / 32768.0f;
+-}
+-
+-// Vibration feedback
+-XBOX_VIBRATION vib = { .wLeftMotorSpeed = 32000, .wRightMotorSpeed = 16000 };
+-xbox_InputSetState(0, &vib);
+-```
+-
+-## API
+-
+-```c
+-// Initialize (call once at startup)
+-void xbox_InputInit(void);
+-
+-// Poll controller state (returns 0 on success, non-zero if disconnected)
+-DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState);
+-
+-// Set vibration motors
+-DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration);
+-
+-// Check if controller is connected
+-BOOL xbox_InputIsConnected(DWORD dwPort);
+-
+-// Query controller capabilities
+-DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILITIES *pCaps);
+-```
+-
+-## Types
+-
+-```c
+-typedef struct {
+-    WORD  wButtons;                     // Digital button bitmask
+-    BYTE  bAnalogButtons[8];            // Analog button pressure (0-255)
+-    SHORT sThumbLX, sThumbLY;           // Left stick (-32768 to +32767)
+-    SHORT sThumbRX, sThumbRY;           // Right stick
+-} XBOX_GAMEPAD;
+-
+-typedef struct {
+-    DWORD dwPacketNumber;               // Increments on state change
+-    XBOX_GAMEPAD Gamepad;
+-} XBOX_INPUT_STATE;
+-
+-typedef struct {
+-    WORD wLeftMotorSpeed;               // 0-65535
+-    WORD wRightMotorSpeed;              // 0-65535
+-} XBOX_VIBRATION;
+-```
+-
+-## Button Constants
+-
+-### Digital Buttons (wButtons bitmask)
+-
+-```c
+-XBOX_GAMEPAD_DPAD_UP         0x0001
+-XBOX_GAMEPAD_DPAD_DOWN       0x0002
+-XBOX_GAMEPAD_DPAD_LEFT       0x0004
+-XBOX_GAMEPAD_DPAD_RIGHT      0x0008
+-XBOX_GAMEPAD_START            0x0010
+-XBOX_GAMEPAD_BACK             0x0020
+-XBOX_GAMEPAD_LEFT_THUMB       0x0040    // Left stick click
+-XBOX_GAMEPAD_RIGHT_THUMB      0x0080    // Right stick click
+-```
+-
+-### Analog Buttons (bAnalogButtons[] indices)
+-
+-The original Xbox had pressure-sensitive face buttons (0-255):
+-
+-```c
+-XBOX_BUTTON_A          0    // Also used for "boost" in racing games
+-XBOX_BUTTON_B          1
+-XBOX_BUTTON_X          2
+-XBOX_BUTTON_Y          3
+-XBOX_BUTTON_BLACK      4    // No equivalent on modern controllers
+-XBOX_BUTTON_WHITE      5    // No equivalent on modern controllers
+-XBOX_BUTTON_LTRIGGER   6    // Left trigger
+-XBOX_BUTTON_RTRIGGER   7    // Right trigger
+-
+-XBOX_ANALOG_BUTTON_THRESHOLD  30   // Recommended press threshold
+-```
+-
+-### Xbox → Modern Controller Mapping
+-
+-| Xbox Button | XInput Equivalent | Notes |
+-|-------------|------------------|-------|
+-| A | A | Green button |
+-| B | B | Red button |
+-| X | X | Blue button |
+-| Y | Y | Yellow button |
+-| Black | Right Bumper | Mapped to RB |
+-| White | Left Bumper | Mapped to LB |
+-| L Trigger | Left Trigger | Analog 0-255 |
+-| R Trigger | Right Trigger | Analog 0-255 |
+-| Start | Start/Menu | |
+-| Back | Back/View | |
+-| D-pad | D-pad | Digital only |
+-| L Stick | L Stick | Click = L3 |
+-| R Stick | R Stick | Click = R3 |
+-
+-## Ports
+-
+-```c
+-#define XBOX_MAX_CONTROLLERS  4   // Ports 0-3
+-```
+-
+-The Xbox supports 4 controllers. Each port can have a controller with optional memory units and other accessories. This layer only handles the gamepad; memory unit emulation is not needed for recompiled games.
++# Xbox input compatibility
++
++The Windows backend uses XInput. macOS and other SDL hosts use SDL2's mapped
++GameController API, including Xbox One/Series controllers and PS5 DualSense.
++Pair wireless controllers in the host OS before using them. SDL supplies device
++mappings; `SDL_GAMECONTROLLERCONFIG` can override a mapping if needed.
++
++| Original Xbox | Xbox One / Series | DualSense |
++|---|---|---|
++| A / B / X / Y | A / B / X / Y | Cross / Circle / Square / Triangle |
++| Black / White | RB / LB | R1 / L1 |
++| Left / right trigger | LT / RT | L2 / R2 |
++| Start / Back | Menu / View | Options / Create |
++| Sticks, stick clicks, D-pad | Same | Same |
++
++Face buttons and shoulders report 0 or 255 because these modern controllers
++have digital buttons. Triggers retain their analog 0–255 range. Stick Y axes
++are inverted and saturated, retaining zero at center; no additional deadzone
++is imposed because games normally apply their own.
++
++Call `xbox_InputInit()` at startup and `xbox_InputShutdown()` before `SDL_Quit()`.
++Public polls also initialize lazily. **All SDL input calls must run on the SDL/main
++thread**, since they pump host events. They do not remove window/quit events from
++the queue. Calls are not designed for concurrent use from guest worker threads.
++
++Up to four connected gamepads retain their assigned Xbox ports while attached.
++Disconnected devices are closed, and newly connected devices take the lowest
++free port. Device instance IDs prevent duplication or reassignment when device
++indices change. State packet numbers advance on an observed state change or
++new connection, rather than every poll.
++
++`xbox_InputGetState`, `xbox_InputIsConnected`, `xbox_InputGetCapabilities`, and
++`xbox_InputSetState` all refresh device presence. Unsupported vibration returns
++error 50 (`ERROR_NOT_SUPPORTED`). DualSense Bluetooth extended reports are
++requested for rumble. While the game polls, active rumble is refreshed every
++500 ms with a 1000 ms bounded effect; zero motor strengths stop it. This also
++allows rumble to expire if polling stalls. SDL environment hints retain priority.
++
++Requires SDL2 2.0.18 or newer. The workspace virtual-controller test uses the
++extended virtual-device API and therefore requires SDL2 2.24 or newer. Virtual
++tests validate the compatibility mapping, not hardware Bluetooth transport,
++physical latency, or game-side integration.
+diff --git a/src/input/xinput_device.c b/src/input/xinput_device.c
+index 1a662a8..e421848 100644
+--- a/src/input/xinput_device.c
++++ b/src/input/xinput_device.c
+@@ -33,6 +33,15 @@ void xbox_InputInit(void)
+     }
+ }
+ 
++void xbox_InputShutdown(void)
++{
++    XINPUT_VIBRATION stop = { 0, 0 };
++    for (DWORD i = 0; i < XBOX_MAX_CONTROLLERS; ++i) {
++        if (g_controller_connected[i]) XInputSetState(i, &stop);
++        g_controller_connected[i] = FALSE;
++    }
++}
++
+ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+ {
+     XINPUT_STATE xi_state;
+@@ -63,9 +72,9 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y] =
+         (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_Y) ? 255 : 0;
+     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK] =
+-        (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) ? 255 : 0;
+-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] =
+         (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) ? 255 : 0;
++    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] =
++        (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) ? 255 : 0;
+     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] = xi_state.Gamepad.bLeftTrigger;
+     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] = xi_state.Gamepad.bRightTrigger;
+ 
+@@ -121,29 +130,104 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
+ #include <SDL.h>
+ 
+ static SDL_GameController *g_pads[XBOX_MAX_CONTROLLERS];
+-static BOOL  g_controller_connected[XBOX_MAX_CONTROLLERS];
+ static DWORD g_packet[XBOX_MAX_CONTROLLERS];
+-
+-/* Open up to XBOX_MAX_CONTROLLERS attached game controllers. */
+-static void open_controllers(void)
++static XBOX_GAMEPAD g_previous[XBOX_MAX_CONTROLLERS];
++static XBOX_VIBRATION g_vibration[XBOX_MAX_CONTROLLERS];
++static Uint32 g_rumble_tick[XBOX_MAX_CONTROLLERS];
++static BOOL g_initialized;
++
++/* Called on the SDL/main thread. Pump without consuming window/quit events.
++ * Instance IDs, unlike device indices, survive another controller detaching. */
++static void refresh_controllers(void)
+ {
+-    int slot = 0;
+-    for (int i = 0; i < SDL_NumJoysticks() && slot < XBOX_MAX_CONTROLLERS; i++) {
+-        if (!SDL_IsGameController(i))
+-            continue;
+-        if (!g_pads[slot]) {
+-            g_pads[slot] = SDL_GameControllerOpen(i);
+-            g_controller_connected[slot] = (g_pads[slot] != NULL);
++    SDL_PumpEvents();
++    SDL_GameControllerUpdate();
++    for (int slot = 0; slot < XBOX_MAX_CONTROLLERS; ++slot) {
++        if (g_pads[slot] && !SDL_GameControllerGetAttached(g_pads[slot])) {
++            SDL_GameControllerClose(g_pads[slot]);
++            g_pads[slot] = NULL;
++            memset(&g_previous[slot], 0, sizeof(g_previous[slot]));
++            memset(&g_vibration[slot], 0, sizeof(g_vibration[slot]));
++        }
++    }
++    int count = SDL_NumJoysticks();
++    for (int device = 0; device < count; ++device) {
++        if (!SDL_IsGameController(device)) continue;
++        SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(device);
++        int free_slot = -1, existing = 0;
++        for (int slot = 0; slot < XBOX_MAX_CONTROLLERS; ++slot) {
++            if (!g_pads[slot]) {
++                if (free_slot < 0) free_slot = slot;
++            } else if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(
++                           g_pads[slot])) == id) {
++                existing = 1;
++            }
++        }
++        if (!existing && free_slot >= 0) {
++            g_pads[free_slot] = SDL_GameControllerOpen(device);
++            if (g_pads[free_slot]) {
++                ++g_packet[free_slot];
++                SDL_Log("Xbox port %d: %s", free_slot,
++                        SDL_GameControllerName(g_pads[free_slot]));
++            }
++        }
++    }
++    /* Xbox vibration persists until changed. Refresh bounded SDL effects while
++     * polling, and let them expire if the game hangs or stops polling. */
++    Uint32 now = SDL_GetTicks();
++    for (int slot = 0; slot < XBOX_MAX_CONTROLLERS; ++slot) {
++        if (g_pads[slot] &&
++            (g_vibration[slot].wLeftMotorSpeed || g_vibration[slot].wRightMotorSpeed) &&
++            now - g_rumble_tick[slot] >= 500) {
++            SDL_GameControllerRumble(g_pads[slot], g_vibration[slot].wLeftMotorSpeed,
++                                     g_vibration[slot].wRightMotorSpeed, 1000);
++            g_rumble_tick[slot] = now;
+         }
+-        slot++;
+     }
+ }
+ 
+ void xbox_InputInit(void)
+ {
+-    if (!SDL_WasInit(SDL_INIT_GAMECONTROLLER))
+-        SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
+-    open_controllers();
++    if (!g_initialized) {
++        /* SDL's mappings normalize Xbox and DualSense buttons by position.
++         * Allow environment hints to override these defaults. */
++        SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5, "1");
++        SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
++        SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX, "1");
++        if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
++            SDL_LogError(SDL_LOG_CATEGORY_INPUT, "Controller initialization: %s", SDL_GetError());
++            return;
++        }
++        g_initialized = TRUE;
++    }
++    refresh_controllers();
++}
++
++void xbox_InputShutdown(void)
++{
++    if (!g_initialized) return;
++    for (int slot = 0; slot < XBOX_MAX_CONTROLLERS; ++slot) {
++        if (g_pads[slot]) {
++            SDL_GameControllerRumble(g_pads[slot], 0, 0, 0);
++            SDL_GameControllerClose(g_pads[slot]);
++            g_pads[slot] = NULL;
++        }
++    }
++    memset(g_packet, 0, sizeof(g_packet));
++    memset(g_previous, 0, sizeof(g_previous));
++    memset(g_vibration, 0, sizeof(g_vibration));
++    SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
++    g_initialized = FALSE;
++}
++
++static SHORT invert_y(Sint16 value)
++{
++    return value == -32768 ? 32767 : (SHORT)-value;
++}
++
++static BYTE trigger_pressure(Sint16 value)
++{
++    return value <= 0 ? 0 : (BYTE)((int)value * 255 / 32767);
+ }
+ 
+ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+@@ -151,17 +235,13 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pState)
+         return ERROR_DEVICE_NOT_CONNECTED;
+ 
++    xbox_InputInit();
+     SDL_GameController *c = g_pads[dwPort];
+     if (!c || !SDL_GameControllerGetAttached(c)) {
+-        g_controller_connected[dwPort] = FALSE;
+         return ERROR_DEVICE_NOT_CONNECTED;
+     }
+ 
+-    SDL_GameControllerUpdate();
+-    g_controller_connected[dwPort] = TRUE;
+-
+     memset(pState, 0, sizeof(XBOX_INPUT_STATE));
+-    pState->dwPacketNumber = ++g_packet[dwPort];
+ 
+     WORD btn = 0;
+     if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_UP))    btn |= XBOX_GAMEPAD_DPAD_UP;
+@@ -183,25 +263,30 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y] =
+         SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_Y) ? 255 : 0;
+     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK] =
+-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) ? 255 : 0;
+-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] =
+         SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) ? 255 : 0;
++    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] =
++        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) ? 255 : 0;
+ 
+     /* SDL trigger axes are 0..32767 -> Xbox analog button 0..255 */
+     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] =
+-        (BYTE)(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) >> 7);
++        trigger_pressure(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT));
+     pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] =
+-        (BYTE)(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) >> 7);
++        trigger_pressure(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT));
+ 
+     /* SDL Y axis points down; the Xbox Y axis points up -- invert.
+-     * Use (-1 - v) so v = -32768 does not overflow SHORT. */
++     * Saturate the negative endpoint while keeping centered sticks at zero. */
+     pState->Gamepad.sThumbLX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX);
+     pState->Gamepad.sThumbLY =
+-        (SHORT)(-1 - SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY));
++        invert_y(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY));
+     pState->Gamepad.sThumbRX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTX);
+     pState->Gamepad.sThumbRY =
+-        (SHORT)(-1 - SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY));
++        invert_y(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY));
+ 
++    if (memcmp(&pState->Gamepad, &g_previous[dwPort], sizeof(XBOX_GAMEPAD)) != 0) {
++        ++g_packet[dwPort];
++        g_previous[dwPort] = pState->Gamepad;
++    }
++    pState->dwPacketNumber = g_packet[dwPort];
+     return ERROR_SUCCESS;
+ }
+ 
+@@ -210,20 +295,23 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pVibration)
+         return ERROR_DEVICE_NOT_CONNECTED;
+ 
++    xbox_InputInit();
+     SDL_GameController *c = g_pads[dwPort];
+-    if (!c) return ERROR_DEVICE_NOT_CONNECTED;
++    if (!c || !SDL_GameControllerGetAttached(c)) return ERROR_DEVICE_NOT_CONNECTED;
+ 
+-    /* SDL rumble needs a duration; refresh for ~1s on each call (the game
+-     * polls vibration continuously). */
+-    SDL_GameControllerRumble(c, pVibration->wLeftMotorSpeed,
+-                             pVibration->wRightMotorSpeed, 1000);
++    if (SDL_GameControllerRumble(c, pVibration->wLeftMotorSpeed,
++                                 pVibration->wRightMotorSpeed, 1000) != 0)
++        return 50; /* Win32 ERROR_NOT_SUPPORTED, absent from portable header. */
++    g_vibration[dwPort] = *pVibration;
++    g_rumble_tick[dwPort] = SDL_GetTicks();
+     return ERROR_SUCCESS;
+ }
+ 
+ BOOL xbox_InputIsConnected(DWORD dwPort)
+ {
+     if (dwPort >= XBOX_MAX_CONTROLLERS) return FALSE;
+-    return g_controller_connected[dwPort];
++    xbox_InputInit();
++    return g_pads[dwPort] != NULL;
+ }
+ 
+ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILITIES *pCaps)
+@@ -231,6 +319,7 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
+     (void)dwFlags;
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pCaps)
+         return ERROR_DEVICE_NOT_CONNECTED;
++    xbox_InputInit();
+     if (!g_pads[dwPort])
+         return ERROR_DEVICE_NOT_CONNECTED;
+ 
+@@ -238,6 +327,14 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
+     pCaps->Type    = 1;   /* XINPUT_DEVTYPE_GAMEPAD */
+     pCaps->SubType = 1;   /* XINPUT_DEVSUBTYPE_GAMEPAD */
+     pCaps->Flags   = 0;
++    pCaps->Gamepad.wButtons = 0x00FF;
++    memset(pCaps->Gamepad.bAnalogButtons, 255, sizeof(pCaps->Gamepad.bAnalogButtons));
++    pCaps->Gamepad.sThumbLX = pCaps->Gamepad.sThumbLY =
++        pCaps->Gamepad.sThumbRX = pCaps->Gamepad.sThumbRY = 32767;
++    if (SDL_GameControllerHasRumble(g_pads[dwPort])) {
++        pCaps->Vibration.wLeftMotorSpeed = 65535;
++        pCaps->Vibration.wRightMotorSpeed = 65535;
++    }
+     return ERROR_SUCCESS;
+ }
+ 
+diff --git a/src/input/xinput_xbox.h b/src/input/xinput_xbox.h
+index 4779275..d69950d 100644
+--- a/src/input/xinput_xbox.h
++++ b/src/input/xinput_xbox.h
+@@ -84,10 +84,14 @@ typedef struct XBOX_INPUT_CAPABILITIES {
+ 
+ /**
+  * Initialize the input system.
+- * Maps Xbox controller ports to XInput slots.
++ * Maps Xbox controller ports to host gamepads. On SDL/macOS all input calls
++ * must run on the SDL/main thread. Initialization is also done lazily on poll.
+  */
+ void xbox_InputInit(void);
+ 
++/* Stop motors and release input resources before host SDL shutdown. */
++void xbox_InputShutdown(void);
++
+ /**
+  * Get the state of a controller.
+  * Port: 0-3 (Xbox controller ports)

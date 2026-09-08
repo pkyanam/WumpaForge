@@ -7,6 +7,9 @@ downloads of relevant tools/source, launches, and UI testing. Work resource effi
 The user explicitly clarified that ahead-of-time ARM64 recompilation with Xbox
 graphics, audio, and system-call compatibility layers is acceptable. Use the
 xboxrecomp static pipeline and runtime as needed; no CPU interpreter/JIT fallback.
+Wireless Xbox One/Series X and PS5 DualSense controllers paired through macOS
+Bluetooth must be supported. SDL's game-controller mappings are the host interface.
+The user permits subagents when they speed the work up; use bounded disjoint tasks.
 Do not equate a native emulator executable, title-screen mockup, asset viewer, or
 compilable console binary with a working native game.
 

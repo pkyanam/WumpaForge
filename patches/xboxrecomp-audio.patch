@@ -1,0 +1,262 @@
+diff --git a/src/apu/CMakeLists.txt b/src/apu/CMakeLists.txt
+index 68d44ef..a6c0471 100644
+--- a/src/apu/CMakeLists.txt
++++ b/src/apu/CMakeLists.txt
+@@ -36,7 +36,7 @@ endif()
+ if(WIN32)
+     target_link_libraries(xbox_apu PRIVATE platform kernel32 winmm)
+ else()
+-    # Linux: platform layer (Win32 primitives on POSIX) + SDL2 audio + libm
++    # POSIX: platform primitives/threads + native SDL2 audio (CoreAudio on macOS).
+     find_package(SDL2 REQUIRED)
+     target_link_libraries(xbox_apu PRIVATE platform SDL2::SDL2 m)
+ endif()
+diff --git a/src/apu/apu_core.c b/src/apu/apu_core.c
+index 459be77..aa8d276 100644
+--- a/src/apu/apu_core.c
++++ b/src/apu/apu_core.c
+@@ -212,9 +212,17 @@ void mcpx_apu_monitor_init(MCPXAPUState *d, Error **errp)
+ 
+     /* Try XAudio2 first (lower latency) */
+     if (xa2_init()) {
++#if defined(_WIN32)
+         fprintf(stderr, "[APU] Using XAudio2 audio backend\n");
++#else
++        fprintf(stderr, "[APU] Using SDL2 native audio backend\n");
++#endif
+         return;
+     }
++#if !defined(_WIN32)
++    fprintf(stderr, "[APU] SDL2 output unavailable; audio output disabled\n");
++    return;
++#endif
+     fprintf(stderr, "[APU] XAudio2 unavailable, falling back to waveOut\n");
+ 
+     WAVEFORMATEX wfx = { 0 };
+@@ -274,6 +282,32 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
+         return;
+     }
+ 
++#if !defined(_WIN32)
++    /* Eight hardware subframes contain 256 stereo frames, and throttle runs
++     * once per eight at 256/48000 seconds. Do not synthesize 1024 samples each
++     * time: that advances software voices at four times the intended rate.
++     * Keep the hardware mix produced by DSP/VP instead of zeroing it first. */
++    if (g_audio_muted) {
++        memset(d->monitor.frame_buf, 0, sizeof(d->monitor.frame_buf));
++    } else {
++        if (g_test_tone.active) {
++            for (int i = 0; i < MIXER_FRAME_SAMPLES; i++) {
++                int16_t sample = (int16_t)(sin(g_test_tone.phase) * g_test_tone.amplitude);
++                d->monitor.frame_buf[i][0] = sample;
++                d->monitor.frame_buf[i][1] = sample;
++                g_test_tone.phase += g_test_tone.phase_inc;
++                if (g_test_tone.phase >= 2.0 * M_PI)
++                    g_test_tone.phase -= 2.0 * M_PI;
++            }
++        }
++        mixer_render(d->monitor.frame_buf, MIXER_FRAME_SAMPLES);
++    }
++    xa2_submit_samples((const int16_t *)d->monitor.frame_buf, MIXER_FRAME_SAMPLES);
++    /* The next VP accumulation or inactive-APU frame begins with silence. */
++    memset(d->monitor.frame_buf, 0, sizeof(d->monitor.frame_buf));
++    return;
++#endif
++
+     /* XAudio2 path: render and submit a buffer */
+     if (xa2_is_active()) {
+         int buf_size = xa2_get_buffer_size();
+@@ -574,7 +608,11 @@ void mcpx_apu_shutdown(MCPXAPUState *d)
+     fprintf(stderr, "[APU] Shutting down MCPX APU...\n");
+ 
+     qemu_mutex_lock(&d->lock);
++#if defined(_WIN32)
+     mcpx_apu_wait_for_idle(d);
++#endif
++    /* An active software voice/test tone prevents idle; terminate directly
++     * and join before releasing the monitor, even if playback is ongoing. */
+     qatomic_set(&d->exiting, true);
+     qemu_cond_signal(&d->cond);
+     qemu_mutex_unlock(&d->lock);
+diff --git a/src/apu/apu_xaudio2.c b/src/apu/apu_xaudio2.c
+index cd69e57..302b8ea 100644
+--- a/src/apu/apu_xaudio2.c
++++ b/src/apu/apu_xaudio2.c
+@@ -1,7 +1,7 @@
+ /**
+  * XAudio2 Audio Output Backend
+  *
+- * Provides low-latency audio output via XAudio2 (Win7+).
++ * Provides low-latency audio output via XAudio2 (Win7+) or SDL2 (POSIX).
+  * Called from the APU monitor frame to submit mixed samples.
+  * Falls back gracefully if XAudio2 is unavailable.
+  */
+@@ -11,8 +11,7 @@
+ #include <string.h>
+ #include "apu_xaudio2.h"
+ 
+-/* The XAudio2 backend is Windows-only. On Linux all xa2_* functions are
+- * stubbed to report inactive; real audio output via SDL2 comes later. */
++/* Keep the historical xa2_* interface for both native output backends. */
+ #if defined(_WIN32)
+ 
+ #define COBJMACROS
+@@ -161,12 +160,152 @@ int xa2_get_buffer_size(void)
+     return XA2_BUF_SAMPLES;
+ }
+ 
+-#else /* !_WIN32 -- POSIX stubs (no audio output yet) */
++#else /* !_WIN32 -- SDL2 native host audio (CoreAudio on macOS) */
+ 
+-int  xa2_init(void)                                   { return 0; }
+-void xa2_shutdown(void)                               {}
+-int  xa2_is_active(void)                              { return 0; }
+-int  xa2_submit_samples(const int16_t *s, int n)      { (void)s; (void)n; return 0; }
+-int  xa2_get_buffer_size(void)                        { return 0; }
++#include <SDL.h>
++#include <pthread.h>
++
++#define SDL_PCM_RATE       48000
++#define SDL_PCM_CHANNELS   2
++#define SDL_PCM_FRAME_BYTES (SDL_PCM_CHANNELS * sizeof(int16_t))
++#define SDL_PCM_SUBMISSION  256  /* Eight 32-sample APU subframes, 5.333ms. */
++#define SDL_PCM_CAPACITY    3072 /* Fixed 12KiB ring, at most 64ms queued. */
++#define SDL_PCM_PREROLL     1024 /* Start after 21.333ms has been produced. */
++
++/* Lifecycle calls and submit are serialized, including shutdown vs producer.
++ * SDL's device lock protects the ring against the audio callback. The callback
++ * never acquires the lifecycle mutex, allocates, logs, or waits for a producer. */
++static pthread_mutex_t g_sdl_lifecycle = PTHREAD_MUTEX_INITIALIZER;
++static SDL_AudioDeviceID g_sdl_device;
++static int16_t g_sdl_pcm[SDL_PCM_CAPACITY][SDL_PCM_CHANNELS];
++static unsigned g_sdl_read, g_sdl_queued;
++static int g_sdl_started;
++static uint64_t g_sdl_submitted, g_sdl_played, g_sdl_underruns, g_sdl_overflows;
++
++static void sdl_audio_callback(void *userdata, Uint8 *stream, int length)
++{
++    (void)userdata;
++    if (length <= 0) return;
++    /* Missing data becomes silence, never stale samples or an unbounded wait. */
++    memset(stream, 0, (size_t)length);
++    unsigned requested = (unsigned)((size_t)length / SDL_PCM_FRAME_BYTES);
++    unsigned frames = requested < g_sdl_queued ? requested : g_sdl_queued;
++    unsigned first = SDL_PCM_CAPACITY - g_sdl_read;
++    if (first > frames) first = frames;
++    memcpy(stream, g_sdl_pcm[g_sdl_read], first * SDL_PCM_FRAME_BYTES);
++    memcpy(stream + first * SDL_PCM_FRAME_BYTES, g_sdl_pcm,
++           (frames - first) * SDL_PCM_FRAME_BYTES);
++    g_sdl_read = (g_sdl_read + frames) % SDL_PCM_CAPACITY;
++    g_sdl_queued -= frames;
++    g_sdl_played += frames;
++    if (frames < requested) g_sdl_underruns++;
++}
++
++int xa2_init(void)
++{
++    pthread_mutex_lock(&g_sdl_lifecycle);
++    if (g_sdl_device) {
++        pthread_mutex_unlock(&g_sdl_lifecycle);
++        return 1;
++    }
++    /* Own exactly one SDL subsystem reference, even if input/video already
++     * initialized SDL. Never call SDL_Quit, which would tear those down. */
++    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
++        fprintf(stderr, "[SDL-AUDIO] Initialization failed: %s\n", SDL_GetError());
++        pthread_mutex_unlock(&g_sdl_lifecycle);
++        return 0;
++    }
++    SDL_AudioSpec want, have;
++    SDL_zero(want);
++    want.freq = SDL_PCM_RATE;
++    want.format = AUDIO_S16SYS;
++    want.channels = SDL_PCM_CHANNELS;
++    want.samples = 512;
++    want.callback = sdl_audio_callback;
++    /* SDL converts to the hardware format if necessary; our callback contract
++     * stays interleaved, signed native-endian 16-bit stereo at exactly 48kHz. */
++    g_sdl_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
++    if (!g_sdl_device) {
++        fprintf(stderr, "[SDL-AUDIO] Cannot open output: %s\n", SDL_GetError());
++        SDL_QuitSubSystem(SDL_INIT_AUDIO);
++        pthread_mutex_unlock(&g_sdl_lifecycle);
++        return 0;
++    }
++    g_sdl_read = g_sdl_queued = 0;
++    g_sdl_started = 0;
++    g_sdl_submitted = g_sdl_played = g_sdl_underruns = g_sdl_overflows = 0;
++    /* Device opens paused: collect preroll before starting its callback. */
++    fprintf(stderr, "[SDL-AUDIO] %s: %d Hz stereo S16, %u-frame callback, "
++                    "%d-frame queue limit\n", SDL_GetCurrentAudioDriver(),
++            have.freq, (unsigned)have.samples, SDL_PCM_CAPACITY);
++    pthread_mutex_unlock(&g_sdl_lifecycle);
++    return 1;
++}
++
++void xa2_shutdown(void)
++{
++    pthread_mutex_lock(&g_sdl_lifecycle);
++    if (g_sdl_device) {
++        /* Closing waits for the callback before releasing its state. */
++        SDL_CloseAudioDevice(g_sdl_device);
++        g_sdl_device = 0;
++        fprintf(stderr, "[SDL-AUDIO] Stopped: %llu frames submitted, %llu played, "
++                        "%llu underruns, %llu rejected full-buffer submissions\n",
++                (unsigned long long)g_sdl_submitted,
++                (unsigned long long)g_sdl_played,
++                (unsigned long long)g_sdl_underruns,
++                (unsigned long long)g_sdl_overflows);
++        g_sdl_read = g_sdl_queued = 0;
++        g_sdl_started = 0;
++        SDL_QuitSubSystem(SDL_INIT_AUDIO);
++    }
++    pthread_mutex_unlock(&g_sdl_lifecycle);
++}
++
++int xa2_is_active(void)
++{
++    pthread_mutex_lock(&g_sdl_lifecycle);
++    int active = g_sdl_device != 0;
++    pthread_mutex_unlock(&g_sdl_lifecycle);
++    return active;
++}
++
++int xa2_submit_samples(const int16_t *samples, int num_samples)
++{
++    if (!samples || num_samples <= 0 || num_samples > SDL_PCM_CAPACITY) return 0;
++    pthread_mutex_lock(&g_sdl_lifecycle);
++    if (!g_sdl_device) {
++        pthread_mutex_unlock(&g_sdl_lifecycle);
++        return 0;
++    }
++    SDL_LockAudioDevice(g_sdl_device);
++    unsigned frames = (unsigned)num_samples;
++    if (frames > SDL_PCM_CAPACITY - g_sdl_queued) {
++        /* Reject a whole submission; never truncate or grow latency. */
++        g_sdl_overflows++;
++        SDL_UnlockAudioDevice(g_sdl_device);
++        pthread_mutex_unlock(&g_sdl_lifecycle);
++        return 0;
++    }
++    unsigned write = (g_sdl_read + g_sdl_queued) % SDL_PCM_CAPACITY;
++    unsigned first = SDL_PCM_CAPACITY - write;
++    if (first > frames) first = frames;
++    memcpy(g_sdl_pcm[write], samples, first * SDL_PCM_FRAME_BYTES);
++    memcpy(g_sdl_pcm, samples + first * SDL_PCM_CHANNELS,
++           (frames - first) * SDL_PCM_FRAME_BYTES);
++    g_sdl_queued += frames;
++    g_sdl_submitted += frames;
++    int start = !g_sdl_started && g_sdl_queued >= SDL_PCM_PREROLL;
++    if (start) g_sdl_started = 1;
++    SDL_UnlockAudioDevice(g_sdl_device);
++    if (start) SDL_PauseAudioDevice(g_sdl_device, 0);
++    pthread_mutex_unlock(&g_sdl_lifecycle);
++    return 1;
++}
++
++int xa2_get_buffer_size(void)
++{
++    return SDL_PCM_SUBMISSION;
++}
+ 
+ #endif /* _WIN32 */

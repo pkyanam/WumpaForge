@@ -7,12 +7,16 @@
 
 extern void xbe_entry_point(void);
 extern int recomp_dispatch_init(void);
+extern ptrdiff_t g_xbox_mem_offset;
+extern RECOMP_TLS uint32_t g_esp;
 
 int main(int argc, char **argv)
 {
     const char *directory = argc > 1 ? argv[1] : "local/assets";
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+    const char *boot_timeout = getenv("WRATH_BOOT_TIMEOUT");
+    if (boot_timeout) alarm((unsigned)strtoul(boot_timeout, NULL, 10));
     char resolved[4096], xbe_path[4096], save_path[4096];
     if (!realpath(directory, resolved)) {
         perror(directory);

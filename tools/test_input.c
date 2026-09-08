@@ -5,12 +5,13 @@
 #include "input/xinput_xbox.h"
 
 static Uint16 rumble_low, rumble_high;
+static int virtual_rumble_success;
 static int rumble(void *data, Uint16 low, Uint16 high)
 {
     (void)data;
     rumble_low = low;
     rumble_high = high;
-    return 0;
+    return virtual_rumble_success;
 }
 
 static SDL_Joystick *attach(const char *name, Uint16 vendor, Uint16 product)
@@ -52,10 +53,19 @@ static void detach(SDL_Joystick *joy)
 
 int main(void)
 {
+    SDL_version version;
+    SDL_GetVersion(&version);
+    /* sdl2-compat 2.32.70 forwards an SDL2 int callback directly to an SDL3
+     * bool callback. Adapt only this fake driver, never runtime success checks.
+     * https://github.com/libsdl-org/sdl2-compat/blob/release-2.32.70/src/sdl2_compat.c#L10350 */
+    if (version.major == 2 && version.minor == 32 && version.patch == 70) {
+        virtual_rumble_success = 1;
+        puts("Using sdl2-compat 2.32.70 virtual rumble callback workaround");
+    }
     /* Isolate tests from any Bluetooth devices already paired to the host. */
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "0");
-    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5, "0");
-    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_XBOX, "0");
+    SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_HIDAPI_PS5, "0", SDL_HINT_OVERRIDE);
+    SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_HIDAPI_XBOX, "0", SDL_HINT_OVERRIDE);
     SDL_SetHint(SDL_HINT_JOYSTICK_MFI, "0");
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     xbox_InputInit();
@@ -101,7 +111,9 @@ int main(void)
     assert(xbox_InputGetCapabilities(1, 0, &caps) == 0);
     assert(caps.Vibration.wLeftMotorSpeed == 65535);
     XBOX_VIBRATION vibration = {12345, 54321};
-    assert(xbox_InputSetState(1, &vibration) == 0);
+    DWORD rumble_result = xbox_InputSetState(1, &vibration);
+    if (rumble_result) fprintf(stderr, "rumble result %u: %s\n", rumble_result, SDL_GetError());
+    assert(rumble_result == 0);
     assert(rumble_low == 12345 && rumble_high == 54321);
 
     detach(xbox);
@@ -119,10 +131,12 @@ int main(void)
     assert(same.Gamepad.bAnalogButtons[XBOX_BUTTON_A] == 0);
     assert(xbox_InputGetState(4, &state) == ERROR_DEVICE_NOT_CONNECTED);
     assert(xbox_InputGetState(0, NULL) == ERROR_DEVICE_NOT_CONNECTED);
+    vibration.wLeftMotorSpeed = vibration.wRightMotorSpeed = 0;
+    assert(xbox_InputSetState(1, &vibration) == 0);
+    assert(rumble_low == 0 && rumble_high == 0);
     detach(ps5);
     detach(xbox);
     xbox_InputShutdown();
-    assert(rumble_low == 0 && rumble_high == 0);
     xbox_InputInit();
     assert(!xbox_InputIsConnected(0));
     xbox_InputShutdown();
