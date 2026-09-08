@@ -193,3 +193,39 @@ Story05 had imported the preceding probe version before the native counter
 extension was written. Its boundary snapshots therefore lack an exact simultaneous
 native source cursor; do not claim that enhanced measurement already ran. Commit
 7a67c77 prepares that check for a later run or explicit debugger module reload.
+
+### Story07: native audio and animation clocks now advance together
+
+Story06 followed the attract demo and did not measure movie1. Story07 successfully
+entered movie1 on build49 with palette invalidation and vertex-stream fixes.
+The enhanced probe obtained real native queue/cursor values at both boundaries:
+
+| Boundary | Host monotonic seconds | Vblank | SDL frames played | Source seconds mixed |
+|---|---:|---:|---:|---:|
+| Before StartCutMovie | 54.584527 | 3055 | 2215424 | no story stream yet |
+| Station end | 58.237685 | 3274 | 2391040 | 3.514655 |
+| Corridor end | 64.870954 | 3672 | 2709504 | 10.143966 |
+
+Station start→end took3.653158 wall seconds,219vblanks (3.650s). Full station
+profile windows run60FPS, with0 uploads and4.73–4.77ms/frame work. The first
+aggregate18.30FPS report still includes loading and is not the station rate.
+
+Between station and corridor boundaries, wall advances6.633270s, vblank6.633333s,
+SDL playback6.634667s and the actual source cursor6.629311s. The independent
+clocks agree within4ms across this interval; the previous multi-second drift is
+absent. Output underruns and overflows remain0, stream volume1, rate44100Hz,
+active/unpaused, three queued packets. SDL ring depth is1024frames at station
+end and768 at corridor end (21.3ms and16ms).
+
+Absolute mixed-source positions trail the simple nominal animation sums110/30
+and310/30 by152ms and189ms respectively. This includes initial audio/animation
+start scheduling and scene-boundary frame conventions; it is not yet a lip-sync
+assessment. Ring/device latency is additional. Do not describe this as verified
+perfect synchronization. The measured result establishes correct ongoing clock
+rate in the first two scenes and removal of the earlier large render-induced lead.
+
+The run then aborts at original state method1026F0(value1), scene2 animation1.5.
+At the stop, native source10.223966s is still active, with0 underruns/overflows.
+No audio failure or unsupported format was reached. Chamber character playback,
+remaining scene timings, transition to sound174, and full completion still need
+an actual run after the graphics state boundary is implemented.
