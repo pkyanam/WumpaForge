@@ -329,3 +329,87 @@ these tests do not establish a completed full game load.
 clang -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,-dead_strip -Ithird_party/xboxrecomp/src tools/tests/runtime_stack_budget.c third_party/xboxrecomp/src/kernel/kernel_thread.c third_party/xboxrecomp/src/platform/win32_compat.c -o build/runtime-stack-budget-test
 build/runtime-stack-budget-test
 ```
+
+## Boot22 heap reuse and fragmentation
+
+The heap audit found three concrete allocation defects. Reusing a free block
+marked its entire old size live even for a tiny request; alignment checks could
+not allocate a valid aligned interior range; adjacent free merges left zero-sized
+tombstones that prevented later coalescing. Exhausting block-table metadata also
+allowed untracked allocations. These are separate from the parent's evidenced
+NtFreeVirtualMemory guest/host pointer-width bug, which prevented original game
+releases from reaching the guest heap at all.
+
+The allocator now chooses the smallest fitting free range and splits it into
+an optional free alignment prefix, the exact live allocation, and an optional
+free suffix. Bump alignment gaps are tracked as free ranges. The address-sorted
+table stays compact during merge/removal; tail frees rewind the frontier and
+release metadata. Allocation size/alignment arithmetic is widened to prevent
+overflow, invalid non-power-of-two alignment fails, and metadata exhaustion
+fails without returning untracked memory. Requested sizes below16 retain the
+existing16-byte minimum. Both newly allocated and reused bytes are zeroed; size
+queries report the actual live extent, including remaining size for interior
+addresses. The same reader/writer lock protects allocation/free/size operations.
+
+`xbox_HeapFreeChecked(address)` reports success only for an exact live allocation
+base; null, interior, unowned and already-freed pointers return0 without state
+changes. The existing void release API wraps it. The parent uses the checked API
+in its corrected32-bit NtFreeVirtualMemory bridge. New first-OOM diagnostics
+report live bytes, free bytes, largest free span, unallocated tail and record
+count, helping distinguish remaining live demand from fragmentation.
+
+The parent captured the old boot22 allocator at its first failure:1,350 nonempty
+records, all live, totaling56,371,699 bytes, with no free records. That snapshot
+does not prove how much earlier whole-block reuse inflated live accounting, and
+it cannot show releases lost in the syscall bridge. The corrected full-game boot
+must establish the actual benefit; no RAM expansion is included here.
+
+`tools/tests/runtime_heap.c` passed a4 MiB freed-buffer→24-byte-header scenario
+with immediate reuse of the remaining bytes; smallest-fit selection; aligned
+interior splitting; zero fill and exact size queries; multi-neighbor coalescing
+and tail reclamation; checked release; overflow/invalid alignment; and the
+65,536-record metadata limit. It checks that every table entry is nonempty,
+ordered, contiguous with its neighbor, and has no adjacent free ranges. The
+existing four-pthread allocator/TIB test and sixteen-slot stack-budget test also
+passed after recompiling against this allocator.
+
+Evidence: `local/reports/runtime-heap-test.log`,
+`local/reports/worker-memory-test.log`, and
+`local/reports/runtime-stack-budget-test.log`.
+
+```sh
+clang -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,-dead_strip -Ithird_party/xboxrecomp/src tools/tests/runtime_heap.c third_party/xboxrecomp/src/platform/win32_compat.c -o build/runtime-heap-test
+build/runtime-heap-test
+```
+
+## Guest virtual-memory release and boot23
+
+Original intro cleanup actually calls ordinal199 with MEM_RELEASE8000 through
+F0D65/F160C/F4F49/9E3F0/3CFE0/AA5A0/AAEF0/87BF0; the bounded breakpoint report is
+`local/reports/boot-22-vmfree.log`. The old bridge passed guest addresses of
+32-bit pointer/size fields as host PVOID/SIZE_T pointers. Host VirtualFree with
+release size0 returned success without freeing the guest allocation, then its
+64-bit output store clobbered the neighboring guest DWORD.
+
+The bridge now reads and writes exactly32 bits, validates argument locations,
+requires a zero region size and an exact owned allocation for MEM_RELEASE, and
+uses xbox_HeapFreeChecked. It never sends guest heap addresses to host unmap.
+For bounded MEM_DECOMMIT requests within an allocation, it zeroes discarded
+bytes and retains the reservation, consistent with the existing flat commit
+model; crossing another allocation fails. This does not implement a general
+Xbox page-table system. `tools/tests/virtual_free_bridge.c` exercises the actual
+bridge with instrumented allocation ownership, adjacent DWORD canaries, release
+errors, decommit zeroing and bounds. Build/run evidence is under
+`local/reports/virtual-free-bridge-*.log`.
+
+Boot23 passes the previous memory exhaustion: another run reaches heap frontier
+about36.7MiB of53.875MiB during loading, instead of exceeding56.49MB. The actual
+GPU frame40 capture shows the green loading object beyond the Universal splash:
+`local/reports/game-frame-40-boot23.png`. This is not a verified title/menu.
+A subsequent run advances to unresolved callback2B880, now being audited for AOT
+function discovery. No memory or alias expansion was necessary.
+
+```sh
+clang -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,-dead_strip -Ithird_party/xboxrecomp/src tools/tests/virtual_free_bridge.c -o build/virtual-free-bridge-test
+build/virtual-free-bridge-test
+```

@@ -23,7 +23,7 @@ index ade9b08..42926eb 100644
  /* KeTickCount - exported as a data pointer, not a function */
  extern volatile ULONG xbox_KeTickCount;
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 2d996b1..29b59c8 100644
+index 2d996b1..71a57e6 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -26,6 +26,7 @@
@@ -112,7 +112,49 @@ index 2d996b1..29b59c8 100644
                      fprintf(stderr, "  [KERNEL] PsCreateSystemThreadEx: spawned "
                              "worker 0x%08X (ctx=0x%08X, stack top 0x%08X)\n",
                              start_routine, start_context1, stack_top);
-@@ -1694,7 +1697,8 @@ static void bridge_PsTerminateSystemThread(void)
+@@ -960,9 +963,38 @@ static void bridge_NtFreeVirtualMemory(void)
+     uint32_t base_ptr = STACK_ARG(0);
+     uint32_t size_ptr = STACK_ARG(1);
+     uint32_t free_type = STACK_ARG(2);
+-
+-    g_eax = (uint32_t)xbox_NtFreeVirtualMemory(
+-        XBOX_TO_NATIVE(base_ptr), XBOX_TO_NATIVE(size_ptr), free_type);
++    /* These point to guest DWORDs, not host pointer or SIZE_T fields.
++     * Calling the host API used to overwrite adjacent guest
++     * bytes and never returned MEM_RELEASE allocations to the guest heap. */
++    if (base_ptr<0x1000 || size_ptr<0x1000 ||
++        base_ptr>XBOX_TOTAL_RAM-4 || size_ptr>XBOX_TOTAL_RAM-4 ||
++        ((base_ptr|size_ptr)&3)) {
++        g_eax=0xC000000Du; return;
++    }
++    uint32_t base=BRIDGE_MEM32(base_ptr), size=BRIDGE_MEM32(size_ptr);
++    if (free_type==MEM_RELEASE) {
++        if (size || !xbox_HeapFreeChecked(base)) { g_eax=0xC000000Du; return; }
++        BRIDGE_MEM32(base_ptr)=0;
++        BRIDGE_MEM32(size_ptr)=0;
++        g_eax=0; return;
++    }
++    if (free_type==MEM_DECOMMIT && base>=0x1000 && base<XBOX_TOTAL_RAM) {
++        uint32_t start=base&~0xFFFu;
++        uint32_t available=xbox_HeapBlockSize(start);
++        uint64_t end=((uint64_t)base+size+0xFFFu)&~0xFFFULL;
++        uint64_t bytes=size?end-start:available;
++        if (bytes && bytes<=available && (uint64_t)start+bytes<=XBOX_TOTAL_RAM) {
++            /* Reservation stays owned. This flat committed mapping's commit
++             * path is a no-op; zero discarded bytes so a later commit gets
++             * fresh pages without unmapping another guest allocation. */
++            memset(XBOX_TO_NATIVE(start),0,(size_t)bytes);
++            BRIDGE_MEM32(base_ptr)=start;
++            BRIDGE_MEM32(size_ptr)=(uint32_t)bytes;
++            g_eax=0; return;
++        }
++    }
++    fprintf(stderr,"[wrath memory] invalid virtual free base0x%X size%u type0x%X\n",base,size,free_type);
++    g_eax=0xC000000Du;
+ }
+ 
+ /* ── ExAllocatePool / ExAllocatePoolWithTag (ordinals 15, 16) ─
+@@ -1694,7 +1726,8 @@ static void bridge_PsTerminateSystemThread(void)
           * return the stack -- ExitThread never comes back to bridge_thread_main
           * to do it. */
          xbox_FreeThreadStack(g_thread_stack_top);
@@ -122,7 +164,7 @@ index 2d996b1..29b59c8 100644
          ExitThread(exit_status);
      }
  }
-@@ -2195,9 +2199,11 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+@@ -2195,9 +2228,11 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
              fprintf(stderr, "  [KERNEL] timer thread has no TIB; "
                              "timer DPCs will not run\n");
              fflush(stderr);
@@ -134,7 +176,7 @@ index 2d996b1..29b59c8 100644
      }
  
      for (;;) {
-@@ -2386,13 +2392,14 @@ static void bridge_write_iostatus(uint32_t ios_va, NTSTATUS status, uint32_t inf
+@@ -2386,13 +2421,14 @@ static void bridge_write_iostatus(uint32_t ios_va, NTSTATUS status, uint32_t inf
  #define BRIDGE_HANDLE_MASK 0x00FFFFFFu
  #define BRIDGE_HANDLE_MAX  16384
  static HANDLE s_handle_table[BRIDGE_HANDLE_MAX];
@@ -151,7 +193,7 @@ index 2d996b1..29b59c8 100644
      for (i = 1; i < BRIDGE_HANDLE_MAX; i++)
          if (s_handle_table[i] == NULL) {
              s_handle_table[i] = h;
-@@ -2418,6 +2425,8 @@ static HANDLE bridge_read_handle(uint32_t va)
+@@ -2418,6 +2454,8 @@ static HANDLE bridge_read_handle(uint32_t va)
          return (i > 0 && i < BRIDGE_HANDLE_MAX) ? s_handle_table[i] : NULL;
      }
      /* Untagged value: synthetic/dummy handle -- pass through unchanged. */
@@ -160,7 +202,7 @@ index 2d996b1..29b59c8 100644
      return (HANDLE)(uintptr_t)token;
  }
  
-@@ -2441,6 +2450,8 @@ static HANDLE bridge_resolve_handle(uint32_t token)
+@@ -2441,6 +2479,8 @@ static HANDLE bridge_resolve_handle(uint32_t token)
          return (i > 0 && i < BRIDGE_HANDLE_MAX) ? s_handle_table[i] : NULL;
      }
      /* Untagged: synthetic/dummy handle -- pass through unchanged. */
@@ -169,7 +211,7 @@ index 2d996b1..29b59c8 100644
      return (HANDLE)(uintptr_t)token;
  }
  
-@@ -2451,6 +2462,7 @@ static HANDLE bridge_take_handle(uint32_t token)
+@@ -2451,6 +2491,7 @@ static HANDLE bridge_take_handle(uint32_t token)
          if (i > 0 && i < BRIDGE_HANDLE_MAX) {
              HANDLE h = s_handle_table[i];
              s_handle_table[i] = NULL;
@@ -177,7 +219,7 @@ index 2d996b1..29b59c8 100644
              return h;
          }
      }
-@@ -2494,6 +2506,13 @@ static NTSTATUS bridge_create_file_impl(
+@@ -2494,6 +2535,13 @@ static NTSTATUS bridge_create_file_impl(
  
      if (NT_SUCCESS(st)) {
          bridge_write_handle(handle_va, h);
@@ -191,7 +233,7 @@ index 2d996b1..29b59c8 100644
          bridge_write_iostatus(iostatus_va, ios.Status, (uint32_t)ios.Information);
      } else {
          bridge_write_iostatus(iostatus_va, st, 0);
-@@ -2619,7 +2638,7 @@ static void bridge_NtCreateFile(void)
+@@ -2619,7 +2667,7 @@ static void bridge_NtCreateFile(void)
          char host[MAX_PATH * 2];
          size_t n = 0;
  
@@ -200,7 +242,7 @@ index 2d996b1..29b59c8 100644
  
          while (n < sizeof(host) - 1 && w[n]) {
              host[n] = (char)w[n];
-@@ -3163,6 +3182,40 @@ static void bridge_NtDeviceIoControlFile(void)
+@@ -3163,6 +3211,40 @@ static void bridge_NtDeviceIoControlFile(void)
      uint32_t out_va  = STACK_ARG(8);
      uint32_t out_len = STACK_ARG(9);
  
@@ -241,7 +283,7 @@ index 2d996b1..29b59c8 100644
      if (ioctl == IOCTL_DISK_GET_DRIVE_GEOMETRY) {
          /* DISK_GEOMETRY: Cylinders (LARGE_INTEGER), MediaType,
           * TracksPerCylinder, SectorsPerTrack, BytesPerSector -- 24 bytes. */
-@@ -4429,12 +4482,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
+@@ -4429,12 +4511,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
   * The source resolves through the table, DuplicateHandle produces a real
   * native handle, and the target lands via bridge_write_handle as a fresh
   * token -- same shape as NtCreateEvent. DUPLICATE_CLOSE_SOURCE also closes
@@ -258,7 +300,7 @@ index 2d996b1..29b59c8 100644
      HANDLE dup = NULL;
      DWORD opts = 0;
  
-@@ -4450,7 +4504,20 @@ static void bridge_NtDuplicateObject(void)
+@@ -4450,7 +4533,20 @@ static void bridge_NtDuplicateObject(void)
          g_eax = 0xC0000001u;   /* STATUS_UNSUCCESSFUL */
          return;
      }
@@ -677,7 +719,7 @@ index e9b6344..4bec709 100644
  #include <stdint.h>
  #include <stdlib.h>
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index fe24fdc..b452adf 100644
+index fe24fdc..8501b8c 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -15,6 +15,14 @@
@@ -866,16 +908,35 @@ index fe24fdc..b452adf 100644
      fprintf(stderr, "xbox_MemoryLayoutShutdown: released\n");
  }
  
-@@ -1921,7 +2004,7 @@ ptrdiff_t xbox_GetMemoryOffset(void)
-  * Returns Xbox VAs within the mapped region so MEM32() works correctly.
-  * No free support (bump-only for now).
+@@ -1917,38 +2000,45 @@ ptrdiff_t xbox_GetMemoryOffset(void)
+ 
+ /* ── Dynamic heap allocator ────────────────────────────────
+  *
+- * Simple bump allocator for MmAllocateContiguousMemory and similar.
+- * Returns Xbox VAs within the mapped region so MEM32() works correctly.
+- * No free support (bump-only for now).
++ * Address-sorted, best-fit heap for MmAllocateContiguousMemory and similar.
++ * Allocations and free gaps partition the extent below the bump frontier.
   */
 -static uint32_t g_heap_next = XBOX_HEAP_BASE;
 +/* g_heap_next is initialised from the image-derived layout before use. */
  
  static int g_heap_alloc_count = 0;
  
-@@ -1938,17 +2021,26 @@ static int g_heap_block_count = 0;
+ /* Block table backing xbox_HeapFree. A bump pointer alone never reclaims,
+  * which is fine for a title that allocates once and fatal for a debug build
+- * that churns. Flat array rather than an intrusive list: allocations come back
+- * in bump order, so index order is address order and coalescing is a
+- * neighbour check. */
++ * that churns. Keep the flat array sorted and compact during split/coalescing;
++ * alignment gaps are free blocks too, never silently lost address space. */
+ #define XBOX_HEAP_MAX_BLOCKS 65536
+-static struct { uint32_t addr; uint32_t size; uint8_t free; }
+-    g_heap_blocks[XBOX_HEAP_MAX_BLOCKS];
++typedef struct XboxHeapBlock { uint32_t addr; uint32_t size; uint8_t free; } XboxHeapBlock;
++static XboxHeapBlock g_heap_blocks[XBOX_HEAP_MAX_BLOCKS];
+ static int g_heap_block_count = 0;
+ 
  /*
   * Simulated stacks for spawned threads.
   *
@@ -907,7 +968,7 @@ index fe24fdc..b452adf 100644
  
  /* A TIB and TLS block for a newly spawned guest thread.
   *
-@@ -1991,6 +2083,7 @@ uint32_t xbox_AllocThreadTib(void)
+@@ -1991,6 +2081,7 @@ uint32_t xbox_AllocThreadTib(void)
      memset(TIB_VA(thread_data), 0, g_tls_thread_size);
  
      *(uint32_t *)TIB_VA(tib + 0x00) = 0xFFFFFFFFu;   /* own SEH chain    */
@@ -915,7 +976,7 @@ index fe24fdc..b452adf 100644
      *(uint32_t *)TIB_VA(block)      = thread_data;   /* slot 0           */
      *(uint32_t *)TIB_VA(tib + 0x04) = block + total; /* fs:[4], see above*/
  
-@@ -2002,7 +2095,8 @@ uint32_t xbox_AllocThreadStack(void)
+@@ -2002,7 +2093,8 @@ uint32_t xbox_AllocThreadStack(void)
  {
      uint32_t base;
  
@@ -925,7 +986,7 @@ index fe24fdc..b452adf 100644
          return 0;
      }
  
-@@ -2021,9 +2115,10 @@ uint32_t xbox_AllocThreadStack(void)
+@@ -2021,9 +2113,10 @@ uint32_t xbox_AllocThreadStack(void)
       * for small ones.
       */
      base = xbox_HeapAlloc(XBOX_THREAD_STACK_SIZE, 4096);
@@ -938,7 +999,7 @@ index fe24fdc..b452adf 100644
  
      /* Top of the slice, 16-byte aligned, growing down. */
      return base + XBOX_THREAD_STACK_SIZE - 16;
-@@ -2048,8 +2143,7 @@ void xbox_FreeThreadStack(uint32_t stack_top)
+@@ -2048,8 +2141,7 @@ void xbox_FreeThreadStack(uint32_t stack_top)
      if (!stack_top)
          return;
      xbox_HeapFree(stack_top + 16 - XBOX_THREAD_STACK_SIZE);
@@ -948,16 +1009,150 @@ index fe24fdc..b452adf 100644
  }
  
  /* Bump allocator over the contiguous window mapped at XBOX_CONTIG_BASE.
-@@ -2104,7 +2198,7 @@ uint32_t xbox_ContiguousAllocatedBytes(void)
+@@ -2104,42 +2196,65 @@ uint32_t xbox_ContiguousAllocatedBytes(void)
  }
  
  
 -uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
++static void xbox_heap_remove_block(int index)
++{
++    memmove(&g_heap_blocks[index],&g_heap_blocks[index+1],
++            (size_t)(g_heap_block_count-index-1)*sizeof(g_heap_blocks[0]));
++    --g_heap_block_count;
++}
++
 +static uint32_t xbox_heap_alloc_locked(uint32_t size, uint32_t alignment)
  {
      uint32_t result;
  
-@@ -2213,7 +2307,7 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
+     if (alignment < 4) alignment = 4;
++    if (alignment & (alignment-1)) {
++        fprintf(stderr,"xbox_HeapAlloc: alignment %u is not a power of two\n",alignment);
++        return 0;
++    }
+ 
+     /* Enforce minimum allocation size.
+      * The Xbox D3D8 code sometimes computes resource sizes from GPU
+      * capabilities that return 0 (since we don't have real NV2A hardware),
+      * resulting in zero-size allocations. With a bump allocator, these all
+      * return the same address, causing overlapping structures. Enforce a
+-     * minimum of 4096 bytes so each allocation gets its own memory. */
++     * minimum of 16 bytes so each allocation gets its own memory. */
+     if (size < 16) size = 16;
+ 
+-    /* Reuse a freed block first. Without this the heap only ever grows: Halo's
+-     * debug build allocates and releases heavily through init, exhausted all
+-     * 48 MB in 4,726 allocations, and its second D3D CreateDevice then failed
+-     * with E_OUTOFMEMORY -- which the title reports by clearing
+-     * global_d3d_device, so the rasterizer asserts and startup stops. */
++    /* Best fit, including an aligned subrange of a free block. Preserve both
++     * sides: reusing a multi-MB buffer for a 24-byte header must not consume
++     * the whole buffer. All arithmetic is widened before alignment/addition. */
++    int best=-1, best_parts=0;
++    uint32_t best_address=0, best_size=UINT32_MAX;
+     for (int i = 0; i < g_heap_block_count; i++) {
+-        if (!g_heap_blocks[i].free || g_heap_blocks[i].size < size) {
+-            continue;
+-        }
+-        if (g_heap_blocks[i].addr & (alignment - 1)) {
+-            continue;   /* wrong alignment for this request */
+-        }
+-        g_heap_blocks[i].free = 0;
+-        result = g_heap_blocks[i].addr;
+-        memset((void *)((uintptr_t)result + g_memory_offset), 0, size);
+-        return result;
++        XboxHeapBlock b=g_heap_blocks[i];
++        if(!b.free || b.size<size)continue;
++        uint64_t start=((uint64_t)b.addr+alignment-1)&~((uint64_t)alignment-1);
++        uint64_t end=(uint64_t)b.addr+b.size;
++        if(start+size>end)continue;
++        int parts=1+(start>b.addr)+(start+size<end);
++        if(g_heap_block_count+parts-1>XBOX_HEAP_MAX_BLOCKS)continue;
++        if(b.size<best_size) { best=i;best_size=b.size;best_address=(uint32_t)start;best_parts=parts; }
++    }
++    if(best>=0) {
++        XboxHeapBlock old=g_heap_blocks[best];
++        uint32_t prefix=best_address-old.addr;
++        uint32_t suffix=old.size-prefix-size;
++        memmove(&g_heap_blocks[best+best_parts],&g_heap_blocks[best+1],
++                (size_t)(g_heap_block_count-best-1)*sizeof(g_heap_blocks[0]));
++        int index=best;
++        if(prefix)g_heap_blocks[index++]=(XboxHeapBlock){old.addr,prefix,1};
++        g_heap_blocks[index++]=(XboxHeapBlock){best_address,size,0};
++        if(suffix)g_heap_blocks[index]=(XboxHeapBlock){best_address+size,suffix,1};
++        g_heap_block_count+=best_parts-1;
++        result=best_address;
++        goto allocated;
+     }
+ 
+     /* Align the next pointer */
+-    result = (g_heap_next + alignment - 1) & ~(alignment - 1);
++    uint64_t aligned=((uint64_t)g_heap_next+alignment-1)&~((uint64_t)alignment-1);
+ 
+-    if (result + size > XBOX_HEAP_TOP) {
++    if (aligned + size > XBOX_HEAP_TOP) {
+         fprintf(stderr, "xbox_HeapAlloc: out of memory (requested %u, used %u/%u)\n",
+                 size, g_heap_next - XBOX_HEAP_BASE,
+                 (unsigned)(XBOX_HEAP_TOP - XBOX_HEAP_BASE));
+@@ -2150,10 +2265,17 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
+             static struct { uint32_t size; int n; } hist[256];
+             if (!dumped) {
+                 int used = 0;
++                uint64_t live_bytes=0,free_bytes=0;
++                uint32_t largest_free=0;
+                 dumped = 1;
+                 for (int i = 0; i < g_heap_block_count; i++) {
+                     int j = 0;
+-                    if (g_heap_blocks[i].free || !g_heap_blocks[i].size) continue;
++                    if(g_heap_blocks[i].free) {
++                        free_bytes+=g_heap_blocks[i].size;
++                        if(g_heap_blocks[i].size>largest_free)largest_free=g_heap_blocks[i].size;
++                        continue;
++                    }
++                    live_bytes+=g_heap_blocks[i].size;
+                     while (j < used && hist[j].size != g_heap_blocks[i].size) j++;
+                     if (j == used) {
+                         if (used == 256) continue;   /* ponytail: 256 distinct sizes is plenty */
+@@ -2162,6 +2284,9 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
+                     }
+                     hist[j].n++;
+                 }
++                fprintf(stderr,"  [HEAP] live=%llu free=%llu largest_free=%u unallocated_tail=%u records=%d\n",
++                        (unsigned long long)live_bytes,(unsigned long long)free_bytes,largest_free,
++                        (unsigned)(XBOX_HEAP_TOP-g_heap_next),g_heap_block_count);
+                 for (int j = 0; j < used; j++) {
+                     if ((uint64_t)hist[j].n * hist[j].size < 1024 * 1024) continue;
+                     fprintf(stderr, "  [HEAP] %d live blocks of %u bytes (%u KB)\n",
+@@ -2174,18 +2299,21 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
+         return 0;
+     }
+ 
++    result=(uint32_t)aligned;
++    unsigned needed=1+(result!=g_heap_next);
++    if(g_heap_block_count+needed>XBOX_HEAP_MAX_BLOCKS) {
++        fprintf(stderr,"xbox_HeapAlloc: block metadata exhausted (%d records)\n",g_heap_block_count);
++        return 0;
++    }
++    if(result!=g_heap_next)
++        g_heap_blocks[g_heap_block_count++]=(XboxHeapBlock){g_heap_next,result-g_heap_next,1};
++    g_heap_blocks[g_heap_block_count++]=(XboxHeapBlock){result,size,0};
+     g_heap_next = result + size;
+ 
++allocated:
+     /* Zero-fill the allocated block (Xbox memory is always zeroed) */
+     memset((void *)((uintptr_t)result + g_memory_offset), 0, size);
+ 
+-    if (g_heap_block_count < XBOX_HEAP_MAX_BLOCKS) {
+-        g_heap_blocks[g_heap_block_count].addr = result;
+-        g_heap_blocks[g_heap_block_count].size = size;
+-        g_heap_blocks[g_heap_block_count].free = 0;
+-        g_heap_block_count++;
+-    }
+-
+     g_heap_alloc_count++;
+     /* Rate-limited: a debug title makes thousands of these and the log is a
+      * diagnostic, not a transaction record. */
+@@ -2213,7 +2341,7 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
   * forward is asking about the block that contains it. Returns 0 for an address
   * this heap never handed out, which is what "not one of mine" has to look like.
   */
@@ -966,19 +1161,59 @@ index fe24fdc..b452adf 100644
  {
      int i;
  
-@@ -2229,7 +2323,7 @@ uint32_t xbox_HeapBlockSize(uint32_t xbox_va)
+@@ -2229,12 +2357,12 @@ uint32_t xbox_HeapBlockSize(uint32_t xbox_va)
      return 0;
  }
  
 -void xbox_HeapFree(uint32_t xbox_va)
-+static void xbox_heap_free_locked(uint32_t xbox_va)
++static int xbox_heap_free_locked(uint32_t xbox_va)
  {
      static int frees = 0, matched = 0;
  
-@@ -2273,6 +2367,31 @@ void xbox_HeapFree(uint32_t xbox_va)
+     if (!xbox_va) {
+-        return;
++        return 0;
      }
- }
+     frees++;
+     if (frees <= 8) {
+@@ -2253,24 +2381,59 @@ void xbox_HeapFree(uint32_t xbox_va)
+             fflush(stderr);
+         }
  
+-        /* Coalesce with neighbours. Blocks are recorded in bump order, so
+-         * index order is address order and adjacency is a simple end==start
+-         * test. Keeps large contiguous requests satisfiable after a lot of
+-         * small churn. */
+-        if (i + 1 < g_heap_block_count && g_heap_blocks[i + 1].free &&
++        /* Remove merged records, not tombstones: every later neighboring free
++         * remains adjacent in address and table order. */
++        while (i + 1 < g_heap_block_count && g_heap_blocks[i + 1].free &&
+             g_heap_blocks[i].addr + g_heap_blocks[i].size == g_heap_blocks[i + 1].addr) {
+             g_heap_blocks[i].size += g_heap_blocks[i + 1].size;
+-            g_heap_blocks[i + 1].size = 0;
+-            g_heap_blocks[i + 1].addr = 0;
++            xbox_heap_remove_block(i+1);
+         }
+         if (i > 0 && g_heap_blocks[i - 1].free &&
+             g_heap_blocks[i - 1].addr + g_heap_blocks[i - 1].size == g_heap_blocks[i].addr) {
+             g_heap_blocks[i - 1].size += g_heap_blocks[i].size;
+-            g_heap_blocks[i].size = 0;
+-            g_heap_blocks[i].addr = 0;
++            xbox_heap_remove_block(i);
++            --i;
+         }
+-        return;
++        /* A freed tail becomes unallocated address space again, including
++         * alignment gaps. This also reclaims its block-table metadata. */
++        while(g_heap_block_count && g_heap_blocks[g_heap_block_count-1].free) {
++            g_heap_next=g_heap_blocks[g_heap_block_count-1].addr;
++            --g_heap_block_count;
++        }
++        return 1;
+     }
++    return 0;
++}
++
 +/* Main and guest workers allocate/free concurrently, including their TIBs.
 + * Keep bump state and the free-block table one atomic allocator transaction. */
 +uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
@@ -997,18 +1232,22 @@ index fe24fdc..b452adf 100644
 +    return result;
 +}
 +
-+void xbox_HeapFree(uint32_t va)
++int xbox_HeapFreeChecked(uint32_t va)
 +{
 +    AcquireSRWLockExclusive(&g_heap_lock);
-+    xbox_heap_free_locked(va);
++    int freed=xbox_heap_free_locked(va);
 +    ReleaseSRWLockExclusive(&g_heap_lock);
++    return freed;
 +}
 +
++void xbox_HeapFree(uint32_t va)
++{
++    (void)xbox_HeapFreeChecked(va);
+ }
+ 
  HANDLE xbox_GetMappingHandle(void)
- {
-     return g_mapping_handle;
 diff --git a/src/kernel/xbox_memory_layout.h b/src/kernel/xbox_memory_layout.h
-index fd83afb..2f98ad0 100644
+index fd83afb..78ff786 100644
 --- a/src/kernel/xbox_memory_layout.h
 +++ b/src/kernel/xbox_memory_layout.h
 @@ -24,6 +24,7 @@
@@ -1082,7 +1321,17 @@ index fd83afb..2f98ad0 100644
  
  /** Exclusive top of the dynamic heap: the end of RAM for this run. Runtime,
   *  not a macro, because RAM size is now configurable (retail 64 MB vs devkit
-@@ -452,6 +448,7 @@ HANDLE xbox_GetMappingHandle(void);
+@@ -424,6 +420,9 @@ extern RECOMP_TLS uint32_t g_fs_base;
+  * Thread-safe: no (single-threaded recompiled code).
+  */
+ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment);
++/* Release only an exact live allocation base. Interior/unowned/already-freed
++ * pointers return0 without altering heap state. */
++int xbox_HeapFreeChecked(uint32_t xbox_va);
+ 
+ /**
+  * Free a block from the Xbox heap. Currently a no-op (bump allocator).
+@@ -452,6 +451,7 @@ HANDLE xbox_GetMappingHandle(void);
  
  /* Carve a simulated stack for a spawned thread. Returns the Xbox VA of the
   * stack top, or 0 when the pool is exhausted. */
