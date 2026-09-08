@@ -71,6 +71,6 @@ with open('local/reports/boot35-vertex-words.bin', 'wb') as f:
     for words in x['words']:
         f.write(struct.pack('<4I', *words))
 PY
-clang -std=c11 -O0 -Wall -Wextra -Werror -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 tools/tests/nv2a_vertex.c src/nv2a_vertex.c -L/opt/homebrew/lib -lSDL2 -lepoxy -o build/nv2a-vertex-test
+clang -std=c11 -O0 -Wall -Wextra -Werror -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 tools/tests/nv2a_vertex.c src/nv2a_vertex.c src/nv2a_vertex_input.c -L/opt/homebrew/lib -lSDL2 -lepoxy -o build/nv2a-vertex-test
 build/nv2a-vertex-test local/reports/boot14-shader-objects.bin local/reports/boot35-vertex-words.bin > local/reports/nv2a-vertex-arl-test.log 2>&1
 ```

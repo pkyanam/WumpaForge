@@ -114,3 +114,38 @@ int nv2a_vertex_object_decode(const void *bytes,size_t available,Nv2aVertexObjec
     *result=obj;
     return 1;
 }
+
+static int direct_zero_operand(const uint32_t *w, unsigned operand,
+                               const float constants[192][4])
+{
+    unsigned mux=operand==0?(w[2]>>26)&3:(w[2]>>11)&3;
+    unsigned index=(w[1]>>13)&255;
+    if (mux!=3 || (w[3]&2) || index>=192) return 0;
+    unsigned swizzle=operand==0?w[1]&255:(w[2]>>17)&255;
+    for (unsigned component=0;component<4;++component)
+        if (constants[index][(swizzle>>(component*2))&3]!=0.0f) return 0;
+    return 1;
+}
+
+int nv2a_vertex_input_is_dead(const uint32_t *words, size_t count, unsigned input,
+                             const float constants[192][4])
+{
+    if (!words || !constants || !count || count>136 || input>=16) return 0;
+    for (size_t i=0;i<count;++i) {
+        const uint32_t *w=words+i*4;
+        unsigned mac=(w[1]>>21)&15, ilu=(w[1]>>25)&7;
+        if (mac>13 || ilu>4) return 0;
+        if (((w[1]>>9)&15)==input) {
+            unsigned a=(w[2]>>26)&3,b=(w[2]>>11)&3,c=(w[3]>>28)&3;
+            /* The encoded C register is shared by MAC and ILU. Any live C
+             * use is essential, including MAD's addend and paired ILU. */
+            if (c==2 && (ilu || mac==3 || mac==4)) return 0;
+            if (a==2 && mac &&
+                ((mac!=2 && mac!=4) || !direct_zero_operand(w,1,constants))) return 0;
+            if (b==2 && mac>=2 && mac!=3 && mac!=13 &&
+                ((mac!=2 && mac!=4) || !direct_zero_operand(w,0,constants))) return 0;
+        }
+        if (w[3]&1) return 1;
+    }
+    return 0;
+}

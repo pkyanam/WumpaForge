@@ -1,6 +1,7 @@
 /* Synthetic, hand-assembled NV2A instructions; no game bytes embedded.
  * Numeric results are checked on the native GPU through transform feedback. */
 #include "../../src/nv2a_vertex.h"
+#include "../../src/nv2a_vertex_input.h"
 #include <SDL.h>
 #include <epoxy/gl.h>
 #include <assert.h>
@@ -73,6 +74,50 @@ static void test_relative(void)
     words[1][3]&=~4u;
     assert(!nv2a_vertex_generate(&words[0][0],7,source,sizeof(source),&info,error,sizeof(error)) && strstr(error,"ARL routed"));
     puts("PASS: GPU ARL exact floor, negative/swizzled inputs, zero/nonzero vector masks, paired old A0, relative bounds and untouched vector temporary");
+}
+static void test_dead_input_gpu(void)
+{
+    uint32_t words[][4]={
+        {0,(1u<<21)|(121u<<13)|0x1b,3u<<26,15u<<24},
+        {0,(4u<<21)|(122u<<13)|(6u<<9),(3u<<26)|(0x1bu<<17)|(2u<<11)|(0x1bu<<2),
+            (1u<<28)|(15u<<12)|(1u<<11)|(9u<<3)},
+        {0,(1u<<21)|0x1b,2u<<26,(15u<<12)|(1u<<11)|1}
+    };
+    Nv2aVertexInfo info;
+    assert(nv2a_vertex_generate(&words[0][0],3,source,sizeof(source),&info,error,sizeof(error)));
+    GLuint shader=compile(source),program=glCreateProgram(); glAttachShader(program,shader);
+    const char *feedback[]={"vT0"};
+    glTransformFeedbackVaryings(program,1,feedback,GL_INTERLEAVED_ATTRIBS);
+    glLinkProgram(program); GLint ok; glGetProgramiv(program,GL_LINK_STATUS,&ok); assert(ok);
+    glUseProgram(program);
+    float constants[192][4]={{0}};
+    for(unsigned j=0;j<4;j++)constants[121][j]=(j+1)*.25f;
+    assert(nv2a_vertex_input_is_dead(&words[0][0],3,6,constants));
+    glUniform4fv(glGetUniformLocation(program,"u_vconstants"),192,&constants[0][0]);
+    glUniform4f(glGetUniformLocation(program,"u_nv2a_viewport"),0,0,640,480);
+    glUniform2f(glGetUniformLocation(program,"u_nv2a_depth"),0,200);
+    GLuint vao,buffer; glGenVertexArrays(1,&vao); glBindVertexArray(vao);
+    glVertexAttrib4f(0,160,120,100,1);
+    glGenBuffers(1,&buffer); glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER,buffer);
+    glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER,4*sizeof(float),NULL,GL_STREAM_READ);
+    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER,0,buffer);
+    const float inputs[][4]={{0,0,0,1},{100,-200,300,-400},{NAN,INFINITY,-INFINITY,NAN}};
+    for(unsigned i=0;i<3;i++) {
+        glVertexAttrib4fv(6,inputs[i]);
+        glBeginTransformFeedback(GL_POINTS);glDrawArrays(GL_POINTS,0,1);glEndTransformFeedback();
+        float result[4];glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER,0,sizeof(result),result);
+        for(unsigned j=0;j<4;j++)assert(result[j]==constants[121][j]);
+    }
+    constants[122][0]=1;
+    assert(!nv2a_vertex_input_is_dead(&words[0][0],3,6,constants));
+    glUniform4fv(glGetUniformLocation(program,"u_vconstants"),192,&constants[0][0]);
+    glVertexAttrib4fv(6,inputs[1]);
+    glBeginTransformFeedback(GL_POINTS);glDrawArrays(GL_POINTS,0,1);glEndTransformFeedback();
+    float result[4];glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER,0,sizeof(result),result);
+    for(unsigned j=0;j<4;j++)assert(result[j]==constants[121][j]+inputs[1][j]);
+    assert(glGetError()==GL_NO_ERROR);
+    glDeleteBuffers(1,&buffer);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);glDeleteShader(shader);
+    puts("PASS: unchanged GPU MAD gives equal output for zero-weight input variations including NaN/Inf, nonzero weight remains live");
 }
 static void test_bone_rows(void)
 {
@@ -170,6 +215,7 @@ int main(int argc,char **argv)
     glDeleteBuffers(1,&buffer); glDeleteVertexArrays(1,&vao); glDeleteProgram(program); glDeleteShader(shader);
     test_relative();
     test_bone_rows();
+    test_dead_input_gpu();
     uint32_t saved=words[1]; words[1]=(words[1]&~(15u<<21))|(15u<<21);
     assert(!nv2a_vertex_generate(words,3,source,sizeof(source),&info,error,sizeof(error)) && strstr(error,"MAC opcode 15") && !source[0]);
     words[1]=saved; words[3]|=2;
@@ -196,6 +242,16 @@ int main(int argc,char **argv)
             fprintf(stderr,"captured shader: %s\n",error); abort();
         }
         assert(info.instruction_count==69 && info.relative_constants);
+        if(argc>3) {
+            float constants[192][4];
+            f=fopen(argv[3],"rb"); assert(f); assert(fread(constants,sizeof(constants),1,f)==1); fclose(f);
+            assert(nv2a_vertex_input_is_dead(&game[0][0],count,6,constants));
+            constants[122][0]=1e-30f;
+            assert(!nv2a_vertex_input_is_dead(&game[0][0],count,6,constants));
+            constants[122][0]=1;
+            assert(!nv2a_vertex_input_is_dead(&game[0][0],count,6,constants));
+            puts("PASS: actual69-instruction shader/constants prove v6 dead only for captured exactzero weight");
+        }
         shader=compile(source); glDeleteShader(shader);
         f=fopen("local/reports/boot35-vertex.glsl","w"); assert(f); fputs(source,f); fclose(f);
         puts("PASS: actual 69-instruction boot35 shader with six ARLs compiles on native GPU");

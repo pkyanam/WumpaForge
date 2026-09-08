@@ -163,7 +163,7 @@ The optional ignored real object fixture compiled successfully on this M3's
 OpenGL 4.1 context. Output: `local/reports/nv2a-vertex-test.log`.
 
 ```sh
-clang -std=c11 -O0 -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 tools/tests/nv2a_vertex.c src/nv2a_vertex.c -L/opt/homebrew/lib -lSDL2 -lepoxy -o build/nv2a-vertex-test
+clang -std=c11 -O0 -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 tools/tests/nv2a_vertex.c src/nv2a_vertex.c src/nv2a_vertex_input.c -L/opt/homebrew/lib -lSDL2 -lepoxy -o build/nv2a-vertex-test
 build/nv2a-vertex-test local/reports/boot14-shader-objects.bin
 ```
 

@@ -43,4 +43,12 @@ int nv2a_vertex_object_decode(const void *bytes, size_t available,
  * normalized. Leaves stream/offset/tessellation fields untouched. */
 int nv2a_vertex_format_decode(uint32_t format, Nv2aVertexSlot *slot,
                              char *error, size_t error_capacity);
+
+/* Conservative live-uniform proof, not vertex-program execution. Returns1
+ * only when every actual read of input is MUL/MAD A or B and its other operand
+ * is a direct constant swizzled entirely from exact zero components. Unused
+ * inputs also return1. Unknown opcodes, missing FINAL, relative constants and
+ * every other use return0. Caller must recompute after constant changes. */
+int nv2a_vertex_input_is_dead(const uint32_t *words, size_t count, unsigned input,
+                             const float constants[192][4]);
 #endif

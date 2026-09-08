@@ -1,5 +1,6 @@
 #include "../../src/nv2a_vertex_input.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,38 @@ static unsigned char *b=storage+1; /* Deliberately misaligned object. */
 static size_t end;
 static Nv2aVertexObject result;
 static char error[256];
+static void test_dead_input(void)
+{
+    float constants[192][4]={{0}};
+    uint32_t w[8]={0,(4u<<21)|(122u<<13)|(6u<<9),
+        (3u<<26)|(0x1bu<<17)|(2u<<11)|(0x1bu<<2),
+        (1u<<28)|(15u<<24)|(2u<<20)|1};
+    assert(nv2a_vertex_input_is_dead(w,1,6,constants));
+    constants[122][0]=-0.0f; assert(nv2a_vertex_input_is_dead(w,1,6,constants));
+    constants[122][0]=1e-30f; assert(!nv2a_vertex_input_is_dead(w,1,6,constants));
+    constants[122][0]=1; assert(!nv2a_vertex_input_is_dead(w,1,6,constants));
+    constants[122][0]=NAN; assert(!nv2a_vertex_input_is_dead(w,1,6,constants));
+    constants[122][0]=0; constants[122][1]=1;
+    assert(nv2a_vertex_input_is_dead(w,1,6,constants)); /* Only c122.x selected. */
+    w[1]|=0x55; assert(!nv2a_vertex_input_is_dead(w,1,6,constants)); w[1]&=~255u;
+    w[3]|=2; assert(!nv2a_vertex_input_is_dead(w,1,6,constants)); w[3]&=~2u;
+    w[3]=(w[3]&~(3u<<28))|(2u<<28);
+    assert(!nv2a_vertex_input_is_dead(w,1,6,constants)); /* MAD addend is live. */
+    w[1]|=1u<<25; assert(!nv2a_vertex_input_is_dead(w,1,6,constants)); /* ILU read. */
+    w[1]&=~(7u<<25); w[3]=(w[3]&~(3u<<28))|(1u<<28);
+    w[1]=(w[1]&~(15u<<21))|(7u<<21);
+    assert(!nv2a_vertex_input_is_dead(w,1,6,constants)); /* DP4 not in narrow proof. */
+    w[1]=(w[1]&~(15u<<21))|(2u<<21);
+    assert(nv2a_vertex_input_is_dead(w,1,6,constants));
+    /* Also prove the symmetric A=input/B=zero case. */
+    w[2]=(2u<<26)|(3u<<11);
+    assert(nv2a_vertex_input_is_dead(w,1,6,constants));
+    w[3]&=~1u;
+    assert(!nv2a_vertex_input_is_dead(w,1,6,constants)); /* FINAL required. */
+    w[5]=(1u<<21)|(6u<<9)|0x1b; w[6]=2u<<26;w[7]=(15u<<24)|1;
+    assert(!nv2a_vertex_input_is_dead(w,2,6,constants)); /* Later MOV needs input. */
+    puts("PASS: dead-input proof checks all uses/live exact constants, rejects nearzero/NaN/relative/ILU/addend/other arithmetic");
+}
 static void put(size_t offset,uint32_t value)
 {
     for(unsigned i=0;i<4;i++)b[offset+i]=(unsigned char)(value>>(8*i));
@@ -43,6 +76,7 @@ static void bad(const char *fragment)
 }
 int main(int argc,char **argv)
 {
+    test_dead_input();
     const unsigned cases[]={1,8,9,136};
     for(unsigned t=0;t<4;t++) {
         unsigned n=cases[t];begin(n);program(n);finish();
