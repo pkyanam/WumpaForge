@@ -1,5 +1,9 @@
 # Actual secondary vertex streams
 
+The later hub88-instruction morph shader requires the transitive exact dependency
+proof documented in [TRANSITIVE-VERTEX-INPUTS.md](TRANSITIVE-VERTEX-INPUTS.md).
+Its inputs pass through temporary/address registers before the zero enable weight.
+
 Story-04 reaches the original space-station story and chamber scene. Its shader
 has69 instructions and consumes v6 as FLOAT3 from stream1, offset0; primary stride
 is56. Live c122=(1,0,0,1), so the earlier exact zero-weight proof correctly refuses

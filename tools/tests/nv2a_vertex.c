@@ -95,20 +95,23 @@ static void test_captured_dead_input_gpu(const uint32_t *words,size_t count,cons
     float constants[192][4];memcpy(constants,captured,sizeof(constants));
     for(unsigned live=0;live<2;++live) {
         if(live)constants[122][0]=1;
-        assert(nv2a_vertex_input_is_dead(words,count,6,constants)==!live);
+        assert(((nv2a_vertex_dead_input_mask(words,count,constants)>>6)&1u)==!live);
         glUniform4fv(glGetUniformLocation(program,"u_vconstants"),192,&constants[0][0]);
-        float result[2][29];
-        for(unsigned i=0;i<2;++i) {
-            glVertexAttrib4f(6,i?100:0,i?-200:0,i?300:0,1);
-            glBeginTransformFeedback(GL_POINTS);glDrawArrays(GL_POINTS,0,1);glEndTransformFeedback();
-            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER,0,sizeof(result[i]),result[i]);
-            for(unsigned j=0;j<29;++j)assert(isfinite(result[i][j]));
+        for(unsigned input=6;input<(count==88?16u:7u);++input) {
+            float result[2][29];
+            for(unsigned i=0;i<2;++i) {
+                glVertexAttrib4f(input,i?100:0,i?-200:0,i?300:0,i?4:2);
+                glBeginTransformFeedback(GL_POINTS);glDrawArrays(GL_POINTS,0,1);glEndTransformFeedback();
+                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER,0,sizeof(result[i]),result[i]);
+                for(unsigned j=0;j<29;++j)assert(isfinite(result[i][j]));
+            }
+            assert((memcmp(result[0],result[1],sizeof(result[0]))!=0)==live);
+            glVertexAttrib4f(input,0,0,0,2);
         }
-        assert((memcmp(result[0],result[1],sizeof(result[0]))!=0)==live);
     }
     assert(glGetError()==GL_NO_ERROR);
     glDeleteBuffers(1,&buffer);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);glDeleteShader(shader);
-    puts("PASS: captured69-instruction shader on native GPU: all29 outputs independent of v6 at captured zero weight, differ after live weight1");
+    printf("PASS: captured%zu-instruction shader on native GPU: all29 outputs independent of each secondary input at captured zero weight, differ after live weight1\n",count);
 }
 static void test_dead_input_gpu(void)
 {
@@ -272,25 +275,26 @@ int main(int argc,char **argv)
     if(argc>2) {
         FILE *f=fopen(argv[2],"rb"); assert(f);
         uint32_t game[136][4]; size_t count=fread(game,sizeof(game[0]),136,f); assert(!ferror(f)); fclose(f);
-        assert(count==69);
+        assert(count==69||count==88);
         if(!nv2a_vertex_generate(&game[0][0],count,source,sizeof(source),&info,error,sizeof(error))) {
             fprintf(stderr,"captured shader: %s\n",error); abort();
         }
-        assert(info.instruction_count==69 && info.relative_constants);
+        assert(info.instruction_count==count && info.relative_constants);
         if(argc>3) {
             float constants[192][4];
             f=fopen(argv[3],"rb"); assert(f); assert(fread(constants,sizeof(constants),1,f)==1); fclose(f);
             test_captured_dead_input_gpu(&game[0][0],count,constants);
-            assert(nv2a_vertex_input_is_dead(&game[0][0],count,6,constants));
+            unsigned secondary=count==88?0xffc0:0x40;
+            assert((nv2a_vertex_dead_input_mask(&game[0][0],count,constants)&secondary)==secondary);
             constants[122][0]=1e-30f;
-            assert(!nv2a_vertex_input_is_dead(&game[0][0],count,6,constants));
+            assert(!(nv2a_vertex_dead_input_mask(&game[0][0],count,constants)&secondary));
             constants[122][0]=1;
-            assert(!nv2a_vertex_input_is_dead(&game[0][0],count,6,constants));
-            puts("PASS: actual69-instruction shader/constants prove v6 dead only for captured exactzero weight");
+            assert(!(nv2a_vertex_dead_input_mask(&game[0][0],count,constants)&secondary));
+            printf("PASS: actual%zu-instruction shader/constants prove secondary inputs dead only for captured exactzero weight\n",count);
         }
         shader=compile(source); glDeleteShader(shader);
         f=fopen("local/reports/boot35-vertex.glsl","w"); assert(f); fputs(source,f); fclose(f);
-        puts("PASS: actual 69-instruction boot35 shader with six ARLs compiles on native GPU");
+        printf("PASS: actual %zu-instruction captured shader with ARL compiles on native GPU\n",count);
     }
     SDL_GL_DeleteContext(context); SDL_DestroyWindow(window); SDL_Quit();
     puts("PASS: native GPU verified paired MOV, MAD, ADD, swizzle/masks, R12 alias, constants, viewport/depth/w; malformed programs rejected");

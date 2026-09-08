@@ -250,6 +250,8 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
     if (!s_shader_vao) { glGenVertexArrays(1,&s_shader_vao); glGenBuffers(1,&s_shader_vbo); glGenSamplers(4,s_shader_samplers); }
     glBindVertexArray(s_shader_vao); glBindBuffer(GL_ARRAY_BUFFER,s_shader_vbo);
     glBufferData(GL_ARRAY_BUFFER,(size_t)count*stride,vertices,GL_STREAM_DRAW);
+    int transitive_proof_ready=0;
+    uint16_t transitive_dead=0;
     for (unsigned i=0;i<16;++i) {
         glDisableVertexAttribArray(i); glVertexAttrib4f(i,0,0,0,1);
         if (!(p->vertex.input_mask&(1u<<i))) continue;
@@ -258,8 +260,18 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
          * fetch only if all uses are annihilated by live exact zero constants,
          * whether the retained handle is absent, in bounds or too small.
          * nv_mul explicitly returns zero even for zero times Inf/NaN. */
-        if (slot->stream && slot->stream<16 &&
-            nv2a_vertex_input_is_dead(&s_vertex_object.words[0][0],s_vertex_object.instruction_count,i,s_vertex_constants)) {
+        int dead=0;
+        if(slot->stream&&slot->stream<16) {
+            dead=nv2a_vertex_input_is_dead(&s_vertex_object.words[0][0],s_vertex_object.instruction_count,i,s_vertex_constants);
+            if(!dead) {
+                if(!transitive_proof_ready) {
+                    transitive_dead=nv2a_vertex_dead_input_mask(&s_vertex_object.words[0][0],s_vertex_object.instruction_count,s_vertex_constants);
+                    transitive_proof_ready=1;
+                }
+                dead=(transitive_dead&(1u<<i))!=0;
+            }
+        }
+        if(dead) {
             static unsigned traces;
             if (traces<16 && getenv("WRATH_TRACE_STREAMS")) {
                 ++traces;

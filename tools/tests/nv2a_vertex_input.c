@@ -42,6 +42,61 @@ static void test_dead_input(void)
     assert(!nv2a_vertex_input_is_dead(w,2,6,constants)); /* Later MOV needs input. */
     puts("PASS: dead-input proof checks all uses/live exact constants, rejects nearzero/NaN/relative/ILU/addend/other arithmetic");
 }
+static void test_transitive_dependencies(void)
+{
+    float constants[192][4]={{0}};
+    const unsigned v6=1u<<6;
+    /* MOV r2,v6; MUL oPos,r2,c122.x. Data can pass through temporaries and
+     * relative constant addressing before the final exact-zero annihilator. */
+    uint32_t words[][4]={
+        {0,(1u<<21)|(6u<<9)|0x1b,2u<<26,(15u<<24)|(2u<<20)},
+        {0,(2u<<21)|(122u<<13)|0x1b,(2u<<28)|(1u<<26)|(3u<<11),(15u<<12)|(1u<<11)|1},
+        {0,0,0,0}
+    };
+    assert(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)&v6);
+    constants[122][0]=1e-30f;assert(!(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)&v6));
+    constants[122][0]=NAN;assert(!(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)&v6));
+    constants[122][0]=0;
+    /* An earlier observable copy remains live even if a later result is zero. */
+    words[0][3]|=(15u<<12)|(1u<<11)|(3u<<3);
+    assert(!(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)&v6));words[0][3]&=~0xffffu;
+    /* Masked stores must retain untouched components. R12 aliases oPos. */
+    words[0][3]=(15u<<24)|(12u<<20);
+    words[1][3]=(8u<<12)|(1u<<11)|1;
+    assert(!(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)&v6));
+    words[1][3]=(15u<<12)|(1u<<11)|1;
+    assert(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)&v6);
+    /* ARL v6.x paired with ILU MOV oD0,c100[A0] uses the OLD address. */
+    words[0][1]=(13u<<21)|(1u<<25)|(100u<<13)|(6u<<9);
+    words[0][2]=(2u<<26)|(0x1bu<<2);
+    words[0][3]=(3u<<28)|(15u<<12)|(1u<<11)|(3u<<3)|4|2|1;
+    assert(nv2a_vertex_dead_input_mask(&words[0][0],1,constants)&v6);
+    words[0][3]&=~1u;
+    words[1][1]=(1u<<21)|(100u<<13)|0x1b;words[1][2]=3u<<26;
+    words[1][3]=(15u<<12)|(1u<<11)|2|1;
+    assert(!(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)&v6));
+    /* A second ARL sourced from v0 erases only the address dependency. */
+    memcpy(words[2],words[1],sizeof(words[1]));
+    words[1][1]=(13u<<21);words[1][2]=2u<<26;words[1][3]=0;
+    assert(nv2a_vertex_dead_input_mask(&words[0][0],3,constants)&v6);
+    /* Paired ILU writes R1 and suppresses MAC R1; both see old sources. */
+    words[0][1]=(1u<<21)|(1u<<25)|(100u<<13)|(6u<<9)|0x1b;
+    words[0][2]=(2u<<26)|(0x1bu<<2);
+    words[0][3]=(3u<<28)|(15u<<24)|(1u<<20)|(15u<<16);
+    words[1][1]=(1u<<21)|0x1b;words[1][2]=(1u<<28)|(1u<<26);
+    words[1][3]=(15u<<12)|(1u<<11)|1;
+    assert(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)&v6);
+    /* Fog writes only first active source component to oFog.x. */
+    words[0][1]=(1u<<21)|(6u<<9)|0x1b;words[0][2]=2u<<26;words[0][3]=(8u<<24)|(1u<<20);
+    words[1][3]=(4u<<12)|(1u<<11)|(5u<<3)|1;
+    assert(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)&v6);
+    words[1][3]=(8u<<12)|(1u<<11)|(5u<<3)|1;
+    assert(!(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)&v6));
+    words[1][3]&=~(1u<<11);assert(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)==0);
+    words[1][3]|=1u<<11;words[1][1]|=15u<<21;
+    assert(nv2a_vertex_dead_input_mask(&words[0][0],2,constants)==0);
+    puts("PASS: transitive dependency proof: exactzero/nearzero/NaN, observable stores, component masks/R12, oldA0, address overwrite, pairedR1, fog selector and fail-closed op/state writes");
+}
 static void put(size_t offset,uint32_t value)
 {
     for(unsigned i=0;i<4;i++)b[offset+i]=(unsigned char)(value>>(8*i));
@@ -77,6 +132,7 @@ static void bad(const char *fragment)
 int main(int argc,char **argv)
 {
     test_dead_input();
+    test_transitive_dependencies();
     const unsigned cases[]={1,8,9,136};
     for(unsigned t=0;t<4;t++) {
         unsigned n=cases[t];begin(n);program(n);finish();

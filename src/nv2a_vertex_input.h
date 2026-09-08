@@ -51,4 +51,11 @@ int nv2a_vertex_format_decode(uint32_t format, Nv2aVertexSlot *slot,
  * every other use return0. Caller must recompute after constant changes. */
 int nv2a_vertex_input_is_dead(const uint32_t *words, size_t count, unsigned input,
                              const float constants[192][4]);
+/* Conservative transitive dependency proof for all16 inputs at once. Bit i
+ * means final outputs are independent of input i. Tracks masks/paired writes,
+ * output R12 alias and relative-constant address dependencies; only exact-zero
+ * NV2A MUL/MAD annihilates a dependency. No numeric shader execution. Unknown
+ * instructions/layouts return0. Recompute when shader or live constants change. */
+uint16_t nv2a_vertex_dead_input_mask(const uint32_t *words,size_t count,
+                                     const float constants[192][4]);
 #endif

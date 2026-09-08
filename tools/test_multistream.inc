@@ -70,17 +70,20 @@ static void test_multistream(void)
     uint32_t stale=read32(create[4]);
     stream[0]=1;stream[1]=stale;stream[2]=160;call(0x102580,stream,3);assert(g_eax==0);
     write32(0x10F290,0);
-    write32(object+8,3);write32(object+12,13);write32(object+0x18+6*16,0);
+    write32(object+8,4);write32(object+12,17);write32(object+0x18+6*16,0);
     uint32_t dead_words[][4]={
         {0,(1u<<21)|0x1b,2u<<26,(15u<<12)|(1u<<11)},
         {0,(1u<<21)|(121u<<13)|0x1b,3u<<26,15u<<24},
-        {0,(4u<<21)|(122u<<13)|(6u<<9),(3u<<26)|(0x1bu<<17)|(2u<<11)|(0x1bu<<2),
+        {0,(1u<<21)|(6u<<9)|0x1b,2u<<26,(15u<<24)|(2u<<20)},
+        {0,(4u<<21)|(122u<<13),(3u<<26)|(0x1bu<<17)|(1u<<11)|(2u<<13)|(0x1bu<<2),
             (1u<<28)|(15u<<12)|(1u<<11)|(3u<<3)|1}
     };
-    write32(object+0x114,(12u<<18)|0xB00);memcpy(guest_ptr(object+0x118),dead_words,sizeof(dead_words));
-    write32(object+0x148,0);call(0x102940,shader,1);assert(g_eax==0);
+    write32(object+0x114,(16u<<18)|0xB00);memcpy(guest_ptr(object+0x118),dead_words,sizeof(dead_words));
+    write32(object+0x158,0);call(0x102940,shader,1);assert(g_eax==0);
     const float baseline[4]={.25f,.5f,.75f,1};memcpy(s_vertex_constants[121],baseline,sizeof(baseline));
     memset(s_vertex_constants[122],0,sizeof(s_vertex_constants[122]));
+    assert(!nv2a_vertex_input_is_dead(&dead_words[0][0],4,6,s_vertex_constants));
+    assert(nv2a_vertex_dead_input_mask(&dead_words[0][0],4,s_vertex_constants)&(1u<<6));
     const uint16_t stale_indices[]={0,47,1};
     struct VertexFetch stale_fetch={.indices=(const uint8_t *)stale_indices};
     assert(gather_vertex_attribute(1,0,12,3,&stale_fetch,&gathered)==D3DERR_INVALIDCALL);

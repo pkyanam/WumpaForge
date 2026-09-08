@@ -149,3 +149,106 @@ int nv2a_vertex_input_is_dead(const uint32_t *words, size_t count, unsigned inpu
     }
     return 0;
 }
+
+/* Abstract values contain dependency bits and an exact-zero fact only. They
+ * never contain computed vertex values, addresses or evaluated shader math. */
+typedef struct InputDependency { uint16_t inputs; unsigned char zero; } InputDependency;
+typedef struct DependencyState {
+    InputDependency temporary[12][4],output[13][4];
+    uint16_t address;
+} DependencyState;
+static InputDependency dependency_union(InputDependency a,InputDependency b)
+{
+    return (InputDependency){(uint16_t)(a.inputs|b.inputs),(unsigned char)(a.zero&&b.zero)};
+}
+static InputDependency dependency_multiply(InputDependency a,InputDependency b)
+{
+    /* Matches nv_mul: exact zero annihilates even NaN/Inf. Ordinary dot/DST
+     * operations do not use this rule because the generator emits native math. */
+    if(a.zero||b.zero)return (InputDependency){0,1};
+    return (InputDependency){(uint16_t)(a.inputs|b.inputs),0};
+}
+static int dependency_source(const uint32_t *w,unsigned operand,const DependencyState *state,
+                             const float constants[192][4],InputDependency out[4])
+{
+    unsigned mux,r,swizzle;
+    if(!operand){mux=w[2]>>26&3;r=w[2]>>28&15;swizzle=w[1]&255;}
+    else if(operand==1){mux=w[2]>>11&3;r=w[2]>>13&15;swizzle=w[2]>>17&255;}
+    else {mux=w[3]>>28&3;r=((w[2]&3)<<2)|(w[3]>>30&3);swizzle=w[2]>>2&255;}
+    unsigned input=w[1]>>9&15,constant=w[1]>>13&255;
+    if(!mux || (mux==1&&r>12) || (mux==3&&!(w[3]&2)&&constant>=192))return 0;
+    for(unsigned i=0;i<4;++i) {
+        unsigned component=swizzle>>(6-i*2)&3;
+        if(mux==1)out[i]=r==12?state->output[0][component]:state->temporary[r][component];
+        else if(mux==2)out[i]=(InputDependency){(uint16_t)(1u<<input),0};
+        else if(w[3]&2)out[i]=(InputDependency){state->address,0};
+        else out[i]=(InputDependency){0,(unsigned char)(constants[constant][component]==0.0f)};
+        /* Negation preserves both dependencies and the exact-zero fact. */
+    }
+    return 1;
+}
+static void dependency_store(InputDependency destination[4],unsigned mask,const InputDependency source[4])
+{
+    for(unsigned i=0;i<4;++i)if(mask&(8u>>i))destination[i]=source[i];
+}
+uint16_t nv2a_vertex_dead_input_mask(const uint32_t *words,size_t count,const float constants[192][4])
+{
+    if(!words||!constants||!count||count>136)return 0;
+    DependencyState state={0};
+    /* Zero-initialized GLSL temporaries/outputs are independent, but initially
+     * leave their zero facts unknown. This deliberately avoids relying on an
+     * Xbox hardware power-on value to prove annihilation. */
+    for(size_t pc=0;pc<count;++pc) {
+        const uint32_t *w=words+pc*4;
+        unsigned mac=w[1]>>21&15,ilu=w[1]>>25&7;
+        unsigned mm=w[3]>>24&15,im=w[3]>>16&15,om=w[3]>>12&15,dst=w[3]>>20&15;
+        unsigned mux=w[3]>>2&1,output=w[3]>>3&15;
+        if(mac>=14||ilu>=5 || (dst>12&&((mac&&mac!=13&&mm)||(ilu&&im&&!mac))))return 0;
+        if(om&&(!(w[3]&(1u<<11)) || !(mux?ilu:mac) || (mac==13&&!mux) ||
+                output==1||output==2||output==7||output==8||output>=13))return 0;
+        InputDependency a[4]={{0}},b[4]={{0}},c[4]={{0}},m[4]={{0}},l[4]={{0}};
+        if(mac&&!dependency_source(w,0,&state,constants,a))return 0;
+        if(mac>=2&&mac!=3&&mac!=13&&!dependency_source(w,1,&state,constants,b))return 0;
+        if((ilu||mac==3||mac==4)&&!dependency_source(w,2,&state,constants,c))return 0;
+        for(unsigned i=0;i<4;++i) {
+            switch(mac) {
+            case 1:m[i]=a[i];break;
+            case 2:m[i]=dependency_multiply(a[i],b[i]);break;
+            case 3:m[i]=dependency_union(a[i],c[i]);break;
+            case 4:m[i]=dependency_union(dependency_multiply(a[i],b[i]),c[i]);break;
+            case 5:case 6:case 7:
+                for(unsigned j=0;j<(mac==7?4u:3u);++j)m[i].inputs|=a[j].inputs|b[j].inputs;
+                if(mac==6)m[i].inputs|=b[3].inputs;
+                break;
+            case 8:
+                if(i==1)m[i].inputs=a[1].inputs|b[1].inputs;
+                else if(i==2)m[i]=a[2];else if(i==3)m[i]=b[3];
+                break;
+            case 9:case 10:case 11:case 12:m[i].inputs=a[i].inputs|b[i].inputs;break;
+            default:break;
+            }
+            if(ilu==1)l[i]=c[i];else if(ilu)l[i].inputs=c[0].inputs;
+        }
+        /* Both sources/results precede every write, matching paired old A0
+         * and temporary reads. Order mirrors the native GLSL compiler. */
+        if(om) {
+            const InputDependency *value=mux?l:m;
+            if(output==5) {
+                for(unsigned i=0;i<4;++i)if(om&(8u>>i)){state.output[5][0]=value[i];break;}
+            } else dependency_store(state.output[output],om,value);
+        }
+        if(ilu&&im) {
+            unsigned idst=mac?1:dst;
+            dependency_store(idst==12?state.output[0]:state.temporary[idst],im,l);
+        }
+        if(mac&&mac!=13&&mm&&!(ilu&&dst==1))
+            dependency_store(dst==12?state.output[0]:state.temporary[dst],mm,m);
+        if(mac==13)state.address=a[0].inputs;
+        if(w[3]&1) {
+            uint16_t live=0;
+            for(unsigned o=0;o<13;++o)for(unsigned i=0;i<4;++i)live|=state.output[o][i].inputs;
+            return (uint16_t)~live;
+        }
+    }
+    return 0;
+}
