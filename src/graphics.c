@@ -166,6 +166,16 @@ void sub_000FD6E0(void)
         for (unsigned element=0; element<16; ++element)
             write32(GUEST_DEVICE+0x750+transform*64+element*4,
                     element%5==0 ? 0x3F800000u : 0);
+    /* Retail initializer104330 reads this table from the loaded title image.
+     * FE170 caches each DWORD; later game calls change only selected states. */
+    const uint8_t *texture_defaults = guest_ptr(0x10BD9C);
+    for (unsigned stage=0; stage<4; ++stage) {
+        for (unsigned state=0; state<32; ++state)
+            write32(0x10EC18+stage*128+state*4, texture_defaults[state]);
+        write32(0x10EC18+stage*128+28*4, stage);
+    }
+    write32(0x10EC18+12*4, 4); /* stage0 MODULATE */
+    write32(0x10EC18+16*4, 2); /* stage0 SELECTARG1 */
     if (s_depth_available && initialize_depth_surface(in.depth_format)<0) {
         fprintf(stderr,"[wrath graphics] failed native depth surface initialization\n"); abort();
     }
@@ -1882,6 +1892,8 @@ static void test_shader_bridge(void)
     bind[1]=0;call(0xFFC90,bind,2);uint32_t release[]={texture};call(0x103AD0,release,1);
     assert(!resource(texture));assert(glGetError()==GL_NO_ERROR);
 }
+#include "../tools/test_mixed_shader_bridge.inc"
+
 int main(void)
 {
     /* Independent decoder facts: Morton order and canonical BC endpoints. */
@@ -1895,6 +1907,12 @@ int main(void)
     void *memory = calloc(1, 0x400000);
     assert(memory);
     g_xbox_mem_offset = (ptrdiff_t)memory;
+    /* SDK default-state fixture; the standalone smoke has no loaded XBE. */
+    const uint8_t defaults[32] = {
+        1,1,1,1,1,0,0,0,1,0,0,0,1,1,2,1,
+        1,1,2,1,1,0,0,0,0,0,0,0,0,0,0,0
+    };
+    memcpy(guest_ptr(0x10BD9C), defaults, sizeof(defaults));
     GuestPresentation pp = {0};
     pp.width = 320; pp.height = 240; pp.format = 6; pp.buffer_count = 2;
     pp.multisample = 0x11; pp.swap_effect = 1; pp.depth_enabled = 1;
@@ -1904,6 +1922,11 @@ int main(void)
     call(0xFD6E0, create, 6);
     assert(g_eax == 0 && read32(0x3000) == GUEST_DEVICE);
     assert(read32(GUEST_DEVICE_GLOBAL) == GUEST_DEVICE);
+    for (unsigned stage=0; stage<4; ++stage) {
+        assert(read32(0x10EC18+stage*128+16*4)==(stage ? 1u : 2u));
+        assert(read32(0x10EC18+stage*128+12*4)==(stage ? 1u : 4u));
+        assert(read32(0x10EC18+stage*128+28*4)==stage);
+    }
     uint32_t no_state[]={0}, z_on[]={1};
     write32(GUEST_DEVICE+8,read32(GUEST_DEVICE+8)|0x200);
     call(0x1026F0,no_state,1); assert(g_eax==0 && !(read32(GUEST_DEVICE+8)&0x200));
@@ -2156,6 +2179,7 @@ int main(void)
     test_index_bridge();
     test_immediate_bridge();
     test_shader_bridge();
+    test_mixed_shader_bridge();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();
     SDL_Quit();
