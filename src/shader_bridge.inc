@@ -234,16 +234,17 @@ static GLenum shader_wrap(uint32_t mode)
 }
 /* Original107CA0 applies PS_ADJUST_TEXTUREMODES (final_constants bit0x100).
  * Limit this conversion to modes understood by our pixel generator. Unsupported
- * dependent/bump modes still reach its explicit error instead of being hidden. */
+ * dependent/bump modes still reach its explicit error instead of being hidden.
+ * DOTPRODUCT is non-sampling; supported specular reflection is sampling. */
 static void shader_adjust_texture_modes(Nv2aPixelDef *pixel)
 {
     if (!(pixel->final_constants&0x100)) return;
     for (unsigned i=0;i<4;++i) {
         unsigned mode=(pixel->texture_modes>>(i*5))&31;
-        if (mode>5 || mode==4 || mode==5 || !mode) continue;
+        if ((mode>5 && mode!=0x0c) || mode==4 || mode==5 || !mode) continue;
         struct Resource *r=resource(s_texture_handles[i]);
         if (!r) mode=0;
-        else {
+        else if (mode<=3) {
             uint32_t format=read32(r->handle+12),color=(format>>8)&255;
             mode=(format&4)?3:((format&0xf0)==0x30 || (color>=0x2a && color<=0x31))?2:1;
         }

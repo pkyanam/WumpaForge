@@ -177,3 +177,10 @@ specified synthetic inputs. This checks the real shader program's arithmetic,
 not the game's actual textures or final game frame. Constant-helper tests cover
 mapped/unmapped slots, immutable-source preservation, ARGB packing/clamping,
 NaN/infinity and invalid-range rollback. No full game build was run by this subtask.
+
+## Dependent normal-map reflection
+
+The reached DOTPRODUCT/DOT_RFLCT_SPEC chain is now translated to native GPU
+dot products and reflected cube sampling. See DOT-REFLECTION-SHADER.md for
+exact source provenance, bounded mapping/stage support and six-face readback
+validation. Other advanced texture modes remain explicit errors.

@@ -2140,6 +2140,7 @@ static void test_shader_bridge(void)
 #include "../tools/test_multistream.inc"
 #include "../tools/test_shader_constant_mode.inc"
 #include "../tools/test_native_fog.inc"
+#include "../tools/test_dot_reflection.inc"
 #include "../tools/test_texture_snapshot.inc"
 
 int main(void)
@@ -2475,6 +2476,7 @@ int main(void)
     test_multistream();
     test_shader_constant_mode();
     test_native_fog();
+    test_dot_reflection();
     test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();

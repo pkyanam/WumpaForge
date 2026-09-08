@@ -279,17 +279,28 @@ int nv2a_pixel_generate(const Nv2aPixelDef *d,const Nv2aPixelOptions *options,
     emit(&g,"#version 410 core\nin vec4 vD0,vD1,vT0,vT1,vT2,vT3;\nin float vFog;\nlayout(location=0) out vec4 fragColor;\nuniform vec4 u_psconstants[18];\nuniform vec3 u_fogcolor;\nuniform int u_alpha_enable,u_alpha_func;\nuniform float u_alpha_ref;\n");
     for(unsigned i=0;i<4;++i) {
         unsigned mode=(d->texture_modes>>(i*5))&31;
-        if(mode>5){fail(&g,"texture stage %u mode 0x%X unsupported",i,mode);break;}
+        if(mode>5 && mode!=0x11 && mode!=0x0c){fail(&g,"texture stage %u mode 0x%X unsupported",i,mode);break;}
+        if(mode==0x11 || mode==0x0c) {
+            unsigned input=i==1?0:(d->input_texture>>(i==2?16:20))&15;
+            unsigned mapping=i?(d->dot_mapping>>((i-1)*4))&15:0;
+            if ((mode==0x11 && i!=1 && i!=2) || (mode==0x0c &&
+                (i!=3 || ((d->texture_modes>>5)&31)!=0x11 || ((d->texture_modes>>10)&31)!=0x11)))
+                {fail(&g,"texture stage %u invalid dot/reflection chain",i);break;}
+            if(input>=i || ((d->texture_modes>>(input*5))&31)==0x11)
+                {fail(&g,"texture stage %u invalid/undefined dot source %u",i,input);break;}
+            if(mapping>1){fail(&g,"texture stage %u dot mapping %u unsupported (supported0/1)",i,mapping);break;}
+        }
         if((options->rectangle_texture_mask&(1u<<i)) && mode!=1){fail(&g,"rectangle texture stage %u requires PROJECT2D",i);break;}
-        if(mode>=1 && mode<=3) {
+        if((mode>=1 && mode<=3) || mode==0x0c) {
             static const char *types[]={"","2D","3D","Cube"};
-            emit(&g,"uniform sampler%s tex%u;\n",types[mode],i);
-            info->texture_mask|=1u<<i;info->sampler_dimension[i]=mode==3?4:mode+1;
+            unsigned sampler=mode==0x0c?3:mode;
+            emit(&g,"uniform sampler%s tex%u;\n",types[sampler],i);
+            info->texture_mask|=1u<<i;info->sampler_dimension[i]=sampler==3?4:sampler+1;
         }
     }
     emit(&g,"void main() {\n  vec4 d0=vD0,d1=vD1;\n  vec4 fog=vec4(u_fogcolor,%s);\n",
          options->fog_enabled?"clamp(vFog,0.0,1.0)":"1.0");
-    for(unsigned i=0;i<4;++i) {
+    for(unsigned i=0;i<4 && !g.failed;++i) {
         unsigned mode=(d->texture_modes>>(i*5))&31;
         if(mode==0)emit(&g,"  vec4 t%u=vec4(0.0,0.0,0.0,1.0);\n",i);
         else if(mode==5)emit(&g,"  vec4 t%u=vec4(0.0);\n",i);
@@ -300,12 +311,25 @@ int nv2a_pixel_generate(const Nv2aPixelDef *d,const Nv2aPixelOptions *options,
         } else if(mode==2)emit(&g,"  vec4 t%u=textureProj(tex%u,vT%u);\n",i,i,i);
         else if(mode==3)emit(&g,"  vec4 t%u=texture(tex%u,vT%u.xyz);\n",i,i,i);
         else if(mode==4)emit(&g,"  vec4 t%u=vT%u;\n",i,i);
+        else if(mode==0x11 || mode==0x0c) {
+            unsigned input=i==1?0:(d->input_texture>>(i==2?16:20))&15;
+            unsigned mapping=(d->dot_mapping>>((i-1)*4))&15;
+            if(mapping==1)emit(&g,"  vec3 mapped%u=(t%u.rgb*255.0-128.0)/127.0;\n",i,input);
+            else emit(&g,"  vec3 mapped%u=t%u.rgb;\n",i,input);
+            emit(&g,"  float nv_dot%u=dot(vT%u.xyz,mapped%u);\n",i,i,i);
+            if(mode==0x11)emit(&g,"  vec4 t%u=vec4(0.0); /* dot-stage RGBA is not a supported combiner source */\n",i);
+            else emit(&g,"  vec3 normal=vec3(nv_dot1,nv_dot2,nv_dot3);\n"
+                         "  vec3 eye=vec3(vT1.w,vT2.w,vT3.w);\n"
+                         "  vec3 reflected=2.0*normal*(dot(normal,eye)/dot(normal,normal))-eye;\n"
+                         "  vec4 t3=texture(tex3,reflected);\n");
+        }
         if(mode==5)for(unsigned c=0;c<4;++c)
             emit(&g,"  if(vT%u.%c %s 0.0) discard;\n",i,"xyzw"[c],(d->compare_mode&(1u<<(i*4+c)))?">=":"<");
     }
     /* Uninitialized RGB temporary reads are rejected by the tracker below. */
     emit(&g,"  vec4 r0=vec4(0.0),r1=vec4(0.0);\n  r0.a=%s;\n",(d->texture_modes&31)?"t0.a":"1.0");
     for(unsigned i=0;i<12;++i)g.defined[i]=15;g.defined[12]=8;
+    for(unsigned i=1;i<3;++i)if(((d->texture_modes>>(i*5))&31)==0x11)g.defined[8+i]=0;
     for(unsigned s=0;s<stages && !g.failed;++s) {
         g.stage=s;
         unsigned rgb=d->rgb_outputs[s],alpha=d->alpha_outputs[s];
