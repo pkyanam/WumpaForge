@@ -28,8 +28,9 @@ stick's circular range. Modern face buttons are digital; triggers remain analog.
 
 Desktop input is neutral whenever the game window loses keyboard focus. Mouse
 also requires that same window's mouse focus; Cmd shortcuts do not contribute
-input. The cursor is never captured or warped. Keyboard and mouse poll current
-SDL state, so a press/release entirely between game polls may be missed. Physical
+input. The cursor is never captured or warped. An SDL event watcher preserves a press/release entirely between game polls for
+one focused input sample; the next sample releases unless the key is still held.
+Repeated taps within the same poll interval coalesce. Physical
 gamepad focus/background behavior remains SDL's policy. `WRATH_KEYBOARD=0` disables
 the desktop source at startup, useful for controller-only diagnostics.
 
@@ -78,3 +79,36 @@ These are snapshot/virtual-device tests, not physical Bluetooth transport or
 real macOS focus-transition/gameplay tests. No controllers were assumed connected.
 Parent integration testing must confirm actual menu/skip/movement with the game
 window and both real wireless controller families when available.
+
+## Brief-tap latch (story UI follow-up)
+
+The first real title UI test did not advance after short Computer Use Return/Space
+presses. That is consistent with snapshot polling loss, but did not independently
+establish that focus or guest handles were correct. The native input backend now
+records non-repeat key/mouse down events without removing them from SDL's queue.
+The next focused port0 poll merges each pending edge into the normal held snapshot
+exactly once. Key-up does not erase an unobserved press; the following normal
+snapshot supplies release. Focus loss/window close clears pending edges, mouse
+leave clears mouse edges, and Command shortcuts clear/suppress desktop edges.
+Unfocused or other-window events never migrate into the game on a later poll.
+
+[SDL_AddEventWatch](https://wiki.libsdl.org/SDL2/SDL_AddEventWatch) may execute on
+another thread, so its bounded state is protected by a spinlock. The callback
+performs no SDL window calls, allocation, GL work, or event consumption. It ignores
+quit events before locking, preserving SDL's signal-delivery behavior. Initialization
+installs the watcher once; shutdown removes it. No game menu state is changed.
+
+`tools/tests/desktop_input.c` additionally verifies down/up before polling,
+release on the second poll, repeat suppression, same-poll coalescing, blur/refocus,
+window isolation, Command suppression and held-state preservation. The actual
+production watcher also passes worker-thread SDL_PushEvent delivery, untouched
+event queue and shutdown removal in `tools/tests/desktop_latch_watch.c`:
+
+```
+clang -std=c11 -Wall -Wextra -Werror -Ithird_party/xboxrecomp/src $(pkg-config --cflags sdl2) tools/tests/desktop_latch_watch.c $(pkg-config --libs sdl2) -o build/test_desktop_latch_watch
+build/test_desktop_latch_watch
+```
+
+Evidence: `local/reports/desktop-input-latch-test.log`,
+`desktop-latch-watch-test.log`, `input-controller-latch-test.log`, and
+`input-bridge-latch-test.log` all pass. Real title interaction awaits integration.

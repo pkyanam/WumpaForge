@@ -12,10 +12,10 @@ index caef326..4e7bb06 100644
  endif()
  
 diff --git a/src/input/README.md b/src/input/README.md
-index dc20ffd..13a7c6c 100644
+index dc20ffd..9652e6c 100644
 --- a/src/input/README.md
 +++ b/src/input/README.md
-@@ -1,137 +1,61 @@
+@@ -1,137 +1,67 @@
 -# xbox_input — Xbox Gamepad to XInput
 -
 -Maps the Xbox controller API to Windows XInput. The original Xbox used `XInputGetState` with a slightly different structure layout than the XInput API on Windows. This layer translates between them.
@@ -214,6 +214,12 @@ index dc20ffd..13a7c6c 100644
 +and axes are retained. Keyboard-only vibration reports ERROR_NOT_SUPPORTED and
 +zero motor capabilities. Bluetooth disconnect does not invalidate port0 while
 +keyboard is enabled; its released state increments the packet number.
++
++Short down/up pairs between polls are preserved by a bounded SDL event-watch
++latch for one focused input sample, followed by a normal released snapshot.
++Repeated taps within one poll coalesce. Focus loss, close, mouse leave and Command
++shortcuts clear or suppress pending edges. The watcher does not consume events
++or call window APIs, and serializes delivery from other SDL event threads.
 diff --git a/src/input/desktop_input.h b/src/input/desktop_input.h
 new file mode 100644
 index 0000000..8311b3a
@@ -278,8 +284,92 @@ index 0000000..8311b3a
 +#undef KEY
 +}
 +#endif
+diff --git a/src/input/desktop_latch.h b/src/input/desktop_latch.h
+new file mode 100644
+index 0000000..87dc7ba
+--- /dev/null
++++ b/src/input/desktop_latch.h
+@@ -0,0 +1,78 @@
++/* Preserve down/up pairs between game polls without consuming SDL events.
++ * The owner serializes Event/Consume because event watches may run on workers. */
++#ifndef XBOX_DESKTOP_LATCH_H
++#define XBOX_DESKTOP_LATCH_H
++#include <SDL.h>
++#include <string.h>
++
++typedef struct XboxDesktopLatch {
++    Uint32 keys[SDL_NUM_SCANCODES]; /* Window that received each pending down. */
++    Uint32 mouse[3];
++    Uint32 command_window;
++} XboxDesktopLatch;
++
++static void xbox_DesktopLatchClearWindow(XboxDesktopLatch *l, Uint32 window)
++{
++    for (unsigned i = 0; i < SDL_NUM_SCANCODES; ++i)
++        if (!window || l->keys[i] == window) l->keys[i] = 0;
++    for (unsigned i = 0; i < 3; ++i)
++        if (!window || l->mouse[i] == window) l->mouse[i] = 0;
++    if (!window || l->command_window == window) l->command_window = 0;
++}
++static void xbox_DesktopLatchEvent(XboxDesktopLatch *l, const SDL_Event *event)
++{
++    switch (event->type) {
++    case SDL_KEYDOWN:
++        if (!event->key.windowID || event->key.repeat) break;
++        if (event->key.keysym.scancode == SDL_SCANCODE_LGUI ||
++            event->key.keysym.scancode == SDL_SCANCODE_RGUI) {
++            xbox_DesktopLatchClearWindow(l, event->key.windowID);
++            l->command_window = event->key.windowID;
++            break;
++        }
++        if (event->key.keysym.mod & KMOD_GUI) break;
++        if (event->key.keysym.scancode > SDL_SCANCODE_UNKNOWN &&
++            event->key.keysym.scancode < SDL_NUM_SCANCODES)
++            l->keys[event->key.keysym.scancode] = event->key.windowID;
++        break;
++    case SDL_KEYUP:
++        if (event->key.keysym.scancode == SDL_SCANCODE_LGUI ||
++            event->key.keysym.scancode == SDL_SCANCODE_RGUI)
++            l->command_window = (event->key.keysym.mod & KMOD_GUI) ? event->key.windowID : 0;
++        break; /* A release does not erase an as-yet unobserved press. */
++    case SDL_MOUSEBUTTONDOWN:
++        if (event->button.windowID && event->button.windowID != l->command_window &&
++            event->button.button >= SDL_BUTTON_LEFT && event->button.button <= SDL_BUTTON_RIGHT)
++            l->mouse[event->button.button - 1] = event->button.windowID;
++        break;
++    case SDL_WINDOWEVENT:
++        if (event->window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
++            event->window.event == SDL_WINDOWEVENT_CLOSE)
++            xbox_DesktopLatchClearWindow(l, event->window.windowID);
++        else if (event->window.event == SDL_WINDOWEVENT_LEAVE)
++            for (unsigned i = 0; i < 3; ++i)
++                if (l->mouse[i] == event->window.windowID) l->mouse[i] = 0;
++        break;
++    case SDL_APP_WILLENTERBACKGROUND:
++    case SDL_APP_DIDENTERBACKGROUND:
++        xbox_DesktopLatchClearWindow(l, 0);
++        break;
++    default: break;
++    }
++}
++static Uint32 xbox_DesktopLatchConsume(XboxDesktopLatch *l, Uint32 keyboard_window,
++                                      Uint32 mouse_window, Uint8 keys[SDL_NUM_SCANCODES])
++{
++    for (unsigned i = 0; i < SDL_NUM_SCANCODES; ++i) {
++        if (keyboard_window && l->keys[i] == keyboard_window) keys[i] = 1;
++        l->keys[i] = 0;
++    }
++    Uint32 buttons = 0;
++    for (unsigned i = 0; i < 3; ++i) {
++        if (keyboard_window && mouse_window == keyboard_window && l->mouse[i] == mouse_window)
++            buttons |= SDL_BUTTON(i + 1);
++        l->mouse[i] = 0;
++    }
++    return buttons;
++}
++#endif
 diff --git a/src/input/xinput_device.c b/src/input/xinput_device.c
-index 1a662a8..28d5a03 100644
+index 1a662a8..89603b4 100644
 --- a/src/input/xinput_device.c
 +++ b/src/input/xinput_device.c
 @@ -33,6 +33,15 @@ void xbox_InputInit(void)
@@ -310,11 +400,12 @@ index 1a662a8..28d5a03 100644
      pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] = xi_state.Gamepad.bLeftTrigger;
      pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] = xi_state.Gamepad.bRightTrigger;
  
-@@ -119,31 +128,136 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
+@@ -119,31 +128,168 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
  /* ======================================================================== */
  
  #include <SDL.h>
 +#include "desktop_input.h"
++#include "desktop_latch.h"
  
  static SDL_GameController *g_pads[XBOX_MAX_CONTROLLERS];
 -static BOOL  g_controller_connected[XBOX_MAX_CONTROLLERS];
@@ -326,6 +417,22 @@ index 1a662a8..28d5a03 100644
 +static BOOL g_desktop_enabled;
 +static Uint32 g_mouse_window;
 +static int g_mouse_x, g_mouse_y, g_mouse_drag;
++static SDL_SpinLock g_desktop_lock;
++static XboxDesktopLatch g_desktop_latch;
++
++static int desktop_event_watch(void *unused, SDL_Event *event)
++{
++    (void)unused;
++    /* In particular, ignore signal-delivered SDL_QUIT without taking a lock. */
++    if (event->type != SDL_KEYDOWN && event->type != SDL_KEYUP &&
++        event->type != SDL_MOUSEBUTTONDOWN && event->type != SDL_WINDOWEVENT &&
++        event->type != SDL_APP_WILLENTERBACKGROUND && event->type != SDL_APP_DIDENTERBACKGROUND)
++        return 1;
++    SDL_AtomicLock(&g_desktop_lock);
++    xbox_DesktopLatchEvent(&g_desktop_latch, event);
++    SDL_AtomicUnlock(&g_desktop_lock);
++    return 1;
++}
 +
 +static void merge_desktop(XBOX_GAMEPAD *pad)
 +{
@@ -333,10 +440,20 @@ index 1a662a8..28d5a03 100644
 +    XboxDesktopSnapshot snapshot = {0};
 +    snapshot.keyboard_focus = keyboard != NULL;
 +    snapshot.mouse_focus = keyboard && keyboard == mouse;
-+    snapshot.keys = SDL_GetKeyboardState(&snapshot.key_count);
++    int key_count = 0;
++    const Uint8 *held = SDL_GetKeyboardState(&key_count);
++    Uint8 keys[SDL_NUM_SCANCODES] = {0};
++    if (key_count > SDL_NUM_SCANCODES) key_count = SDL_NUM_SCANCODES;
++    if (held && key_count > 0) memcpy(keys, held, (size_t)key_count);
++    snapshot.keys = keys; snapshot.key_count = SDL_NUM_SCANCODES;
 +    int x = 0, y = 0;
 +    snapshot.mouse_buttons = SDL_GetMouseState(&x, &y);
 +    Uint32 window = keyboard ? SDL_GetWindowID(keyboard) : 0;
++    Uint32 mouse_window = mouse ? SDL_GetWindowID(mouse) : 0;
++    SDL_AtomicLock(&g_desktop_lock);
++    snapshot.mouse_buttons |= xbox_DesktopLatchConsume(&g_desktop_latch, window,
++        mouse_window, keys);
++    SDL_AtomicUnlock(&g_desktop_lock);
 +    int drag = snapshot.mouse_focus && (snapshot.mouse_buttons & SDL_BUTTON_MMASK);
 +    if (drag && g_mouse_drag && window == g_mouse_window) {
 +        snapshot.mouse_dx = x - g_mouse_x;
@@ -425,6 +542,10 @@ index 1a662a8..28d5a03 100644
 +        }
 +        const char *desktop = SDL_getenv("WRATH_KEYBOARD");
 +        g_desktop_enabled = !desktop || SDL_strcmp(desktop, "0") != 0;
++        if (g_desktop_enabled) {
++            memset(&g_desktop_latch, 0, sizeof(g_desktop_latch));
++            SDL_AddEventWatch(desktop_event_watch, NULL);
++        }
 +        g_initialized = TRUE;
 +    }
 +    refresh_controllers();
@@ -433,6 +554,7 @@ index 1a662a8..28d5a03 100644
 +void xbox_InputShutdown(void)
 +{
 +    if (!g_initialized) return;
++    if (g_desktop_enabled) SDL_DelEventWatch(desktop_event_watch, NULL);
 +    for (int slot = 0; slot < XBOX_MAX_CONTROLLERS; ++slot) {
 +        if (g_pads[slot]) {
 +            SDL_GameControllerRumble(g_pads[slot], 0, 0, 0);
@@ -461,7 +583,7 @@ index 1a662a8..28d5a03 100644
  }
  
  DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
-@@ -151,57 +265,61 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+@@ -151,57 +297,61 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
      if (dwPort >= XBOX_MAX_CONTROLLERS || !pState)
          return ERROR_DEVICE_NOT_CONNECTED;
  
@@ -568,7 +690,7 @@ index 1a662a8..28d5a03 100644
      return ERROR_SUCCESS;
  }
  
-@@ -210,20 +328,24 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+@@ -210,20 +360,24 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
      if (dwPort >= XBOX_MAX_CONTROLLERS || !pVibration)
          return ERROR_DEVICE_NOT_CONNECTED;
  
@@ -600,7 +722,7 @@ index 1a662a8..28d5a03 100644
  }
  
  DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILITIES *pCaps)
-@@ -231,13 +353,22 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
+@@ -231,13 +385,22 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
      (void)dwFlags;
      if (dwPort >= XBOX_MAX_CONTROLLERS || !pCaps)
          return ERROR_DEVICE_NOT_CONNECTED;
