@@ -62,6 +62,32 @@ int main(int argc,char **argv)
  SDL_GLContext context=SDL_GL_CreateContext(window);assert(context);glViewport(0,0,16,16);
  GLuint vao;glGenVertexArrays(1,&vao);glBindVertexArray(vao);
  const float texels[4][4]={{0.2,0.3,0.25,0.75},{0.5,0.5,0.5,0.5},{0.1,0.2,0.3,0.4},{0.8,0.7,0.6,0.5}};
+ /* Reached fixed pixel pipeline: stage0 modulates texture/diffuse, stage1
+  * adds texture/current RGB and disables alpha writes. Keep prior alpha. */
+ uint32_t fixed[4][32]={{0}};unsigned dimensions[4]={2,2,0,0};Nv2aPixelDef lowered;
+ for(unsigned i=0;i<4;++i){fixed[i][12]=1;fixed[i][16]=1;fixed[i][20]=1;}
+ fixed[0][12]=fixed[0][16]=4;fixed[0][14]=fixed[0][18]=2;
+ fixed[1][12]=7;fixed[1][14]=2;fixed[1][15]=1;
+ assert(nv2a_pixel_fixed_definition(fixed,dimensions,0xffffffff,&lowered,error,sizeof(error)));
+ const float mixed_expected[4]={.66,.74,.70,.60};draw(&lowered,texels,NULL,mixed_expected);
+ assert(lowered.alpha_outputs[2]==0 && lowered.combiner_count==3);
+ fixed[1][16]=0;
+ assert(!nv2a_pixel_fixed_definition(fixed,dimensions,0,&lowered,error,sizeof(error)) && strstr(error,"ALPHAOP=0"));
+ assert(lowered.combiner_count==0);fixed[1][16]=1;
+ /* Disabled first stage returns diffuse even with a bound texture. */
+ fixed[0][12]=1;assert(nv2a_pixel_fixed_definition(fixed,dimensions,0,&lowered,error,sizeof(error)));
+ const float diffuse[4]={.8,.8,.8,.8};draw(&lowered,texels,NULL,diffuse);
+ /* Independent arguments: complemented texture alpha replicated to RGB;
+  * alpha selects texture factor. This catches stale constant uploads. */
+ fixed[0][12]=2;fixed[0][14]=0x32;fixed[0][16]=2;fixed[0][18]=3;fixed[1][12]=1;
+ assert(nv2a_pixel_fixed_definition(fixed,dimensions,0x80402010,&lowered,error,sizeof(error)));
+ const float selected[4]={.25,.25,.25,128/255.0f};draw(&lowered,texels,NULL,selected);
+ fixed[0][12]=4;fixed[0][14]=2;fixed[0][15]=3;fixed[0][16]=1;
+ assert(nv2a_pixel_fixed_definition(fixed,dimensions,0xff4080c0,&lowered,error,sizeof(error)));
+ const float factor[4]={.2f*64/255,.3f*128/255,.25f*192/255,.8};draw(&lowered,texels,NULL,factor);
+ fixed[0][11]=1;assert(!nv2a_pixel_fixed_definition(fixed,dimensions,0,&lowered,error,sizeof(error)));
+ fixed[0][11]=0;dimensions[0]=0;assert(!nv2a_pixel_fixed_definition(fixed,dimensions,0,&lowered,error,sizeof(error)));
+ puts("PASS: fixed pixel modulation/add/preserved alpha, disabled stages, independent arguments/factor and explicit invalid-state rejection");
  Nv2aPixelDef d=copy_texture();draw(&d,texels,NULL,texels[0]);
  opts.fog_enabled=1;float fogged[4]={0.2,0.225,0.2125,0.75};draw(&d,texels,NULL,fogged);opts.fog_enabled=0;
  opts.specular_enabled=1;float spec[4]={0.3,0.4,0.35,0.75};draw(&d,texels,NULL,spec);opts.specular_enabled=0;

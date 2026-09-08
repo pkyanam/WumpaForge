@@ -66,6 +66,88 @@ int nv2a_pixel_set_constants(Nv2aPixelDef *active,uint32_t index,const float *co
     return 1;
 }
 
+/* Fixed pipeline lowering, derived from Xbox 4361 10A9B0/10A910 and published
+ * texture-operation equations. Keep arithmetic in the already validated native
+ * combiner generator, including simultaneous RGB/alpha writes and saturation. */
+static int fixed_argument(unsigned stage, unsigned value, int alpha,
+                          const unsigned dimensions[4], unsigned *byte)
+{
+    static const unsigned regs[6] = {4, 12, 0, 1, 5, 13};
+    unsigned source = value & 15;
+    if ((value & ~0x3fu) || source > 5 || (source == 2 && !dimensions[stage])) return 0;
+    *byte = source == 2 ? 8 + stage : regs[source];
+    if (alpha || (value & 0x20)) *byte |= 0x10;
+    if (value & 0x10) *byte |= 0x20;
+    return 1;
+}
+static int fixed_portion(unsigned stage, unsigned op, unsigned arg1, unsigned arg2,
+                         unsigned result, int alpha, const unsigned dimensions[4],
+                         uint32_t *inputs, uint32_t *outputs)
+{
+    *inputs = *outputs = 0;
+    if (alpha && op == 1) return 1; /* No alpha write, confirmed 10AA9D/10ADBC. */
+    if (op < 2 || op > 10 || (result != 1 && result != 5)) return 0;
+    unsigned a = 0, b = 0;
+    if (op != 3 && !fixed_argument(stage, arg1, alpha, dimensions, &a)) return 0;
+    if (op != 2 && !fixed_argument(stage, arg2, alpha, dimensions, &b)) return 0;
+    unsigned dst = result == 5 ? 13 : 12;
+    uint32_t mapping = op == 5 ? 0x10000 : op == 6 ? 0x20000 :
+                       op == 8 ? 0x8000 : op == 9 ? 0x18000 : 0;
+    /* Inputs A*B+C*D, destination is sum; 0x20 is unsigned-inverted ZERO=1. */
+    if (op == 2 || op == 3) *inputs = ((op == 2 ? a : b) << 24) | 0x00200000u;
+    else if (op >= 4 && op <= 6) *inputs = (a << 24) | (b << 16);
+    else *inputs = (a << 24) | 0x00200000u | (b << 8) | (op == 10 ? 0x40u : 0x20u);
+    *outputs = (dst << 8) | mapping;
+    return 1;
+}
+int nv2a_pixel_fixed_definition(const uint32_t states[4][32], const unsigned dimensions[4],
+                                uint32_t texture_factor, Nv2aPixelDef *definition,
+                                char *error, size_t error_capacity)
+{
+    if (error && error_capacity) error[0] = 0;
+    if (definition) memset(definition, 0, sizeof(*definition));
+    if (!states || !dimensions || !definition) {
+        if (error && error_capacity) snprintf(error, error_capacity, "invalid fixed-stage arguments");
+        return 0;
+    }
+    Nv2aPixelDef d = {0};
+    /* CURRENT initially means diffuse, including alpha when its operation is
+     * disabled in the first stage. A real combiner copy establishes this state. */
+    d.rgb_inputs[0] = 0x04200000; d.alpha_inputs[0] = 0x14200000;
+    d.rgb_outputs[0] = d.alpha_outputs[0] = 0xC00;
+    d.combiner_count = 1; d.constant0[0] = texture_factor;
+    for (unsigned stage = 0; stage < 4; ++stage) {
+        const uint32_t *s = states[stage];
+        if (s[12] == 1) break;
+        unsigned n = d.combiner_count;
+        if (s[9] || s[10] || s[11] || s[21]) {
+            if (error && error_capacity) snprintf(error, error_capacity,
+                "fixed stage %u unsupported color key/sign/alpha kill/texture transform", stage);
+            return 0;
+        }
+        if (dimensions[stage] != 0 && dimensions[stage] != 2 &&
+            dimensions[stage] != 3 && dimensions[stage] != 4) {
+            if (error && error_capacity) snprintf(error, error_capacity, "fixed stage %u invalid texture dimension", stage);
+            return 0;
+        }
+        if (!fixed_portion(stage, s[12], s[14], s[15], s[20], 0, dimensions,
+                           &d.rgb_inputs[n], &d.rgb_outputs[n]) ||
+            !fixed_portion(stage, s[16], s[18], s[19], s[20], 1, dimensions,
+                           &d.alpha_inputs[n], &d.alpha_outputs[n])) {
+            if (error && error_capacity) snprintf(error, error_capacity,
+                "fixed stage %u invalid/unsupported COLOROP=%u ALPHAOP=%u arguments/result/binding", stage, s[12], s[16]);
+            return 0;
+        }
+        /* Original107CA0 selects PROJECT2D/PROJECT3D/CUBEMAP from each bound
+         * resource header. Programmed vertex outputs retain their own T0..T3. */
+        unsigned mode = dimensions[stage] == 2 ? 1 : dimensions[stage] == 3 ? 2 : dimensions[stage] == 4 ? 3 : 0;
+        d.texture_modes |= mode << (stage * 5);
+        ++d.combiner_count;
+    }
+    *definition = d;
+    return 1;
+}
+
 static void rgba(uint32_t color, float v[4])
 {
     v[0] = ((color >> 16) & 255)/255.0f; v[1] = ((color >> 8)&255)/255.0f;

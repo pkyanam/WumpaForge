@@ -39,4 +39,13 @@ int nv2a_pixel_read_definition(const void *bytes, size_t length, Nv2aPixelDef *d
 uint32_t nv2a_pixel_pack_constant(const float rgba[4]);
 int nv2a_pixel_set_constants(Nv2aPixelDef *active, uint32_t index,
                              const float *rgba, uint32_t count);
+/* Lower Xbox 4361 fixed texture stages to register-combiner equations.
+ * states are the four 32-DWORD SDK caches (not PC D3D enum ordering).
+ * dimensions: 0 unbound, 2 texture2D, 3 volume, 4 cube. Texture factor is ARGB.
+ * Supports disabled/select/modulate/scaled-modulate/add/signed-add/subtract;
+ * unsupported operations/state return0 with a zeroed definition and diagnostic.
+ * ALPHAOP1 preserves current alpha; ALPHAOP0 is invalid, not an alias for1. */
+int nv2a_pixel_fixed_definition(const uint32_t states[4][32],
+                                const unsigned dimensions[4], uint32_t texture_factor,
+                                Nv2aPixelDef *definition, char *error, size_t error_capacity);
 #endif

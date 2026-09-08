@@ -122,14 +122,14 @@ static GLuint shader_compile(GLenum type, const char *source)
     }
     return shader;
 }
-static struct ShaderProgram *shader_program(void)
+static struct ShaderProgram *shader_program(const Nv2aPixelDef *pixel)
 {
-    if (!s_vertex_handle || !s_pixel_handle)
-        shader_error("shader pairing","mixed fixed/programmed stages not yet implemented");
+    if (!s_vertex_handle)
+        shader_error("shader pairing","fixed vertex/programmed pixel stages not yet implemented");
     struct ShaderKey key={0};
     key.count=s_vertex_object.instruction_count;
     memcpy(key.words,s_vertex_object.words,key.count*16);
-    key.pixel=s_pixel_definition;
+    key.pixel=*pixel;
     memset(key.pixel.constant0,0,sizeof(key.pixel.constant0));
     memset(key.pixel.constant1,0,sizeof(key.pixel.constant1));
     key.pixel.final_constant0=key.pixel.final_constant1=0;
@@ -152,7 +152,7 @@ static struct ShaderProgram *shader_program(void)
     char error[256]; Nv2aVertexInfo vi; Nv2aPixelInfo pi;
     if (!nv2a_vertex_generate(&key.words[0][0],key.count,vertex_source,sizeof(vertex_source),&vi,error,sizeof(error)))
         shader_error("vertex translation",error);
-    if (!nv2a_pixel_generate(&s_pixel_definition,&key.options,pixel_source,sizeof(pixel_source),&pi,error,sizeof(error)))
+    if (!nv2a_pixel_generate(pixel,&key.options,pixel_source,sizeof(pixel_source),&pi,error,sizeof(error)))
         shader_error("pixel translation",error);
     GLuint vs=shader_compile(GL_VERTEX_SHADER,vertex_source), ps=shader_compile(GL_FRAGMENT_SHADER,pixel_source);
     GLuint program=glCreateProgram(); glAttachShader(program,vs); glAttachShader(program,ps);
@@ -182,7 +182,18 @@ static GLenum shader_wrap(uint32_t mode)
 }
 static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertices, uint32_t stride)
 {
-    struct ShaderProgram *p=shader_program();
+    Nv2aPixelDef pixel=s_pixel_definition;
+    if (!s_pixel_handle) {
+        uint32_t stages[4][32]; unsigned dimensions[4]; char error[256];
+        for (unsigned i=0;i<4;++i) {
+            memcpy(stages[i],guest_ptr(0x10EC18+i*128),sizeof(stages[i]));
+            struct Resource *r=resource(s_texture_handles[i]);
+            dimensions[i]=!r?0:r->type==RESOURCE_CUBE_TEXTURE?4:2;
+        }
+        if (!nv2a_pixel_fixed_definition(stages,dimensions,read32(0x10F01C),&pixel,error,sizeof(error)))
+            shader_error("fixed pixel stages",error);
+    }
+    struct ShaderProgram *p=shader_program(&pixel);
     if (!s_shader_vao) { glGenVertexArrays(1,&s_shader_vao); glGenBuffers(1,&s_shader_vbo); glGenSamplers(4,s_shader_samplers); }
     glBindVertexArray(s_shader_vao); glBindBuffer(GL_ARRAY_BUFFER,s_shader_vbo);
     glBufferData(GL_ARRAY_BUFFER,(size_t)count*stride,vertices,GL_STREAM_DRAW);
@@ -209,8 +220,8 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
     glUniform4f(glGetUniformLocation(p->program,"u_nv2a_viewport"),s_viewport.X,s_viewport.Y,s_viewport.Width,s_viewport.Height);
     glUniform2f(glGetUniformLocation(p->program,"u_nv2a_depth"),s_viewport.MinZ*16777215.0f,s_viewport.MaxZ*16777215.0f);
     float colors[18][4];
-    for (unsigned i=0;i<8;++i) { shader_rgba(s_pixel_definition.constant0[i],colors[i*2]); shader_rgba(s_pixel_definition.constant1[i],colors[i*2+1]); }
-    shader_rgba(s_pixel_definition.final_constant0,colors[16]); shader_rgba(s_pixel_definition.final_constant1,colors[17]);
+    for (unsigned i=0;i<8;++i) { shader_rgba(pixel.constant0[i],colors[i*2]); shader_rgba(pixel.constant1[i],colors[i*2+1]); }
+    shader_rgba(pixel.final_constant0,colors[16]); shader_rgba(pixel.final_constant1,colors[17]);
     glUniform4fv(glGetUniformLocation(p->program,"u_psconstants"),18,&colors[0][0]);
     glUniform3f(glGetUniformLocation(p->program,"u_fogcolor"),0,0,0);
     glUniform1i(glGetUniformLocation(p->program,"u_alpha_enable"),read32(0x10EE18+60*4)!=0);
