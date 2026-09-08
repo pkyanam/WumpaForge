@@ -296,8 +296,29 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
             uint8_t *gathered = NULL;
             HRESULT result = gather_vertex_attribute(slot->stream,slot->offset,slot->byte_count,count,fetch,&gathered);
             if (result < 0) {
-                fprintf(stderr,"[wrath streams] rejected attribute%u stream%u count%u: range/allocation error0x%X\n",
-                        i,slot->stream,count,(unsigned)result);
+                static unsigned rejections;
+                int stop = getenv("WRATH_BREAK_STREAM_ERROR") != NULL;
+                if (rejections < 16 || stop) {
+                    uint32_t record=0x10F280+12*slot->stream;
+                    uint32_t stream_stride=read32(record),displacement=read32(record+4),handle=read32(record+8);
+                    struct Resource *r=resource(handle);
+                    uint64_t low=UINT64_MAX,high=0;
+                    for(uint32_t j=0;j<count;++j) {
+                        uint64_t vertex=vertex_fetch_index(fetch,j);
+                        if(vertex<low)low=vertex;
+                        if(vertex>high)high=vertex;
+                    }
+                    fprintf(stderr,"[wrath streams] rejected attribute%u stream%u count%u result0x%X: handle0x%X type%u data0x%X bytes%u stride%u stream_offset%u slot_offset%u element_bytes%u vertex_range=%llu..%llu required_end=%llu dead=%d c122=(%.9g,%.9g,%.9g,%.9g) guest_return0x%X swaps%u\n",
+                        i,slot->stream,count,(unsigned)result,handle,r?r->type:0,r?r->data:0,r?r->bytes:0,
+                        stream_stride,displacement,slot->offset,slot->byte_count,
+                        (unsigned long long)low,(unsigned long long)high,
+                        (unsigned long long)((uint64_t)displacement+slot->offset+high*stream_stride+slot->byte_count),
+                        nv2a_vertex_input_is_dead(&s_vertex_object.words[0][0],s_vertex_object.instruction_count,i,s_vertex_constants),
+                        s_vertex_constants[122][0],s_vertex_constants[122][1],s_vertex_constants[122][2],s_vertex_constants[122][3],
+                        read32(g_esp),read32(GUEST_SWAP_COUNT));
+                    if(++rejections==16)fprintf(stderr,"[wrath streams] further secondary-fetch rejection logs suppressed\n");
+                }
+                if(stop)shader_error("secondary vertex fetch","WRATH_BREAK_STREAM_ERROR requested stop at rejected real buffer range");
                 return result;
             }
             if (!s_shader_attribute_vbo[i]) glGenBuffers(1,&s_shader_attribute_vbo[i]);

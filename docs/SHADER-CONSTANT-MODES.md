@@ -61,3 +61,8 @@ Run the combined graphics smoke command documented in MULTISTREAM-VERTICES.md;
 the constant-mode fixture is included automatically. Parent owns the next actual
 story run and confirmation that the character scene advances. No new native
 boundary or SDK exclusion is needed.
+
+The combined test passed in `local/reports/native-fog-smoke.log`, including actual
+mode-dependent GPU colors, all constant aliases, viewport preservation and CPU
+cache ordering. Story08 subsequently reached the original chamber and rendered
+Uka Uka; a separate secondary-stream range rejection remains under investigation.

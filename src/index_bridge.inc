@@ -91,7 +91,13 @@ void sub_00101BC0(void) /* DrawIndexedVertices(type,indexCount,uint16Pointer), r
 {
     uint32_t type=arg(0),count=arg(1),indices=arg(2);
     HRESULT result=draw_indexed_vertices(type,count,indices);
-    if (result<0) fprintf(stderr,"[wrath graphics] indexed draw rejected: type%u count%u indices0x%X base%u stream0x%X stride%u result0x%X\n",
-        type,count,indices,read32(GUEST_DEVICE+0x1c),s_stream_handle,s_stream_stride,(unsigned)result);
+    if (result<0) {
+        static unsigned rejections;
+        if(rejections<16) {
+            fprintf(stderr,"[wrath graphics] indexed draw rejected: type%u count%u indices0x%X base%u stream0x%X stride%u result0x%X\n",
+                type,count,indices,read32(GUEST_DEVICE+0x1c),s_stream_handle,s_stream_stride,(unsigned)result);
+            if(++rejections==16)fprintf(stderr,"[wrath graphics] further indexed-draw rejection logs suppressed\n");
+        }
+    }
     finish(12,(uint32_t)result);
 }

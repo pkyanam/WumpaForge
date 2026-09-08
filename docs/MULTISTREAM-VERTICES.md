@@ -84,3 +84,20 @@ build/input/test_multistream > local/reports/multistream-smoke.log 2>&1
 Parent owns the next game build/launch and confirmation that the actual character
 scene advances. No additional SDK exclusion addresses are required:102580,
 101B20 and101BC0 were already native bridge boundaries.
+
+## Story08 range diagnostics
+
+Story08 renders the chamber but first rejects v6/stream1 on a newly linked
+88-instruction program (144 indexed vertices, stream0 stride56). This differs
+from the earlier supported69-instruction shader. The existing exact zero-use
+proof currently bypasses fetches only when the secondary handle is absent; a
+stale bound buffer could therefore still reject even if its input is irrelevant.
+That is a hypothesis until the next live range/constant capture.
+
+Secondary-fetch and indexed-draw rejection messages are capped at16 each per
+process. The secondary diagnostic reports the resource handle/type/data/size,
+stream and declaration offsets, stride, effective index range, required byte end,
+current c122, and exact dead-input proof result. `WRATH_BREAK_STREAM_ERROR=1`
+stops at the first failed gather through `shader_error`, allowing the existing
+shader probe to capture the actual state. This diagnostic does not alter bounds,
+fetches, constants, shader code or game progression.
