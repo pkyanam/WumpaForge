@@ -3,7 +3,31 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot31, animated Universal globe; mixed shader pairing next
+## Latest checkpoint: boot35, Traveller's Tales animation; vertex ARL next
+- User-requested live preview ran build31 once (user-launch-01.log) and naturally
+  stopped at the known mixed shader failure. Session96785 exited134; no game left
+  running. Estimate communicated: hours to days for menu, days to weeks for reliable
+  gameplay, highly uncertain because unseen scenes expose additional contracts.
+- a4d1358 implements programmed vertex with actual fixed pixel-stage equations;
+  5db4822 restores original SDK texture defaults from loaded-image table10BD9C.
+  Standalone combined native GPU tests pass, including default initialization,
+  modulation+ADD with retained alpha, live factor uniforms and existing regressions.
+- Incremental build34 passed. Boot34 and read-only shader capture boot35 pass the
+  prior mixed failure at614 swaps. Actual frame760 shows the Traveller's Tales
+  publisher text beginning over stars/planet: local/reports/game-frame-760-boot35.png.
+  Still no verified Crash title/menu/gameplay. Both bounded runs have exited.
+- Next explicit failure at782 swaps: vertex translation instruction5 MAC13 (ARL),
+  original vertex handle29706641, pixel0,69instructions, indexed36 vertices stride56.
+  Captured actual instructions/live constants in local/reports/boot35-shader.json;
+  tools/shader_probe.py reproduces read-only LLDB export at shader_error.
+  native_audio owns bounded vertex ARL/relative addressing implementation/tests.
+  controller_support audits remaining SDK render defaults read-only; mac_runtime
+  completes the independently evidenced11-entry emitter callback seed coverage.
+- Root owns integration/build/launch. No full rebuild until seed changes are ready;
+  max2 compile jobs. Title/menu, physical Bluetooth controllers, gameplay/audio
+  quality, save/load and clean shutdown remain unverified; goal stays active.
+
+## Previous checkpoint: boot31, animated Universal globe
 - Native ARM64 AOT game code renders original Universal globe/planets/title text
   over stars at frame600. Actual captured/viewed artifact:
   local/reports/game-frame-600-boot31.png. This is the original publisher animation,
@@ -21,11 +45,8 @@ Run the supplied game natively on Apple Silicon without emulation. **Native star
   audible quality remains unverified. Bounded run stops after614 swaps at
   shader_program: mixed fixed/programmed stages not implemented, guestreturn3B0B1,
   indexed26vertices from3B010→A5D40→A8240→9F370→A0990→A8140→2D950.
-- Root boot32 captures exact vertex/pixel handles/FVF/stage state at shader_error;
-  inspect local/reports/boot-32-pairing.log and running session8100 if still live.
-  controller_support owns reached mixed-pair implementation in shader_bridge.inc/
-  nv2a files/tests/docs; root owns graphics.c/integration/build. mac_runtime audits
-  adjacent emitter table extent/missing callbacks, read-only pending evidence.
+- Boot32/33 captured exact vertex/pixel handles/FVF/stage state at shader_error;
+  inspect local/reports/boot-33-pairing-full.log. Both sessions8100/63799 exited.
 - Native GPU probe0a7faa5 explained old black frame: stars rendered, then an
   original black near-depth quad occluded later geometry while intro waited for
   sound. Audio startup removed that hold; no graphics-state bypass was needed.
