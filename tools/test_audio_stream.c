@@ -1,6 +1,7 @@
 /* Deterministic production mixer + exact guest32 stream ABI. No audio device. */
 #include <assert.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 #include "../src/audio_bridge.c"
 #include "../third_party/xboxrecomp/src/apu/apu_core.c"
 #include "fixtures/xbox_adpcm_golden.h"
@@ -8,6 +9,7 @@ _Thread_local uint32_t g_eax, g_esp;
 ptrdiff_t g_xbox_mem_offset;
 size_t g_xbox_map_size, g_xbox_total_ram;
 static uint32_t heap = 0x20000;
+uint32_t xbox_ContiguousAllocatedBytes(void) { return 0x4000; }
 uint32_t xbox_HeapAlloc(uint32_t bytes, uint32_t align) {heap=(heap+align-1)&~(align-1);uint32_t p=heap;heap+=bytes;return p;}
 void xbox_HeapFree(uint32_t p) {(void)p;}
 static uint32_t call(uint32_t address, const uint32_t *args, unsigned n)
@@ -23,7 +25,16 @@ static uint32_t submit(uint32_t s, uint32_t data, uint32_t bytes, unsigned index
 static void render(int16_t out[][2], unsigned n) {memset(out,0,n*4);mixer_render(out,n);}
 int main(void)
 {
- void *mem=calloc(1,0x400000);assert(mem);g_xbox_mem_offset=(ptrdiff_t)mem;g_xbox_map_size=g_xbox_total_ram=0x400000;
+ /* Reserve address space only: the unused 2 GiB gap remains inaccessible and
+  * consumes no physical RAM. This matches the actual guest contiguous VA. */
+ size_t span=0x80004000ull;
+ void *mem=mmap(NULL,span,PROT_NONE,MAP_PRIVATE|MAP_ANON,-1,0);assert(mem!=MAP_FAILED);
+ assert(mprotect(mem,0x400000,PROT_READ|PROT_WRITE)==0);
+ assert(mprotect((char*)mem+0x80000000ull,0x4000,PROT_READ|PROT_WRITE)==0);
+ g_xbox_mem_offset=(ptrdiff_t)mem;g_xbox_map_size=g_xbox_total_ram=0x400000;
+ assert(range(0x80000000,0x4000) && range(0x80003FFF,1));
+ assert(!range(0x80004000,1) && !range(0x80003FFF,2) && !range(0xFFFFFFFF,2));
+ assert(!range(0,108) && !range(0x7FFFFFFF,2));
  assert(xbox_DirectSoundCreate(NULL,&s_device,NULL)==0);s_device_refs=1;
  uint8_t fmt[20]={1,0,1,0,0x80,0xBB,0,0,0,0x77,1,0,2,0,16,0,0,0,0,0};memcpy(ptr(0x12100),fmt,20);
  uint32_t desc[]={0,3,0x12100,0,0,0};memcpy(ptr(0x12200),desc,24);
@@ -46,7 +57,12 @@ int main(void)
  assert(call(0x136287,one,1)==0);
  uint8_t adpcm[20]={0x69,0,1,0,0x80,0xBB,0,0,0,0,0,0,36,0,4,0,2,0,64,0};memcpy(ptr(0x12100),adpcm,20);
  assert(call(0x137AA4,create,2)==0);s=read32(0x12000);one[0]=s;memcpy(ptr(0x13000),golden_mono_adpcm,108);
- assert(submit(s,0x13000,108,0)==0);render(out,192);
+ /* Actual title packet source is physical zero in the high contiguous VA.
+  * A conflicting low RAM value ensures a mask-to-low-RAM bug cannot pass. */
+ memcpy(ptr(0x80000000),golden_mono_adpcm,108);memset(ptr(0),0xA5,108);
+ assert(submit(s,0x80003FF0,108,0)==(uint32_t)E_INVALIDARG);
+ assert(submit(s,0x80004000,108,0)==(uint32_t)E_INVALIDARG);
+ assert(submit(s,0x80000000,108,0)==0);render(out,192);
  for(unsigned f=0;f<192;++f)assert(out[f][0]==golden_mono_pcm[f] && out[f][1]==golden_mono_pcm[f]);
  assert(read32(0x12504)==0 && read32(0x12500)==108);
  assert(submit(s,0x13000,107,0)==(uint32_t)AUDIO_BADFORMAT);
@@ -59,5 +75,5 @@ int main(void)
  render(out,50);uint64_t inc=((uint64_t)22050<<16)/48000;
  for(unsigned f=0;f<50;++f){unsigned source=(unsigned)((f*inc)>>16);assert(out[f][0]==(source<21?(int)(100+source):0));}
  assert(read32(0x12514)==0);assert(call(0x136287,one,1)==0);
- wrath_audio_shutdown();free(mem);puts("PASS: stream guest ABI, continuous packet PCM/ADPCM output, pending/completion sizes, bounds, pause/resume, starvation, discontinuity, flush, ref lifetime");
+ wrath_audio_shutdown();assert(munmap(mem,span)==0);puts("PASS: stream guest ABI, continuous packet PCM/ADPCM output, pending/completion sizes, bounds, pause/resume, starvation, discontinuity, flush, ref lifetime");
 }

@@ -326,7 +326,7 @@ index dd6bec1..37fa951 100644
  #endif
  
 diff --git a/src/apu/apu_xaudio2.c b/src/apu/apu_xaudio2.c
-index cd69e57..302b8ea 100644
+index cd69e57..3d25ce8 100644
 --- a/src/apu/apu_xaudio2.c
 +++ b/src/apu/apu_xaudio2.c
 @@ -1,7 +1,7 @@
@@ -348,7 +348,7 @@ index cd69e57..302b8ea 100644
  #if defined(_WIN32)
  
  #define COBJMACROS
-@@ -161,12 +160,152 @@ int xa2_get_buffer_size(void)
+@@ -161,12 +160,178 @@ int xa2_get_buffer_size(void)
      return XA2_BUF_SAMPLES;
  }
  
@@ -379,6 +379,17 @@ index cd69e57..302b8ea 100644
 +static unsigned g_sdl_read, g_sdl_queued;
 +static int g_sdl_started;
 +static uint64_t g_sdl_submitted, g_sdl_played, g_sdl_underruns, g_sdl_overflows;
++static int g_sdl_trace;
++static uint64_t g_sdl_nonzero_in, g_sdl_nonzero_out, g_sdl_trace_next;
++static unsigned g_sdl_peak_in, g_sdl_peak_out;
++static void trace_energy(const int16_t *pcm, unsigned frames, uint64_t *nonzero, unsigned *peak)
++{
++    for (unsigned i = 0; i < frames * 2; ++i) {
++        int value = pcm[i]; unsigned magnitude = value < 0 ? -value : value;
++        *nonzero += value != 0; if (magnitude > *peak) *peak = magnitude;
++    }
++}
++
 +
 +static void sdl_audio_callback(void *userdata, Uint8 *stream, int length)
 +{
@@ -396,6 +407,7 @@ index cd69e57..302b8ea 100644
 +    g_sdl_read = (g_sdl_read + frames) % SDL_PCM_CAPACITY;
 +    g_sdl_queued -= frames;
 +    g_sdl_played += frames;
++    if (g_sdl_trace) trace_energy((const int16_t *)stream, frames, &g_sdl_nonzero_out, &g_sdl_peak_out);
 +    if (frames < requested) g_sdl_underruns++;
 +}
 +
@@ -431,6 +443,10 @@ index cd69e57..302b8ea 100644
 +    }
 +    g_sdl_read = g_sdl_queued = 0;
 +    g_sdl_started = 0;
++    const char *trace = SDL_getenv("WRATH_TRACE_AUDIO");
++    g_sdl_trace = trace && trace[0] == '1';
++    g_sdl_nonzero_in = g_sdl_nonzero_out = g_sdl_trace_next = 0;
++    g_sdl_peak_in = g_sdl_peak_out = 0;
 +    g_sdl_submitted = g_sdl_played = g_sdl_underruns = g_sdl_overflows = 0;
 +    /* Device opens paused: collect preroll before starting its callback. */
 +    fprintf(stderr, "[SDL-AUDIO] %s: %d Hz stereo S16, %u-frame callback, "
@@ -493,6 +509,16 @@ index cd69e57..302b8ea 100644
 +           (frames - first) * SDL_PCM_FRAME_BYTES);
 +    g_sdl_queued += frames;
 +    g_sdl_submitted += frames;
++    if (g_sdl_trace) {
++        trace_energy(samples, frames, &g_sdl_nonzero_in, &g_sdl_peak_in);
++        if (g_sdl_submitted >= g_sdl_trace_next) {
++            fprintf(stderr, "[AUDIO-OUTPUT] submitted=%llu callback=%llu queued=%u nonzero_in=%llu nonzero_out=%llu peak_in=%u peak_out=%u underruns=%llu overflows=%llu\n",
++                (unsigned long long)g_sdl_submitted, (unsigned long long)g_sdl_played, g_sdl_queued,
++                (unsigned long long)g_sdl_nonzero_in, (unsigned long long)g_sdl_nonzero_out,
++                g_sdl_peak_in, g_sdl_peak_out, (unsigned long long)g_sdl_underruns, (unsigned long long)g_sdl_overflows);
++            g_sdl_trace_next = g_sdl_submitted + SDL_PCM_RATE;
++        }
++    }
 +    int start = !g_sdl_started && g_sdl_queued >= SDL_PCM_PREROLL;
 +    if (start) g_sdl_started = 1;
 +    SDL_UnlockAudioDevice(g_sdl_device);
@@ -520,7 +546,7 @@ index f2a3b78..52a7bf3 100644
  
  target_include_directories(xbox_dsound PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 diff --git a/src/audio/dsound_device.c b/src/audio/dsound_device.c
-index f467511..ad58113 100644
+index f467511..b3d90e1 100644
 --- a/src/audio/dsound_device.c
 +++ b/src/audio/dsound_device.c
 @@ -1,216 +1,363 @@
@@ -844,12 +870,8 @@ index f467511..ad58113 100644
 +    return (ULONG)++buf_from_iface(self)->ref_count;
 +}
 +static ULONG __stdcall buf_Release(IDirectSoundBuffer8 *self)
- {
-     DSoundBuffer *buf = buf_from_iface(self);
--    uint32_t cursor;
--    apu_mixer_get_state(buf->mixer_slot, &cursor, NULL, NULL);
--    if (pdwPlay)  *pdwPlay = cursor;
--    if (pdwWrite) *pdwWrite = cursor;
++{
++    DSoundBuffer *buf = buf_from_iface(self);
 +    LONG ref = --buf->ref_count;
 +    if (ref <= 0) {
 +        release_voice(buf);
@@ -872,8 +894,12 @@ index f467511..ad58113 100644
 +}
 +static HRESULT __stdcall buf_Lock(IDirectSoundBuffer8 *self, DWORD offset, DWORD bytes,
 +    void **p1, DWORD *n1, void **p2, DWORD *n2, DWORD flags)
-+{
-+    DSoundBuffer *buf = buf_from_iface(self);
+ {
+     DSoundBuffer *buf = buf_from_iface(self);
+-    uint32_t cursor;
+-    apu_mixer_get_state(buf->mixer_slot, &cursor, NULL, NULL);
+-    if (pdwPlay)  *pdwPlay = cursor;
+-    if (pdwWrite) *pdwWrite = cursor;
 +    if (p1) *p1 = NULL;
 +    if (n1) *n1 = 0;
 +    if (p2) *p2 = NULL;
@@ -998,12 +1024,12 @@ index f467511..ad58113 100644
 -
 -static HRESULT __stdcall buf_SetFrequency(IDirectSoundBuffer8 *self, DWORD dwFrequency)
 +static HRESULT __stdcall buf_Stop(IDirectSoundBuffer8 *self)
- {
++{
 +    release_voice(buf_from_iface(self));
 +    return S_OK;
 +}
 +static HRESULT __stdcall buf_SetVolume(IDirectSoundBuffer8 *self, LONG volume)
-+{
+ {
 +    if (volume < -10000 || volume > 0) return E_INVALIDARG;
      DSoundBuffer *buf = buf_from_iface(self);
 -    buf->frequency = dwFrequency;
@@ -1226,7 +1252,7 @@ index f467511..ad58113 100644
  };
  
  /* ================================================================
-@@ -249,64 +564,171 @@ static HRESULT __stdcall ds_QueryInterface(IDirectSound8 *self, const IID *riid,
+@@ -249,64 +564,185 @@ static HRESULT __stdcall ds_QueryInterface(IDirectSound8 *self, const IID *riid,
  static ULONG __stdcall ds_AddRef(IDirectSound8 *self)  { (void)self; return 1; }
  static ULONG __stdcall ds_Release(IDirectSound8 *self) { (void)self; return 0; }
  
@@ -1289,13 +1315,7 @@ index f467511..ad58113 100644
 -        if (v) {
 -            v->num_channels = buf->channels;
 -            v->sample_rate = buf->frequency;
--        }
--    }
- 
--    /* Pre-allocate buffer if size specified */
--    if (desc && desc->dwBufferBytes > 0) {
--        buf->buffer_data = calloc(1, desc->dwBufferBytes);
--        buf->buffer_size = desc->dwBufferBytes;
++
 +struct IDirectSoundStream {
 +    ULONG refs;
 +    uint32_t capacity, paused, discontinuity;
@@ -1373,6 +1393,25 @@ index f467511..ad58113 100644
 +            free(pcm); return DSERR_BADFORMAT;
 +        }
 +    } else memcpy(pcm, data, bytes);
++    const char *trace = getenv("WRATH_TRACE_AUDIO");
++    if (trace && trace[0] == '1') {
++        static unsigned packets;
++        if (packets++ < 24) {
++            uint32_t nonzero = 0, peak = 0;
++            for (uint64_t i = 0; i < frames * s->format.nChannels; ++i) {
++                int value = pcm[i]; uint32_t magnitude = value < 0 ? -value : value;
++                nonzero += value != 0; if (magnitude > peak) peak = magnitude;
++            }
++            fprintf(stderr, "[AUDIO-DECODE] tag=%X channels=%u rate=%u bytes=%u frames=%llu nonzero=%u peak=%u volume=%d paused=%u\n",
++                s->format.wFormatTag, s->format.nChannels, s->format.nSamplesPerSec,
++                bytes, (unsigned long long)frames, nonzero, peak, (int)s->volume, s->paused);
+         }
+     }
+-
+-    /* Pre-allocate buffer if size specified */
+-    if (desc && desc->dwBufferBytes > 0) {
+-        buf->buffer_data = calloc(1, desc->dwBufferBytes);
+-        buf->buffer_size = desc->dwBufferBytes;
 +    AcquireSRWLockExclusive(&s_buffers_lock);
 +    if (s->slot < 0) {
 +        reap_finished();
@@ -1445,7 +1484,7 @@ index f467511..ad58113 100644
      return S_OK;
  }
  
-@@ -362,7 +784,7 @@ static const IDirectSound8Vtbl g_ds_vtbl = {
+@@ -362,7 +798,7 @@ static const IDirectSound8Vtbl g_ds_vtbl = {
      ds_QueryInterface,
      ds_AddRef,
      ds_Release,
@@ -1454,7 +1493,7 @@ index f467511..ad58113 100644
      ds_CreateSoundStream,
      ds_SetMixBinHeadroom,
      ds_SetPosition,
-@@ -381,6 +803,6 @@ HRESULT xbox_DirectSoundCreate(void *pGuid, IDirectSound8 **ppDS, void *pUnkOute
+@@ -381,6 +817,6 @@ HRESULT xbox_DirectSoundCreate(void *pGuid, IDirectSound8 **ppDS, void *pUnkOute
      (void)pGuid; (void)pUnkOuter;
      if (!ppDS) return E_INVALIDARG;
      *ppDS = &g_dsound;

@@ -17,6 +17,7 @@ extern ptrdiff_t g_xbox_mem_offset;
 extern size_t g_xbox_map_size, g_xbox_total_ram;
 extern uint32_t xbox_HeapAlloc(uint32_t bytes, uint32_t alignment);
 extern void xbox_HeapFree(uint32_t address);
+extern uint32_t xbox_ContiguousAllocatedBytes(void);
 typedef void (*recomp_func_t)(void);
 #define AUDIO_OBJECTS 512
 #define AUDIO_BADFORMAT ((HRESULT)0x88780064u)
@@ -43,7 +44,16 @@ static void *ptr(uint32_t address) { return (void *)((uintptr_t)address + g_xbox
 static int range(uint32_t address, size_t bytes)
 {
     size_t limit = g_xbox_total_ram ? g_xbox_total_ram : g_xbox_map_size;
-    return address >= 0x10000u && address < limit && bytes <= limit - address;
+    if (address >= 0x10000u && address < limit && bytes <= limit - address) return 1;
+    /* MmAllocateContiguousMemory returns this separate mapped window. Keep its
+     * VA: masking to low RAM would read unrelated game code/data. The runtime
+     * currently uses a monotonic allocator, so only its allocated extent is valid. */
+    if (address >= 0x80000000u) {
+        uint32_t offset = address - 0x80000000u;
+        uint32_t allocated = xbox_ContiguousAllocatedBytes();
+        return allocated <= 64u * 1024u * 1024u && offset < allocated && bytes <= allocated - offset;
+    }
+    return 0;
 }
 static uint32_t read32(uint32_t address) { uint32_t v; memcpy(&v, ptr(address), 4); return v; }
 static uint16_t read16(uint32_t address) { uint16_t v; memcpy(&v, ptr(address), 2); return v; }
@@ -280,6 +290,13 @@ static void stream_complete(void *context, uint32_t status, uint32_t bytes)
 static void stream_process(void)
 {
     struct Stream *s = find_stream(arg(0)); uint32_t packet = arg(1);
+    const char *trace = getenv("WRATH_TRACE_AUDIO");
+    if (trace && trace[0] == '1' && range(packet, 24)) {
+        static unsigned packets;
+        if (packets++ < 8) fprintf(stderr, "[AUDIO-PACKET] object=%s data=%08X bytes=%u completed=%08X status=%08X event=%08X timestamp=%08X RAM=%zu\n",
+            s ? "valid" : "invalid", read32(packet), read32(packet+4), read32(packet+8),
+            read32(packet+12), read32(packet+16), read32(packet+20), g_xbox_total_ram);
+    }
     if (!s || !range(packet, 24) || arg(2)) { finish(12, E_INVALIDARG); return; }
     uint32_t data = read32(packet), bytes = read32(packet + 4);
     uint32_t completed = read32(packet + 8), status = read32(packet + 12);
@@ -327,7 +344,21 @@ static void do_work(void)
     }
     g_esp += 4;
 }
-#define BRIDGE(address, body) void sub_##address(void) { pthread_mutex_lock(&s_lock); body; pthread_mutex_unlock(&s_lock); }
+static int audio_trace_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) { const char *value = getenv("WRATH_TRACE_AUDIO"); enabled = value && value[0] == '1'; }
+    return enabled;
+}
+#define BRIDGE(address, body) void sub_##address(void) { \
+    pthread_mutex_lock(&s_lock); uint32_t trace_esp = g_esp; body; \
+    if (audio_trace_enabled() && (0x##address == 0x137AA4 || 0x##address == 0x136427 || \
+        0x##address == 0x1366F8 || 0x##address == 0x1366FD || 0x##address == 0x136389)) { \
+        static unsigned traces; if (traces++ < 24) \
+            fprintf(stderr, "[AUDIO-ABI] %08X args=%08X,%08X,%08X result=%08X\n", \
+                0x##address, read32(trace_esp+4), read32(trace_esp+8), read32(trace_esp+12), g_eax); \
+    } pthread_mutex_unlock(&s_lock); }
+
 BRIDGE(00137A06, create_device())
 BRIDGE(00137A4D, create_buffer())
 BRIDGE(00135BE8, release_device())

@@ -7,6 +7,7 @@ _Thread_local uint32_t g_eax, g_esp;
 ptrdiff_t g_xbox_mem_offset;
 size_t g_xbox_map_size, g_xbox_total_ram;
 static uint32_t heap = 0x20000;
+uint32_t xbox_ContiguousAllocatedBytes(void) { return 0; }
 uint32_t xbox_HeapAlloc(uint32_t bytes, uint32_t align) {heap=(heap+align-1)&~(align-1); uint32_t p=heap;heap+=bytes;return p;}
 void xbox_HeapFree(uint32_t p) {(void)p;}
 static uint32_t call(uint32_t address, const uint32_t *args, unsigned count)

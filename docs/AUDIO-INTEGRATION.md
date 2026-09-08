@@ -431,7 +431,7 @@ test without polling DoWork. No in-game stream playback or audible game sound ha
 yet been verified at this checkpoint.
 
 Root integration validation: full build30 and bootstrap30 passed. Boot30 reads
-real ADPCM stream packets, clears the original audio gate, and advances animation
+real ADPCM source-file packets, clears the original audio gate, and advances animation
 300→315.5→347.5 at increment0.5. Actual GPU frame180 shows the original copyright
 screen over stars. Execution later stops at uncompiled callback31E20, not at
 stream creation. Audible output quality remains unverified; LLDB-heavy run logs
@@ -451,3 +451,39 @@ and [packet manager](https://github.com/Cxbx-Reloaded/Cxbx-Reloaded/blob/master/
 read2026-09-08; implementation is original code following the retail4361 ABI,
 not a source copy of their GPL implementation. The existing ADPCM reference
 revision/golden-generation provenance remains in ADPCM.md.
+
+
+## Silence diagnosis and contiguous packet buffers (boots36–37)
+
+The user's report of no audible intro sound was correct. Animation advancement
+was not proof of accepted audio: the original wrapper's source-feeding flag can
+clear the intro gate even when Process rejects every packet. Boot36 with
+`WRATH_TRACE_AUDIO=1` proved stream creation and volume0 succeeded, while every
+`136427 Process` returned E_INVALIDARG80070057 before decoding. CoreAudio's
+default route was MacBook Air Speakers, mute0, volume1.0,48000Hz; system settings
+were read, not changed.
+
+Boot37 stopped at the actual call from `5D720` and captured packet `172EF70`:
+`{80000000, 36864, 0, 00431EE4, 0, 0}`. The original `5D820` initialization
+allocates110592 bytes through MmAllocateContiguousMemoryEx. The bridge incorrectly
+validated only low RAM. Runtime `xbox_ContiguousAlloc` maps this high virtual
+window separately; it must not be masked into low RAM. The corrected validator
+accepts addresses within the currently allocated extent returned by
+`xbox_ContiguousAllocatedBytes`, capped by the64MiB contiguous window, with
+subtraction-based end bounds. Address80000000 is valid even though its physical
+offset is zero. Unallocated high addresses and crossing the extent remain errors.
+
+The deterministic UBSan test now reserves sparse virtual memory with separate
+low RAM and high contiguous storage. A real guest32 packet at80000000 produces
+all192 golden ADPCM samples exactly while low RAM contains different bytes.
+Boundary-crossing, one-past-end, null/low invalid and wrapping addresses fail.
+Only4MiB low memory and16KiB high memory are accessible; the2GiB gap remains
+PROT_NONE with no committed physical memory. The SDL dummy producer lifecycle
+regression also passes. Actual game output after this fix still needs a run.
+
+Optional `WRATH_TRACE_AUDIO=1` diagnostics provide bounded packet fields and
+ABI results, decoded PCM nonzero/peak counts, and approximately once-per-second
+mixer submission/SDL callback energy counters. Callback instrumentation only
+accumulates counts under the existing device lock; it performs no logging or
+allocation. Nonzero callback samples establish that PCM reached the native output
+callback, not that a user heard it or that timing/quality is correct.
