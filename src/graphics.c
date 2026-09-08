@@ -160,6 +160,12 @@ void sub_000FD6E0(void)
     write32(0x10C550, 1);
     write32(GUEST_SWAP_COUNT, 0);
     memcpy(guest_ptr(GUEST_VIEWPORT), &s_viewport, sizeof(s_viewport));
+    /* Retail SetTransform FEA20 writes ten row-major matrices at device+750.
+     * The original CreateDevice initializes these to identity. */
+    for (unsigned transform=0; transform<10; ++transform)
+        for (unsigned element=0; element<16; ++element)
+            write32(GUEST_DEVICE+0x750+transform*64+element*4,
+                    element%5==0 ? 0x3F800000u : 0);
     if (s_depth_available && initialize_depth_surface(in.depth_format)<0) {
         fprintf(stderr,"[wrath graphics] failed native depth surface initialization\n"); abort();
     }
@@ -1155,6 +1161,20 @@ void sub_00102940(void) /* SetVertexShader: even FVF codes vs odd program handle
     s_fvf = fvf;
     finish(4, (uint32_t)s_device->lpVtbl->SetVertexShader(s_device, fvf));
 }
+static void apply_fixed_transforms(void)
+{
+    /* Xbox enum VIEW0/PROJECTION1/WORLD6 differs from the host D3D enum.
+     * Preserve the original setter and its dirty/depth calculations; consume
+     * its authoritative matrix cache when the native fixed pipeline draws. */
+    const unsigned guest_states[3]={6,0,1};
+    const D3DTRANSFORMSTATETYPE native_states[3]={D3DTS_WORLD,D3DTS_VIEW,D3DTS_PROJECTION};
+    for (unsigned i=0;i<3;++i) {
+        D3DMATRIX matrix;
+        memcpy(&matrix,guest_ptr(GUEST_DEVICE+0x750+guest_states[i]*64),sizeof(matrix));
+        if (s_device->lpVtbl->SetTransform(s_device,native_states[i],&matrix)<0)
+            state_error(0xFEA20,guest_states[i]);
+    }
+}
 static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *vertices, uint32_t stride)
 {
     if (!count) return 0;
@@ -1199,6 +1219,7 @@ static HRESULT draw_vertices_data(uint32_t type, uint32_t count, const void *ver
             free(converted); return D3DERR_INVALIDCALL;
         }
     }
+    apply_fixed_transforms();
     if ((s_fvf & 0xE) == D3DFVF_XYZRHW) {
         if (stride < 16 || !s_viewport.Width || !s_viewport.Height) { free(converted); return D3DERR_INVALIDCALL; }
         if (!converted) {
@@ -1553,6 +1574,7 @@ void sub_000FF580(void) /* CopyRects(source,rectangles,count,destination,points)
 }
 
 #include "index_bridge.inc"
+#include "immediate_bridge.inc"
 
 recomp_func_t wrath_graphics_lookup(uint32_t address)
 {
@@ -1583,6 +1605,10 @@ recomp_func_t wrath_graphics_lookup(uint32_t address)
     case 0x000FFE10: return sub_000FFE10;
     case 0x000FFEA0: return sub_000FFEA0;
     case 0x00101BC0: return sub_00101BC0;
+    case 0x00101E20: return sub_00101E20;
+    case 0x00101E60: return sub_00101E60;
+    case 0x00101EC0: return sub_00101EC0;
+    case 0x00101F00: return sub_00101F00;
     case 0x000FE9C0: return sub_000FE9C0;
     case 0x00103C80: return sub_00103C80;
     case 0x00103C20: return sub_00103C20;
@@ -1633,6 +1659,7 @@ static void test_state(uint32_t method, uint32_t value)
     assert(g_eax==0);
 }
 #include "../tools/test_index_bridge.inc"
+#include "../tools/test_immediate_bridge.inc"
 
 static void test_cube_resources(void)
 {
@@ -2121,6 +2148,7 @@ int main(void)
     test_cube_resources();
     test_palette_resources();
     test_index_bridge();
+    test_immediate_bridge();
     test_shader_bridge();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();

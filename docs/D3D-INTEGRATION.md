@@ -959,3 +959,40 @@ not evidence that the actual game menu has rendered yet. P8 cube textures,
 indices outside a smaller bound palette, and P8 use on fixed-pipeline stages
 beyond stage0 remain explicit unsupported cases; actual programmed shader stage
 binding uses the implemented variants.
+
+
+## Native fixed transform correction
+
+The POSIX fixed shader now applies the Direct3D row-vector transform `p*W*V*P`
+correctly. [Microsoft's transformation pipeline](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/the-direct3d-transformation-pipeline)
+defines the world/view/projection chain and Direct3D clip depth. The CPU computes
+row-major `W*V*P`, while the GLSL shader multiplies `u_mvp*columnPosition`. It needs
+the mathematical transpose of that product. Uploading the existing bytes with
+`GL_FALSE` supplies that transpose because OpenGL consumes column-major bytes;
+`GL_TRUE` previously undid it. See the [Khronos uniform contract](https://wikis.khronos.org/opengl/GLAPI/glUniform).
+
+Only the XYZ transform branch then applies `clip.z = 2*clip.z - clip.w`, converting
+Direct3D depth0..w to OpenGL -w..w. The XYZRHW branch retains the caller's already
+converted clip vector unchanged. Native host transform enums remain VIEW2,
+PROJECTION3 and WORLD256; the title bridge translates guest VIEW0,PROJECTION1,
+WORLD6 when synchronizing the original matrix cache.
+
+`tools/tests/fixed_mvp.c` compiles the production backend into a standalone native
+GPU test. It uses noncommuting scale/translation, rotation/translation and a
+left-handed perspective matrix (near1,far11). An independent scalar oracle checks
+three transformed positions through actual GPU transform feedback, including
+input(.25,-.5,1) yielding GL clip(-7,7.5,3.8,5). The test also verifies unchanged
+preconverted XYZRHW. A real triangle rendered through the production draw method
+produces the expected red pixel and depth11/12; viewport depth[.2,.8] produces.75.
+All checks passed on native GL4.1 Metal. These tests establish fixed transform
+semantics; they do not claim completed fixed lighting or in-game frame correctness.
+
+```sh
+clang -std=c11 -O1 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-missing-field-initializers -Wno-deprecated-declarations -Ithird_party/xboxrecomp/src -Ithird_party/xboxrecomp/src/platform $(pkg-config --cflags sdl2 epoxy) tools/tests/fixed_mvp.c $(pkg-config --libs sdl2 epoxy) -framework OpenGL -o build/input/test_fixed_mvp
+build/input/test_fixed_mvp
+```
+
+`patches/xboxrecomp-graphics.patch` was regenerated from both
+`src/d3d/d3d8_gl.c` and `src/d3d/CMakeLists.txt`, preserving earlier native context
+handoff, presentation pacing, resource and render-state changes. Reverse application
+was checked against the current dependency checkout.
