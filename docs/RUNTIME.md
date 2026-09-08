@@ -255,3 +255,26 @@ the parent performs that separate rebuilt-game check.
 clang -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,-dead_strip -Ithird_party/xboxrecomp/src tools/tests/vblank_timing.c third_party/xboxrecomp/src/platform/win32_compat.c -o build/vblank-timing-test
 build/vblank-timing-test
 ```
+
+## Boot18 worker discovery
+
+Boot18 rendered through five native shader programs before a second worker
+aborted on unresolved compiled target 0x0002BF30. The kernel trace records
+`PsCreateSystemThreadEx #2: routine=0x000ECBD2 ctx1=0x0002BF30 ctx2=0`, and LLDB
+shows the abort in the real POSIX worker's XAPI trampoline. The main thread was
+separately loading files in 0x0002C020 through 0x00087400/0x0002D950.
+
+This is a proven missing function entry, not a damaged indirect target:
+0x0002C03C pushes its immediate address as the start routine in the six-argument
+CreateThread call to 0x000ECC6A at 0x0002C043. The previous function returns at
+0x0002BF2A, followed by five NOPs; 0x0002BF30 starts with four callee-saved register
+pushes. It loops with Sleep(16) while stop flag 0x001BAA90 is zero, then calls
+ExitThread at 0x000ECB19. Its code was already disassembled as an unclassified
+gap, but had no generated function/dispatch entry.
+
+Added only this evidenced address to `config/seed-functions.json`. No regeneration,
+build, runtime substitution or game launch was performed for this correction.
+Parent runs the next analyze/lift/build step. Evidence is in
+`local/reports/boot-18.log` and `local/reports/disasm/asm/text.asm` at the addresses
+above. The next execution may expose the worker's own subsystem requirements;
+this seed does not claim those are already implemented.

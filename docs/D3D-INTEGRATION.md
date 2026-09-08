@@ -156,7 +156,8 @@ mkdir -p build/input
 clang -std=c11 -Wall -Wextra -Werror -Wno-deprecated-declarations \
   -DWRATH_GRAPHICS_SMOKE_TEST -Ithird_party/xboxrecomp/src \
   $(/opt/homebrew/bin/sdl2-config --cflags) -I/opt/homebrew/include \
-  src/graphics.c build/native/third_party/xboxrecomp/src/d3d/libxbox_d3d8.a \
+  src/graphics.c src/nv2a_vertex.c src/nv2a_vertex_input.c src/nv2a_pixel.c \
+  build/native/third_party/xboxrecomp/src/d3d/libxbox_d3d8.a \
   -L/opt/homebrew/lib $(/opt/homebrew/bin/sdl2-config --libs) -lepoxy \
   -o build/input/test_graphics
 build/input/test_graphics
@@ -739,3 +740,104 @@ rebinds to check preserved orientation, and checks release lifetimes. It passes
 with the current production D3D library; the older build/runtime library was stale
 and is no longer the documented test link path. Full game validation is pending
 the next boot with the independently fixed x87 rounding.
+
+The parent rebuilt and recaptured frame 15 in boot15: the actual native output
+now shows the faithful white-background, dark-filled Universal logo. This
+visually confirms the x87 rounding fix through the original game's compression
+and rendering path (`local/reports/game-frame-15-fixed.png`).
+
+## Cubemap creation and six-face native storage
+
+`local/reports/cubemap-audit.log` confirms the previously invalid resource
+AddRef/Release calls originate in D3DX cube loading, not external packed-resource
+registration. The call chain is `ADF70 → AAC20 → 117EE3 → 117AE3 → FE9F0`.
+The actual CreateCubeTexture arguments are edge128, levels8, usage0, format0xF
+(DXT5), pool0. Original creation produces the 20-byte header at `0x02618E70`:
+`01040001,0006D000,00000000,07780F2D,00000000`. Its payload comes from
+MmAllocateContiguousMemoryEx via original internal creation `0x103D10`.
+
+D3DX calls `0x103CB0 → 0x103E20 → AddRef(parent)` for each face/level. The original
+24-byte temporary surface headers start at `0x02618EA0`, then advance48 due to
+heap allocation overhead. Their common field is01050001, data points into the
+parent cube allocation, and DWORD+20 retains the parent handle. Original
+103E20 creates a surface reference and AddRefs the parent. Original Release
+103AD0 releases that parent on the surface's last reference and frees unbound
+surface storage; it never frees the surface's shared pixel allocation.
+
+The implemented guest boundaries are:
+
+| Address | Stack arguments, left to right | Callee pop |
+|---|---|---|
+| 0xFE9F0 | edge, levels, usage, format, pool, outputHandlePointer | 24 |
+| 0x103CB0 | cubeHandle, face, level, outputSurfacePointer | 16 |
+
+Both return HRESULT in EAX. They need manual-lift exclusions and lookup entries.
+The native Resource type5 stores an actual six-face allocation plus `face_stride`
+and a lazily created GL cube texture `cube_gl`. Each face contains its full mip
+chain and is padded to128 bytes, matching 106350 allocation and106080 face-address
+calculation. DXT mip dimensions are block-clamped to4×4. Face order is
++X,-X,+Y,-Y,+Z,-Z. Serialized format bit2 marks cube, bit3 selects border-color
+source unless usage0x10000 clears it, bits16–19 hold levels, and U/V logs occupy
+bits20–27. GetCubeMapSurface preserves the parent's low20 format bits and replaces
+U/V logs for the selected level, exactly as106080 does; the host surface resource
+still records one addressable mip. It retains its parent until final release.
+GetLevelCount and GetLevelDesc now accept cube resources too.
+
+`upload_cube_texture(Resource*)` is available to the programmable renderer in
+this translation unit. It uploads real decoded guest pixels for all six faces
+and all levels into GL_TEXTURE_CUBE_MAP, sets a complete base/max-level range,
+and preserves active texture selection, target binding, unpack buffer, row
+alignment/length/skips and byte-swap mode. Surface release marks its cube parent
+dirty, and normal texture binding also marks guest data for synchronization.
+It makes no replacement imagery and does not imply that cube sampling in the
+original game's programmable shaders has already been validated.
+
+The same upload helper now uploads every guest 2D mip through the real native
+texture name returned by xbox_D3D8GLTextureName. It preserves current 2D sampling
+parameters while setting MAX_LEVEL to the uploaded chain, allowing the upcoming
+programmable renderer to apply the game's actual mip/wrap/filter states. The
+native texture COM wrapper's legacy CPU shadow is no longer the authoritative
+upload source; guest pixel storage remains authoritative throughout this bridge.
+
+Validation: a standalone snapshot built with the two pending lookup entries
+passes all existing native graphics assertions. Focused new assertions check
+six cube faces × three mips with distinct DXT5 colors via actual GL texture
+readback, exact face padding/headers, invalid-face rejection, parent lifetime
+through a retained final surface and GL object deletion, preserved nondefault
+unpack/PBO/byte-swap state, and every pixel of an8×4 rectangular Morton 2D mip
+chain down to1×1. Full game regeneration/build remains the parent's integration
+step; this subtask ran no full game build.
+
+## Programmable shader integration (boot18)
+
+`src/shader_bridge.inc`, included by graphics.c, decodes actual4361 vertex
+objects and immutable pixel definitions, compiles the verified GLSL generators
+into native GPU programs, and connects DrawVertices/UP to original stream data.
+The64-entry bounded program cache excludes uniform colors from its key. Native
+SetVertexShaderConstant102AA0 captures real uploads even for pure devices; native
+SetPixelShaderConstant102D80 updates only the mapped live constants and preserves
+the immutable definition. The actual game uses pixel index8; Xbox four-bit
+mappings support0..15, correcting the initial erroneous PC-style0..7 limit.
+
+A native integration test uses synthetic SDK objects, calls the guest entry
+points, renders a colored quad, verifies constant store/definition/cache behavior,
+and binds one texture at two stages with independent repeat/clamp samplers.
+Actual pixel readback proves the samplers remain distinct. Use per-stage GL
+sampler objects; query their bindings through active-unit GetIntegerv as supported
+by macOSGL4.1, preserving bindings afterward. The specification describes that
+query at https://registry.khronos.org/OpenGL/specs/gl/glspec43.compatibility.pdf .
+The vertex generator also handles equal viewport depth endpoints without NaN;
+a native transform-feedback regression verifies finite output.
+
+Shader tests and provenance are in docs/NV2A-VERTEX.md and docs/PIXEL-SHADERS.md.
+The standalone graphics smoke now additionally links src/nv2a_vertex.c,
+src/nv2a_vertex_input.c, and src/nv2a_pixel.c. The production build uses the same
+code/library. Known explicit gaps include mixed fixed/programmed stage pairs,
+volume textures, fog-parameter integration, advanced dependent texture modes,
+packed/float2h stream conversion and indexed drawing. These abort/return errors
+when reached rather than substituting an unrelated shader.
+
+Boot17 linked four real game shader pairs and stopped at pixel constant8. Boot18
+passes that and links a fifth pair, then aborts on newly launched missing AOT
+worker entry2BF30. No new title/menu pixels verified. The most recent verified
+actual framebuffer remains the correct Universal splash.

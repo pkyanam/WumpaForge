@@ -1,5 +1,9 @@
 [
   {
+    "start": "0x0002BF30",
+    "evidence": "Worker entry pushed at 0x2C03C into CreateThread (0xECC6A) by sub_0002C020. Boot18 PsCreateSystemThreadEx #2 passes it as ctx1 to XAPI thread trampoline0xECBD2, then aborts on missing AOT dispatch. Prior function RET at0x2BF2A followed by five alignment NOPs; entry saves EBX/EBP/ESI/EDI and loops until stop flag0x1BAA90, then calls ExitThread0xECB19."
+  },
+  {
     "start": "0x0005DA30",
     "evidence": "Audio worker entry pushed by sub_000B99D0 for CreateThread; prior function ends in RET8 at 0x5DA24, followed by alignment NOPs."
   }

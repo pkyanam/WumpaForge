@@ -3,48 +3,57 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot-15, correct Universal splash
-- Real native ARM64 game code renders the correct white-background Universal
-  splash. Actual GPU capture `local/reports/game-frame-15-fixed.png` was viewed.
-  This is original game rendering, not an asset viewer or injected image.
-- Native vblank callback invokes compiled game39910 at60/50Hz and passes the
-  two-second hold. Boot15 reaches3D intro, but title/menu/gameplay remain unverified.
-- Incorrect colors were proven a generic x87 FIST/FISTP rounding bug: original
-  D3DX requests truncation, but old lift used nearest llrint, converting255.5 to256.
-  `tools/test_x87_rounding.py` covers guest/host rounding modes, bounds and the
-  exact white-byte sequence under sanitizers. Cumulative lifter patch fixed;
-  sources regenerated and native build completed with2 jobs. Real capture confirms.
-- Both128x128 texture render-target calls now pass in boot15. `src/graphics.c`
-  uses real GL FBO storage and resolves GPU pixels into guest texture storage on
-  switches. Native graphics tests pass offscreen drawing, orientation, target
-  rebinding and resource lifetime using the CURRENT build/native D3D library.
-- Boot15 still aborts at programmable pixel shader0x2606890 after rejecting vertex
-  shader0x2606701. Cubemap resource AddRef/Release warnings also remain. No reliable
-  time estimate to title/menu is established; shader integration is substantial.
-- `src/nv2a_vertex.{h,c}` standalone generator is frozen and tested with native GPU
-  transform feedback plus actual six-instruction shader compilation. Inputs v0/v3,
-  physical constants112,113,119,120. It is NOT yet integrated/CMake-linked.
-- `src/nv2a_pixel.{h,c}` standalone generator exists; native_audio agent is testing
-  it. It is NOT yet integrated. Both use GLSL410 varyings vD0/vD1/vT0..3/vFog.
-- Real fixture `boot14-shader-objects.bin` maps guest2606000..2608000. Vertex
-  object2606700+118 contains six instructions (opcode in word1, not toolkit word0).
-  Declaration slots at object+14+16*slot: stream,offset,format,tess bytes. Observed
-  v0 offset0 float3(32), v1 offset12 float1(12), v2 offset16 color(40), v3 offset20
-  float2(22), stride28. Pixel object+8 points to60-DWORD definition at260689C.
-- NEXT root integration: audited SetVertexShaderConstant102AA0(index,data,count),
-  ret12, physical index=index+96. Original pure-device mode skips guest cache:
-  capture uploads in native storage. Shader0 programs require source generation,
-  GL compilation/link/cache, attribute binding, native constants/state/texture
-  upload. No CPU interpreter/JIT. Original pixel constant setter102D80 needs audit.
-- Agent ownership: mac_runtime finishing declaration/constant ABI docs; native_audio
-  testing standalone pixel generator; controller_support now confirms unbridged
-  cubemap CreateFE9F0/GetSurface103CB0 caused resource warnings. Root graphics.c
-  owns RTs/integration. Avoid shared edits and simultaneous native game runs.
-- Audio decoder, native output, lazy voices and28 title SDK bridges are tested
-  independently. `src/audio_bridge.c` is not yet linked into the real executable.
-  Physical Bluetooth controller testing and real in-game audio remain pending.
-- `tools/package.py` creates build/Wrath Native.app with asset symlink. Repackage
-  after building; existing app copy is stale. CLI build/native/wrath_native current.
+## Latest checkpoint: boot19, loading-screen worker needs native GL handoff
+- Correct original Universal splash verified from actual GPU capture
+  local/reports/game-frame-15-fixed.png. No title/menu/gameplay verified yet.
+- Boot18 passes previous graphics barriers: native128x128 texture render targets,
+  six-face cubemap creation/all-level2D/cube uploads, programmable vertex/pixel
+  shaders, explicit texture-coordinate sets on4 stages and pixel constant index8.
+- Five real game shader pairs link in boot18 (6 vertex instructions,1/2/4/8
+  combiner stages). The next abort is unresolved AOT worker2BF30, proven actual
+  PsCreateSystemThreadEx ctx1 at boot18.log2323. Main concurrently loads files in
+  2C020→87400→2D950. mac_runtime agent auditing seed; root coordinates analyze/lift.
+- Runtime and shader code are current in src/shader_bridge.inc + nv2a_vertex,
+  nv2a_vertex_input, nv2a_pixel. CMake and exclusions integrate them. Root added
+  four exclusions FE9F0,103CB0,102AA0,102D80. graphics patch includes native GL
+  texture-name/state helper exports. The latest tiny shader error-message edit
+  is not built yet; build next with seed changes.
+- Core shader/native draw tests pass; native integration verifies SDK object
+  decoding/actual GPU pixels, constant cache reuse, unchanged guest PS definition,
+  and different samplers on the SAME texture simultaneously. Equal depth endpoints
+  no longer divide by0; native transform-feedback regression passes. All tests
+  use synthetic geometry except optional ignored actual shader fixtures.
+- Vertex parser handles up to136 instructions, multiple upload packets and
+  embedded constants. Actual first shader inputs v0/v3 (position/UV) and physical
+  constants112,113,119,120. SetVSConstant102AA0 maps signedindex+96, ret12.
+- SetPSConstant102D80 uses original four-bit mappings0..15, ret12; originaldef
+  remains immutable, only mapped live state slots update. Active state rebind
+  restores originaldef constants, matching SDK. Pixel18 uniforms are distinct
+  from16 public constant-register slots. See docs/PIXEL-SHADERS.md.
+- Shader cache64 entries; GL sampler objects perstage preserve separatefilter/wrap
+  onsharedtexture. Explicit gaps: mixed fixed/programmed stages, volume textures,
+  advanceddependenttexturemodes, fogparameters, packed/float2h vertices, indices.
+- Indexed path already audited if reached: CreateIndexBuffer100D00(length,usage,
+  format,pool,out)ret20, gameINDEX16fmt2C; SetIndicesFFEA0(buffer,baseVertex)ret8;
+  DrawIndexedVertices101BC0(type,indexCount,uint16DataPointer)ret12. Game writes
+  indexbuffer.Data directly. Actual fetch index+baseVertex. Not implemented yet.
+- Worker seed2BF30 is now added, analyzed/lifted, built and actually executing in
+  boot19. It draws a loading screen while main loads assets. Current blanket
+  graphics main_thread() guard rejects it (SetRenderTarget then FD830), aborting
+  worker13. Main is in2C020→982C0→9E300. This is the NEW critical path.
+- controller_support agent is researching safe native GL context transfer / SDL
+  main-thread event handling. Proposed serialized SDK-call guard and attach/detach
+  via arg()/main_thread()/finish(), with context/window creation and event pump on
+  Cocoa main only. No implementation yet. Do not merely remove thread check and
+  call SDL/Cocoa indiscriminately fromworkers. Rootownsgraphics.c changes.
+- Actual frame25 capturedandviewed game-frame-25.png: Universal fades out correctly;
+  no3Dscene/title/menu image verified. All games/debuggers exited afterboot19.
+- Sound SDK bridge remains unlinked despite tested backend/decoder/voices; real
+  audio and physical Xbox/DualSense tests still pending. Goal remains active.
+- App bundle is stale: tools/package.py rebuilds local app from current binary and
+  symlinks assets. ISO/assets/build products remain ignored, max2 compile jobs.
+- Recent committed milestones5b00179(firstframe/vblank),7eba3f6(correctrounding/RT).
+  Current shader/cube + worker-seed changes are ready for next Git checkpoint.
 
 The older numbered checkpoints below are historical; this section is current.
 
