@@ -145,6 +145,31 @@ static GLuint shader_compile(GLenum type, const char *source)
     }
     return shader;
 }
+/* Original SDK108000 maps cached D3D modes to NV2A coefficients. The vertex
+ * program's oFog.x is distance; its factor remains unclamped until rasterization. */
+static int shader_fog_parameters(float parameters[2])
+{
+    if (!read32(0x10EF60)) { parameters[0]=parameters[1]=0; return 0; }
+    uint32_t mode=read32(0x10EF64);
+    float start,end,density;
+    uint32_t word=read32(0x10EF68); memcpy(&start,&word,4);
+    word=read32(0x10EF6C); memcpy(&end,&word,4);
+    word=read32(0x10EF70); memcpy(&density,&word,4);
+    if (mode==0) { parameters[0]=1; parameters[1]=1; return 1; }
+    if (mode==3) {
+        double reciprocal=end==start?8192.0:1.0/((double)end-start);
+        parameters[0]=(float)(1.0+(double)end*reciprocal);
+        parameters[1]=(float)-reciprocal; return 1;
+    }
+    if (mode==1 || mode==2) {
+        /* Exact float constants at169E98/169E94 in the retail SDK. */
+        parameters[0]=1.5f;
+        parameters[1]=density*(mode==1?-0.0901680737733841f:-0.21233002841472626f);
+        return mode==1?2:3;
+    }
+    shader_error("fog mode","unsupported D3D fog table mode outside0..3");
+    return 0;
+}
 static struct ShaderProgram *shader_program(const Nv2aPixelDef *pixel)
 {
     if (!s_vertex_handle)
@@ -158,7 +183,6 @@ static struct ShaderProgram *shader_program(const Nv2aPixelDef *pixel)
     key.pixel.final_constant0=key.pixel.final_constant1=0;
     key.options.fog_enabled=read32(0x10EF60)!=0;
     key.options.specular_enabled=read32(0x10EF8C)!=0;
-    if (key.options.fog_enabled) shader_error("fog","native fog parameters not yet integrated");
     for (unsigned i=0;i<4;++i) {
         struct Resource *r=resource(s_texture_handles[i]);
         if (r&&r->linear&&((key.pixel.texture_modes>>(i*5))&31)==1) key.options.rectangle_texture_mask|=1u<<i;
@@ -289,6 +313,9 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
     glUniform4fv(glGetUniformLocation(p->program,"u_vconstants"),192,&s_vertex_constants[0][0]);
     glUniform4f(glGetUniformLocation(p->program,"u_nv2a_viewport"),s_viewport.X,s_viewport.Y,s_viewport.Width,s_viewport.Height);
     glUniform2f(glGetUniformLocation(p->program,"u_nv2a_depth"),s_viewport.MinZ*viewport_depth_scale(),s_viewport.MaxZ*viewport_depth_scale());
+    float fog_parameters[2]; int fog_mode=shader_fog_parameters(fog_parameters);
+    glUniform1i(glGetUniformLocation(p->program,"u_nv2a_fog_mode"),fog_mode);
+    glUniform2fv(glGetUniformLocation(p->program,"u_nv2a_fog_params"),1,fog_parameters);
     float colors[18][4];
     for (unsigned i=0;i<8;++i) { shader_rgba(pixel.constant0[i],colors[i*2]); shader_rgba(pixel.constant1[i],colors[i*2+1]); }
     shader_rgba(pixel.final_constant0,colors[16]); shader_rgba(pixel.final_constant1,colors[17]);

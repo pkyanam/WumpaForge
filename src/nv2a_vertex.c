@@ -142,6 +142,7 @@ int nv2a_vertex_generate(const uint32_t *words,size_t count,char *out,size_t cap
     emit(&e,"#version 410 core\n");
     for(unsigned i=0;i<16;i++)emit(&e,"layout(location=%u) in vec4 v%u;\n",i,i);
     emit(&e,"uniform vec4 u_vconstants[192];\nuniform vec4 u_nv2a_viewport;\nuniform vec2 u_nv2a_depth;\n"
+         "uniform int u_nv2a_fog_mode;\nuniform vec2 u_nv2a_fog_params;\n"
          "out vec4 vD0,vD1,vT0,vT1,vT2,vT3;\nout float vFog;\n"
          "float nv_clamp(float x) { float a=clamp(abs(x),uintBitsToFloat(0x1f800000u),uintBitsToFloat(0x5f800000u)); return (floatBitsToUint(x)&0x80000000u)!=0u ? -a:a; }\n"
          "vec4 nv_mul(vec4 a,vec4 b) { vec4 p=a*b; for(int j=0;j<4;j++) if(a[j]==0.0||b[j]==0.0)p[j]=0.0; return p; }\n"
@@ -157,7 +158,15 @@ int nv2a_vertex_generate(const uint32_t *words,size_t count,char *out,size_t cap
     }
     if(!final && !e.failed)fail(&e,"missing FINAL instruction bit");
     emit(&e,"  vD0=clamp(o[3],0.0,1.0); vD1=clamp(o[4],0.0,1.0);\n"
-         "  vT0=o[9]; vT1=o[10]; vT2=o[11]; vT3=o[12]; vFog=o[5].x; gl_PointSize=o[6].x;\n"
+         "  vT0=o[9]; vT1=o[10]; vT2=o[11]; vT3=o[12]; vFog=1.0; gl_PointSize=o[6].x;\n"
+         "  if(u_nv2a_fog_mode!=0) {\n"
+         "    float d=o[5].x, f;\n"
+         "    if(u_nv2a_fog_mode==1) f=(u_nv2a_fog_params.x+d*u_nv2a_fog_params.y)-1.0;\n"
+         "    else if(u_nv2a_fog_mode==2) f=(u_nv2a_fog_params.x+exp2(d*u_nv2a_fog_params.y*16.0))-1.5;\n"
+         "    else f=(u_nv2a_fog_params.x+exp2(-d*d*u_nv2a_fog_params.y*u_nv2a_fog_params.y*32.0))-1.5;\n"
+         "    float special=u_nv2a_fog_mode==3?0.0:1.0;\n"
+         "    vFog=isinf(d)||isnan(f)?special:clamp(f,-uintBitsToFloat(0x7f7fffffu),uintBitsToFloat(0x7f7fffffu));\n"
+         "  }\n"
          "  vec4 p=o[0]; p.xy=trunc(p.xy*16.0)/16.0; p.w=nv_clamp(p.w);\n"
          "  vec2 screen=(p.xy-u_nv2a_viewport.xy)/u_nv2a_viewport.zw;\n"
          "  float span=u_nv2a_depth.y-u_nv2a_depth.x; float z=span!=0.0 ? (p.z-u_nv2a_depth.x)/span : 0.0;\n"

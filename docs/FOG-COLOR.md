@@ -26,8 +26,9 @@ that uniform was always black. This also matters when an explicit final combiner
 uses the fog color register while distance fog is disabled. The pixel generator
 correctly forbids fog as a general-combiner source.
 
-This change implements the color register only. The existing explicit error for
-enabled distance fog remains until its vertex/fog parameters are implemented.
+This initial change implemented the color register only. The subsequent
+programmable distance-fog implementation and remaining fixed-vertex boundary are
+documented in NATIVE-FOG.md.
 It does not claim linear/exponential fog, change the game timeline, clear hardware
 wait bits, or skip original scene logic. Parent must lift after the new manual
 function entry before the original direct calls resolve to the native bridge.

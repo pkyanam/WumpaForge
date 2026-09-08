@@ -212,3 +212,11 @@ ignored actual startup object. Output: `local/reports/nv2a-vertex-input-test.log
 clang -std=c11 -O0 -Wall -Wextra tools/tests/nv2a_vertex_input.c src/nv2a_vertex_input.c -o build/nv2a-vertex-input-test
 build/nv2a-vertex-input-test local/reports/boot14-shader-objects.bin
 ```
+
+## Fog uniform contract
+
+The programmable epilogue consumes oFog.x as distance. Callers set
+`u_nv2a_fog_mode` (0 disabled,1 linear/pass-through,2 exp,3 exp2) and
+`u_nv2a_fog_params` (bias,slope). Factors remain unclamped until fragment
+interpolation. See NATIVE-FOG.md for original SDK coefficients, special values,
+licensing references and native GPU tests.

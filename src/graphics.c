@@ -1335,17 +1335,34 @@ void sub_00102580(void)
 
 #include "shader_bridge.inc"
 
-void sub_001026F0(void) /* SetShaderConstantMode(mode), ret4; supported192-constant bank. */
+void sub_001026F0(void) /* SetShaderConstantMode:0=96 user constants,1=192; ret4. */
 {
     uint32_t mode=arg(0);
-    if (!s_device || !graphics_thread() || mode!=0) state_error(0x1026F0,mode);
-    /* The native fixed vertex shader owns its matrices/uniforms; it needs no
-     * NV2A constant-bank upload. Preserve the observed guest mode/dirty fields. */
+    if (!s_device || !graphics_thread() || mode>1) state_error(0x1026F0,mode);
+    /* Both modes use the same physical192-vector bank. Mode1 frees the lower
+     * range from fixed-pipeline ownership; it does not clear or remap values.
+     * Original102710-10271C stores the mode and immediately returns for1. */
     write32(GUEST_DEVICE+8,read32(GUEST_DEVICE+8)&~0x200u);
-    write32(GUEST_DEVICE+0x2018,0);
-    write32(0x10EC10,read32(0x10EC10)|0x1600);
+    write32(GUEST_DEVICE+0x2018,mode);
+    if (!mode) {
+        write32(0x10EC10,read32(0x10EC10)|0x1600);
+        /* Original102738 writes c60..62, transposed identity texgen matrices,
+         * and SET_FOG_PLANE. All these methods alias the native shader bank.
+         * Like hardware uploads, they do not rewrite the SDK CPU readback cache. */
+        memcpy(s_vertex_constants[60],guest_ptr(0x10B208),3*16);
+        for (unsigned stage=0;stage<4;++stage)
+            for (unsigned row=0;row<4;++row)
+                for (unsigned col=0;col<4;++col)
+                    memcpy(&s_vertex_constants[64+stage*8+row][col],
+                           guest_ptr(0x10B1B8+col*16+row*4),4);
+        const float fog_plane[4]={0,0,1,0};
+        memcpy(s_vertex_constants[57],fog_plane,sizeof(fog_plane));
+    }
+    /* No viewport method is emitted here. Explicit c58/59 writes persist until
+     * the existing SetViewport/SetVertexShader/target path emits its aliases. */
     finish(4,0);
 }
+
 void sub_00102BB0(void) /* SetPixelShader(handle), ret4; NULL selects fixed texture stages. */
 {
     uint32_t handle=arg(0);
@@ -1442,6 +1459,8 @@ static HRESULT draw_vertices_data_fetch(uint32_t type, uint32_t count, const voi
             free(converted); return D3DERR_INVALIDCALL;
         }
     }
+    if (read32(0x10EF60))
+        shader_error("fixed fog", "enabled FVF fog requires original fixed-function distance generation");
     apply_fixed_transforms();
     if ((s_fvf & 0xE) == D3DFVF_XYZRHW) {
         if (stride < 16 || !s_viewport.Width || !s_viewport.Height) { free(converted); return D3DERR_INVALIDCALL; }
@@ -2117,6 +2136,8 @@ static void test_shader_bridge(void)
 #include "../tools/test_mixed_shader_bridge.inc"
 #include "../tools/test_viewport_constants.inc"
 #include "../tools/test_multistream.inc"
+#include "../tools/test_shader_constant_mode.inc"
+#include "../tools/test_native_fog.inc"
 #include "../tools/test_texture_snapshot.inc"
 
 int main(void)
@@ -2450,6 +2471,8 @@ int main(void)
     test_mixed_shader_bridge();
     test_viewport_constants();
     test_multistream();
+    test_shader_constant_mode();
+    test_native_fog();
     test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();
