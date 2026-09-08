@@ -7,6 +7,7 @@ extern volatile uint32_t g_icall_trace[16];
 extern volatile uint32_t g_icall_trace_idx;
 extern recomp_func_t wrath_graphics_lookup(uint32_t address);
 extern recomp_func_t wrath_input_lookup(uint32_t address);
+extern recomp_func_t wrath_audio_lookup(uint32_t address);
 extern recomp_func_t wrath_crt_lookup(uint32_t address);
 extern void sub_000FEC90(void);
 
@@ -15,6 +16,7 @@ recomp_func_t recomp_lookup_manual(uint32_t address)
     if (address == 0x000FEC90u) return sub_000FEC90;
     recomp_func_t function = wrath_graphics_lookup(address);
     if (!function) function = wrath_input_lookup(address);
+    if (!function) function = wrath_audio_lookup(address);
     return function ? function : wrath_crt_lookup(address);
 }
 

@@ -3,9 +3,10 @@
 The ABI findings below began as a read-only investigation. Native SDL/CoreAudio
 output, PCM16 and Xbox ADPCM buffers now pass focused tests; see [ADPCM.md](ADPCM.md).
 The backend supports 252 idle buffer objects with a separate 64-active-voice budget.
-Streams now return an explicit unsupported error. A title-specific guest bridge is
-still required: guest descriptors, objects and calling conventions cannot be passed
-directly to the native DirectSound API. No in-game sound has been verified.
+Streams return an explicit unsupported error. The title-specific guest bridge is
+now included in the native target and manual dispatch: it marshals guest
+descriptors, objects and calling conventions into the native DirectSound API.
+No in-game sound has been verified.
 
 ## Confirmed public functions
 
@@ -169,8 +170,8 @@ Use exact `sub_*` exports plus manual lookup for bindings: the current generated
 dispatch table references excluded/manual symbols directly. Validate descriptor
 packing, hundreds of idle objects without voice exhaustion, 64-sample ADPCM
 framing, real playback cursor advancement, bounded packet completion, and object
-shutdown with the existing lightweight audio tests. The new `src/audio_bridge.c` is independently tested as described below; it has
-not been installed into the game dispatch/build by this subtask.
+shutdown with the existing lightweight audio tests. `src/audio_bridge.c` is
+independently tested as described below and included in the game target/dispatch.
 
 Local evidence: `local/reports/scan_audio_signatures.py`,
 `audio-signature-matches.json`, `audio-signatures-xref-resolved.json`, downloaded
@@ -179,7 +180,7 @@ DSOUND disassemblies. The refined signature report still contains candidates for
 ambiguous wrappers whose callee signature was unavailable: use the confirmed
 addresses above, not every report entry as a binding.
 
-## Native bridge handoff (not yet wired into game)
+## Native bridge handoff
 
 `src/audio_bridge.c` exports `wrath_audio_lookup`, exact `sub_*` functions, and
 `wrath_audio_shutdown`. Device creation starts the real SDL/APU PCM producer and
@@ -261,8 +262,22 @@ clang -std=c11 -O1 -g -Ithird_party/xboxrecomp/src -Ithird_party/xboxrecomp/src/
 ```
 
 `config/audio-functions.json` is the sorted, exact 28-address exclusion list; each
-address has a matching exported symbol in the bridge. Merge it with the complete
-manual-function list rather than replacing graphics/input/runtime entries.
+address has a matching exported symbol in the bridge. These28 entries are merged
+into `config/manual-functions.json`, preserving graphics/input/runtime entries.
+The root CMake target includes the bridge and `recomp_lookup_manual` consults
+`wrath_audio_lookup`. Regenerate the lift before building so excluded original
+DSOUND bodies do not collide with the native exports. This integration adds no
+new unsupported-success paths; effects/HRTF/spatial settings and packet streams
+continue to emit bounded diagnostics and return explicit errors where applicable.
+
+The first expected audio breakpoint is `sub_00137A06`: original sound initializer
+`B99D0` calls it at `B99DC`, returning to `B99E1`. Device creation starts the native
+PCM producer and SDL/CoreAudio output. It is followed by effects at `136605`, HRTF
+at `135C14`, and252 buffer constructions through `137A4D`. This call sequence is
+from the actual local game disassembly, not an observed audio boot yet. The parent
+must invoke `wrath_audio_shutdown()` after guest workers stop and before kernel,
+SDL or guest-memory teardown; the shutdown must not be deferred until after
+`xbox_MemoryLayoutShutdown`, since it releases guest objects.
 
 ## Follow-up read-only audit: descriptor, SetFormat, pitch
 
@@ -309,8 +324,9 @@ therefore requests approximately22008 Hz for the22050 case. The bridge now uses 
 within the backend's100..192000 Hz range. It does not multiply22050 by the same
 ratio again.
 
-No source changes were made for this follow-up audit. Source remains frozen for
-parent integration; no audio call has yet been observed during a real game boot.
+No source changes were made during that follow-up audit. Subsequent format/pitch
+work and target integration are recorded below; no audio call has yet been
+observed during a real game boot.
 
 
 ## Implemented SetFormat and SetPitch

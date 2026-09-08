@@ -440,3 +440,43 @@ cdecl stack arguments. It follows RET0x2B943 plus alignment NOPs and returns at
 0x2BB3F after restoring its0x98-byte local frame. This adjacent entry is also
 absent from the current function inventory. With parent coordination, it was
 also added to the seed list before the next analysis/build.
+
+## Boot24: GetExitCodeThread queried a null guest thread object
+
+The original worker now completes and calls PsTerminateSystemThread with status0,
+while the main loader polls GetExitCodeThread at0xECB2B. Its kernel call at0xECB3B
+references the thread handle through ordinal246. The old bridge returned success
+with Object=0; the SDK consequently read a zero signal byte and reported259
+(STILL_ACTIVE) forever. Original instructions establish the fields: byte[object+4]
+at0xECB48 selects between259 and DWORD[object+0x120] at0xECB4E. The SDK then calls
+fastcall ObfDereferenceObject at0xECB60 with the object in ECX.
+
+Ordinal246 now resolves a real thread handle and returns a referenced guest state
+view containing these two fields. The POSIX helper reads both native fields under
+one mutex, so a worker that exits with code259 remains distinguishable from an
+active worker. Each view owns a duplicate native handle reference and a0x140-byte
+guest allocation; fastcall reference/dereference operations count and release
+both on the final dereference. Output is one guest DWORD, and invalid output,
+unknown handles, non-thread objects/type mismatches and the bounded64-view limit
+return errors. This is the SDK's evidenced per-query thread-state contract:
+each new reference sees current state; a retained view is a snapshot rather than
+a complete asynchronously updated ETHREAD implementation.
+
+The native worker lifecycle already publishes exit code, exited state and wait
+signal under its object lock on both normal routine return and ExitThread. The
+bridge's PsTerminateSystemThread path frees its guest stack/TIB before calling
+ExitThread, which drops the native worker's own object reference. No fixed exit
+code or forced loop completion was added.
+
+`tools/tests/thread_object_bridge.c` compiles the actual bridge and POSIX runtime.
+Real workers return0x12345678, terminate through the actual guest bridge with
+0x0BADCAFE, and exit with259. It verifies live/exited fields, final status, nested
+references, original-handle close while an object reference remains, current
+thread pseudo handle, invalid/type/output errors, DWORD output canaries, bounded
+view exhaustion and complete allocation cleanup. Evidence:
+`local/reports/thread-object-bridge-test.log`.
+
+```sh
+clang -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,-dead_strip -Ithird_party/xboxrecomp/src tools/tests/thread_object_bridge.c third_party/xboxrecomp/src/platform/win32_compat.c -o build/thread-object-bridge-test
+build/thread-object-bridge-test
+```

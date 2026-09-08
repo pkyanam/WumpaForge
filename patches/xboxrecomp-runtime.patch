@@ -23,7 +23,7 @@ index ade9b08..42926eb 100644
  /* KeTickCount - exported as a data pointer, not a function */
  extern volatile ULONG xbox_KeTickCount;
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 2d996b1..71a57e6 100644
+index 2d996b1..13cb6c4 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -26,6 +26,7 @@
@@ -283,7 +283,118 @@ index 2d996b1..71a57e6 100644
      if (ioctl == IOCTL_DISK_GET_DRIVE_GEOMETRY) {
          /* DISK_GEOMETRY: Cylinders (LARGE_INTEGER), MediaType,
           * TracksPerCylinder, SectorsPerTrack, BytesPerSector -- 24 bytes. */
-@@ -4429,12 +4511,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
+@@ -3276,16 +3358,82 @@ static void bridge_IoCreateSymbolicLink(void)
+                                                 target_va ? &target : NULL);
+ }
+ 
+-/* ── ObReferenceObjectByHandle (ordinal 246) ─────────────── */
++/* Referenced guest ETHREAD state views. The SDK polls by taking a fresh
++ * reference, reading Header.SignalState (+4) / ExitStatus (+0x120), then
++ * dereferencing. Each view owns a native handle reference until its final
++ * dereference, so closing the original guest handle cannot invalidate it.
++ * This implements the evidenced thread-query ABI, not a complete ETHREAD. */
++#define BRIDGE_THREAD_VIEWS 64
++static struct { uint32_t va, refs; HANDLE handle; } s_thread_views[BRIDGE_THREAD_VIEWS];
++static SRWLOCK s_thread_views_lock = SRWLOCK_INIT;
++
++static int bridge_thread_view_reference(uint32_t va, int release)
++{
++    int found = 0;
++    AcquireSRWLockExclusive(&s_thread_views_lock);
++    for (unsigned i = 0; i < BRIDGE_THREAD_VIEWS; ++i) {
++        if (!va || s_thread_views[i].va != va) continue;
++        found = 1;
++        if (!release) ++s_thread_views[i].refs;
++        else if (--s_thread_views[i].refs == 0) {
++            CloseHandle(s_thread_views[i].handle);
++            xbox_HeapFree(va);
++            memset(&s_thread_views[i], 0, sizeof(s_thread_views[i]));
++        }
++        break;
++    }
++    ReleaseSRWLockExclusive(&s_thread_views_lock);
++    return found;
++}
++
++/* Xbox signature: (HANDLE, ObjectType, guest DWORD* Object). */
+ static void bridge_ObReferenceObjectByHandle(void)
+ {
+-    /* Xbox: NTSTATUS ObReferenceObjectByHandle(HANDLE Handle, PVOID ObjectType, PVOID* Object)
+-     * 3 args (not 6 like Windows NT) */
+-    uint32_t handle = STACK_ARG(0);
+-    uint32_t obj_type = STACK_ARG(1);
+-    uint32_t object_ptr = STACK_ARG(2);
+-    if (object_ptr) BRIDGE_MEM32(object_ptr) = 0;
+-    g_eax = 0;  /* STATUS_SUCCESS */
++    uint32_t token = STACK_ARG(0), type = STACK_ARG(1), out = STACK_ARG(2);
++    DWORD signaled = 0, status = 0;
++    HANDLE owned = NULL;
++    if (!out || out > 0x04000000u - 4) { g_eax = 0xC000000Du; return; }
++    BRIDGE_MEM32(out) = 0;
++    if (type && type != XBOX_KERNEL_DATA_BASE + KDATA_THREAD_OBJ_TYPE) {
++        g_eax = 0xC0000024u; return; /* STATUS_OBJECT_TYPE_MISMATCH */
++    }
++    /* Never dereference synthetic values as host object pointers. */
++    if (token != 0xFFFFFFFEu && (token & 0xFF000000u) != BRIDGE_HANDLE_TAG) {
++        g_eax = 0xC0000008u; return;
++    }
++    HANDLE native = bridge_resolve_handle(token);
++    if (!native) { g_eax = 0xC0000008u; return; }
++#ifndef _WIN32
++    if (!w32_GetThreadState(native, &signaled, &status)) {
++        g_eax = 0xC0000024u; return;
++    }
++#else
++    if (!GetExitCodeThread(native, &status)) { g_eax = 0xC0000024u; return; }
++    signaled = WaitForSingleObject(native, 0) == WAIT_OBJECT_0;
++    if (signaled) GetExitCodeThread(native, &status);
++#endif
++    if (!DuplicateHandle(GetCurrentProcess(), native, GetCurrentProcess(),
++                         &owned, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
++        g_eax = 0xC0000008u; return;
++    }
++    g_eax = 0xC000009Au; /* STATUS_INSUFFICIENT_RESOURCES */
++    AcquireSRWLockExclusive(&s_thread_views_lock);
++    for (unsigned i = 0; i < BRIDGE_THREAD_VIEWS; ++i) {
++        if (s_thread_views[i].va) continue;
++        uint32_t va = xbox_HeapAlloc(0x140, 16);
++        if (!va) break;
++        BRIDGE_MEM32(va + 4) = signaled;
++        BRIDGE_MEM32(va + 0x120) = status;
++        s_thread_views[i].va = va;
++        s_thread_views[i].refs = 1;
++        s_thread_views[i].handle = owned;
++        owned = NULL;
++        BRIDGE_MEM32(out) = va;
++        g_eax = 0;
++        break;
++    }
++    ReleaseSRWLockExclusive(&s_thread_views_lock);
++    if (owned) CloseHandle(owned);
+ }
+ 
+ /* ── RtlRaiseException (ordinal 302) ─────────────────────
+@@ -3606,7 +3754,8 @@ static void bridge_NtResumeThread(void)
+  * dereference whatever the caller happened to leave there. */
+ static void bridge_ObfDereferenceObject(void)
+ {
+-    xbox_ObfDereferenceObject(XBOX_TO_NATIVE(g_ecx));
++    if (!bridge_thread_view_reference(g_ecx, 1))
++        xbox_ObfDereferenceObject(XBOX_TO_NATIVE(g_ecx));
+     g_eax = 0;
+ }
+ 
+@@ -3624,7 +3773,8 @@ static void bridge_ObfDereferenceObject(void)
+  * dereference whatever the caller happened to leave there. */
+ static void bridge_ObfReferenceObject(void)
+ {
+-    xbox_ObfReferenceObject(XBOX_TO_NATIVE(g_ecx));
++    if (!bridge_thread_view_reference(g_ecx, 0))
++        xbox_ObfReferenceObject(XBOX_TO_NATIVE(g_ecx));
+     g_eax = 0;
+ }
+ 
+@@ -4429,12 +4579,13 @@ static void bridge_RtlUnicodeStringToAnsiString(void)
   * The source resolves through the table, DuplicateHandle produces a real
   * native handle, and the target lands via bridge_write_handle as a fresh
   * token -- same shape as NtCreateEvent. DUPLICATE_CLOSE_SOURCE also closes
@@ -300,7 +411,7 @@ index 2d996b1..71a57e6 100644
      HANDLE dup = NULL;
      DWORD opts = 0;
  
-@@ -4450,7 +4533,20 @@ static void bridge_NtDuplicateObject(void)
+@@ -4450,7 +4601,20 @@ static void bridge_NtDuplicateObject(void)
          g_eax = 0xC0000001u;   /* STATUS_UNSUCCESSFUL */
          return;
      }
@@ -1433,7 +1544,7 @@ index 0000000..7e61554
 +}
 +#endif
 diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
-index 1d37f3e..82d4393 100644
+index 1d37f3e..fb8eaf9 100644
 --- a/src/platform/win32_compat.c
 +++ b/src/platform/win32_compat.c
 @@ -15,6 +15,10 @@
@@ -1559,7 +1670,7 @@ index 1d37f3e..82d4393 100644
          obj_release(o);
      return TRUE;
  }
-@@ -640,6 +714,11 @@ VOID ExitThread(DWORD exitCode)
+@@ -640,21 +714,37 @@ VOID ExitThread(DWORD exitCode)
          o->signaled  = 1;
          pthread_cond_broadcast(&o->cond);
          pthread_mutex_unlock(&o->lock);
@@ -1571,7 +1682,36 @@ index 1d37f3e..82d4393 100644
          obj_release(o);
      }
      pthread_exit(NULL);
-@@ -897,33 +976,69 @@ static int prot_from_page(DWORD protect)
+ }
+ 
+-BOOL GetExitCodeThread(HANDLE h, LPDWORD exitCode)
++/* Read both fields in one lock: a worker can exit with code STILL_ACTIVE. */
++BOOL w32_GetThreadState(HANDLE h, LPDWORD signaled, LPDWORD exitCode)
+ {
+-    w32_object *o = (w32_object *)h;
+-    if (!o || o->kind != K_THREAD || !exitCode) return FALSE;
++    w32_object *o = h == PSEUDO_CURRENT_THREAD ? current_thread_object() : (w32_object *)h;
++    if (!o || o->kind != K_THREAD || !exitCode || !signaled) {
++        SetLastError(ERROR_INVALID_HANDLE);
++        return FALSE;
++    }
+     pthread_mutex_lock(&o->lock);
++    *signaled = o->exited ? 1 : 0;
+     *exitCode = o->exited ? o->exit_code : STILL_ACTIVE;
+     pthread_mutex_unlock(&o->lock);
+     return TRUE;
+ }
+ 
++BOOL GetExitCodeThread(HANDLE h, LPDWORD exitCode)
++{
++    DWORD signaled;
++    return w32_GetThreadState(h, &signaled, exitCode);
++}
++
+ DWORD ResumeThread(HANDLE h)
+ {
+     w32_object *o = (w32_object *)h;
+@@ -897,33 +987,69 @@ static int prot_from_page(DWORD protect)
      }
  }
  
@@ -1659,7 +1799,7 @@ index 1d37f3e..82d4393 100644
      return p;
  }
  
-@@ -933,6 +1048,9 @@ BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD freeType)
+@@ -933,6 +1059,9 @@ BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD freeType)
          /* Win32 MEM_RELEASE passes size 0; we can't know the length, so this
           * path is only safe when callers pass the real size. */
          if (size == 0) return TRUE;
@@ -1669,7 +1809,7 @@ index 1d37f3e..82d4393 100644
          return munmap(address, size) == 0;
      }
      if (freeType & MEM_DECOMMIT)
-@@ -1139,6 +1257,17 @@ DWORD GetFileSize(HANDLE h, LPDWORD high)
+@@ -1139,6 +1268,17 @@ DWORD GetFileSize(HANDLE h, LPDWORD high)
      return (DWORD)(st.st_size & 0xFFFFFFFFu);
  }
  
@@ -1687,7 +1827,7 @@ index 1d37f3e..82d4393 100644
  BOOL FlushFileBuffers(HANDLE h)
  {
      int fd = w32_handle_fd(h);
-@@ -1296,8 +1425,14 @@ static size_t view_take(const void *addr)
+@@ -1296,8 +1436,14 @@ static size_t view_take(const void *addr)
  static int anon_map_fd(const char *name)
  {
  #if defined(__APPLE__)
@@ -1704,7 +1844,7 @@ index 1d37f3e..82d4393 100644
  #else
      return memfd_create(name ? name : "xbox_map", 0);
  #endif
-@@ -1340,10 +1475,22 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
+@@ -1340,10 +1486,22 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
      off_t  off = ((off_t)offHigh << 32) | offLow;
      SIZE_T len = count ? count : (o->map_size - (SIZE_T)off);
      int prot   = PROT_READ | ((access != FILE_MAP_READ) ? PROT_WRITE : 0);
@@ -1729,7 +1869,7 @@ index 1d37f3e..82d4393 100644
      view_register(p, len);
      return p;
  }
-@@ -1357,6 +1504,11 @@ BOOL UnmapViewOfFile(LPCVOID baseAddr)
+@@ -1357,6 +1515,11 @@ BOOL UnmapViewOfFile(LPCVOID baseAddr)
  {
      size_t len = view_take(baseAddr);
      if (len == 0) return FALSE;
@@ -1742,7 +1882,7 @@ index 1d37f3e..82d4393 100644
  }
  
 diff --git a/src/platform/win32_compat.h b/src/platform/win32_compat.h
-index 428efee..043dabc 100644
+index 428efee..fcfd360 100644
 --- a/src/platform/win32_compat.h
 +++ b/src/platform/win32_compat.h
 @@ -17,12 +17,34 @@
@@ -1780,7 +1920,15 @@ index 428efee..043dabc 100644
  #define WAIT_OBJECT_0        0x00000000u
  #define WAIT_ABANDONED_0     0x00000080u
  #define WAIT_ABANDONED       0x00000080u
-@@ -238,6 +260,7 @@ HANDLE CreateFileW(LPCWSTR name, DWORD access, DWORD share,
+@@ -143,6 +165,7 @@ HANDLE CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stackSize,
+                     DWORD flags, LPDWORD threadId);
+ VOID   ExitThread(DWORD exitCode);
+ BOOL   GetExitCodeThread(HANDLE h, LPDWORD exitCode);
++BOOL   w32_GetThreadState(HANDLE h, LPDWORD signaled, LPDWORD exitCode);
+ DWORD  ResumeThread(HANDLE h);
+ DWORD  SuspendThread(HANDLE h);
+ BOOL   TerminateThread(HANDLE h, DWORD exitCode);
+@@ -238,6 +261,7 @@ HANDLE CreateFileW(LPCWSTR name, DWORD access, DWORD share,
  BOOL   ReadFile(HANDLE h, LPVOID buf, DWORD len, LPDWORD nread, void *overlapped);
  BOOL   WriteFile(HANDLE h, LPCVOID buf, DWORD len, LPDWORD nwritten, void *overlapped);
  DWORD  GetFileSize(HANDLE h, LPDWORD high);

@@ -3,46 +3,48 @@
 ## Goal
 Run the supplied game natively on Apple Silicon without emulation. **Native startup runs; game title/menu not yet reached.**
 
-## Latest checkpoint: boot24, loading done but thread exit status stays active
-- Native ARM64 original XBE startup displays the Universal splash/fade, then a
-  green loading object. Actual GPU frame40 captured and viewed:
-  `local/reports/game-frame-40-boot23.png`. No verified Crash title/menu/gameplay
-  yet; visual correctness beyond the initial splash still needs assessment.
-- Indexed draws and P8 palette textures implemented and GPU-tested; milestone
-  df0f086. Per-stage palettes, mip decode, vertex base/index pointers, texture and
-  buffer lifetimes are tested. Programmable vertex/pixel shaders and native CGL
-  worker handoff are integrated. See D3D/INDEXED-DRAWS/shader docs.
-- Real virtual-memory release leak fixed, with guestDWORD output canaries; heap
-  allocator now splits and coalesces ranges. Commit6afd888. Boot23 uses roughly
- 36.7MiB of53.875MiB during loading and passes prior OOM. Retail64MiB/aliases stay
-  unchanged. Main stack256KiB follows64KiB XBE request, timer stacks independent.
-- Two original callbacks2B880/2B950 were missing from discovery. Both registered
-  in2BBD0 via79B00/79AF0, stored23B87C/23B874, called79CE0/797F4. Seeds carry exact
-  entry/registration evidence. Root analyzed/lifted/built and boot24 executes them.
-- Boot24 completes asset loading and logs PsTerminateSystemThread status0 for the
-  loading worker. Main then loops2C210..2C228 in GetExitCodeThreadECB2B comparing
-  output against259, despite worker exit. Latest kernel call ordinal246 is
-  ObReferenceObjectByHandle. This is the verified next boundary, not incomplete
-  asset loading. Exact all-thread snapshot: `local/reports/boot-24.log`.
-- mac_runtime agent owns thread object/exit status fix, including exact ECB2B
-  ETHREAD fields and native worker status/lifetime. Root owns next build/boot and
-  integration. No game/debugger left running after boot24. Native audio agent and
-  controller agent are idle; reuse only for a concrete disjoint task.
-- A prior boot23 stayed on a guest CS longer than another same-binary run. Read-only
-  lock audit found no demonstrated lock-order cycle and original worker sleeps16ms
-  after outer release. Do not change mutex policy without evidence. If it recurs,
-  inspect shadow depth immediately after guest2BFF4 leave/before2BFF8 Sleep.
-  The diagnostic cs->OwningThread field is unset in POSIX and misleading; use the
-  shadow slot owner/depth. Boot24 has balanced enter/leave counters after worker exit.
-- tools/boot.py now stops at the watchdog report before process exit, preserving
-  all native thread stacks on loading stalls. It retains crash -k backtraces.
-- Explicit graphics gaps include mixed fixed/programmed shader pairs, advanced
-  dependent texture modes, fog parameters, volume textures, packed attributes,
-  stream>0 and fixed P8 stages1..3. Programmable P8 stages are implemented.
-- Audio bridge is still unlinked despite isolated native backend/SDK tests; no
-  in-game audio verified. SDL controller bridge virtual tests pass, physical
-  Xbox/DualSense Bluetooth input untested. App bundle stale; package when ready.
-  Original ISO/assets/generated outputs remain ignored; max2 build jobs.
+## Latest checkpoint: boot25, post-loading immediate-mode graphics
+- Original XBE CPU code executes as AOT-compiled ARM64. Universal splash/fade
+  verified; actual green loading object GPU frame40 captured and viewed at
+  `local/reports/game-frame-40-boot23.png`. No verified Crash title/menu/gameplay.
+- Indexed and P8 graphics milestone df0f086; real GPU tests cover base vertex,
+  literal index pointers, palette/mip/color/alpha, per-stage palette variants and
+  lifetimes. Programmable shaders and native threaded CGL handoff are integrated.
+- Heap/release milestone6afd888 fixes lost MEM_RELEASE blocks and host pointer-width
+  output corruption, plus splitting/coalescing. Boot23 loading uses~36.7MiB out of
+ 53.875MiB heap. Retail64MiB/aliases unchanged; main stack256KiB follows64KiB XBE.
+- Registered callbacks2B880/2B950 are seeded, compiled and execute; commit1adb817.
+  Both have original registration/global/call-site evidence in config and docs.
+- Boot24 completed asset loading but waited forever for worker exit because
+  ObReferenceObjectByHandle returned null as success. Now native worker state
+  produces a referenced guest ETHREAD view: byte+4 signaled, DWORD+120 exit code,
+  matching original ECB2B GetExitCodeThread. Fastcall ref/deref owns heap and host
+  duplicate lifetime. Real return/explicit exit/ref/error/capacity tests pass.
+  Views are per-query snapshots, not a general asynchronously mirrored ETHREAD.
+- Boot25 passes the loading-worker join. Native audio bridge now linked: original
+  DirectSoundCreate and buffer setup execute, SDL CoreAudio initializes, audio
+  worker5DA30 runs. DSP effects/HRTF/spatial features report unsupported; no game
+  audio playback has been heard/verified. Audio resources must only shut down after
+  guest workers stop, while guest memory remains valid; teardown is not yet wired.
+- Verified next block: main2D950→A8140→A0990→9F480→3AE20→101EC0, then original GPU
+  pushbuffer wait. IMPORTANT:101EC0 is Begin(primitiveType),ret4, NOT indexed-UP.
+ 101F00 is End(),ret0;3AE40 calls101E60 SetVertexData4f. controller_support agent
+  is auditing/implementing native immediate attributes/emission in isolated
+  src/immediate_bridge.inc + tools/test_immediate_bridge.inc + docs/IMMEDIATE-DRAWS.md.
+  Root owns new includes/lookup/manual exclusions and next lift/build/boot.
+- Root capture of actual firstBegin FVF/program handles/stack is running or recorded
+  as `local/reports/boot-25-begin.log`; inspect tool session84806 if still live.
+  Main boot25 bounded run exited. No game should be left running after diagnostics.
+- Prior boot23 long guest-CS wait did not reproduce as persistent deadlock in
+  boot24/25. No demonstrated lock-order cycle; do not change fairness speculatively.
+  Shadow owner/depth is authoritative; POSIX cs->OwningThread log field is unset.
+- tools/boot.py now snapshots all threads at watchdog expiry and retains crash-k
+  commands. Build max2 jobs, assets/ISO/generated binaries stay ignored. App bundle
+  is stale and should be packaged when current native behavior is ready to show.
+- Other explicit graphics gaps: mixed fixed/programmed shader pairs, advanced
+  dependent modes, fog parameters, volume textures, packed attributes, stream>0,
+  fixed P8 stages1..3. Physical Xbox/DualSense Bluetooth controls remain untested;
+  SDL bridge virtual tests pass. Goal remains active and incomplete.
 
 The older numbered checkpoints below are historical; this section is current.
 
