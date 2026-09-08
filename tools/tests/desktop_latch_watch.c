@@ -15,6 +15,7 @@ static int push_tap(void *unused)
 }
 int main(void)
 {
+    assert(SDL_Init(SDL_INIT_EVENTS) == 0); /* Retain queue across input shutdown. */
     SDL_setenv("WRATH_KEYBOARD", "1", 1);
     xbox_InputInit();
     SDL_Thread *thread = SDL_CreateThread(push_tap, "tap producer", NULL);
