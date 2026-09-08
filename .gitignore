@@ -1,0 +1,8 @@
+.DS_Store
+*.iso
+*.ISO
+local/
+build/
+.venv/
+__pycache__/
+third_party/
