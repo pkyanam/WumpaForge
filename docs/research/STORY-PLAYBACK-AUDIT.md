@@ -140,3 +140,33 @@ at `[pad+0xD0]` with mask`0x840` (A or Start). If pressed for a nonzero movie,
 `2DB73` sets the loop's quit flag and `2DB7A` writes next_movie−1. Preserve this
 ordinary user path: Space/A and Enter/Start per [controls](../CONTROLS.md). No
 forced selector change, automatic skip, or shortened asset should be introduced.
+
+## Story04 desynchronization evidence and next measurement
+
+The user heard station audio and saw that scene, then reported desynchronization
+before the scene2 shader failure. Story04's boundary snapshots support an audio
+lead already at scene0 end. Original stream wrapper+`1C` is the cumulative loaded
+byte count (`5D606..5D610`); the three status words at+`0C` are all pending.
+At station end, loaded331776bytes =9 packets; at least6 packets have therefore
+finished mixing. Each36864-byte mono ADPCM packet decodes65536frames. This is
+at least8.916s mixed source versus animation110/30=3.667s, a lead of at least5.25s.
+At corridor end, loaded516096bytes=14 packets, with3pending, gives at least16.347s
+mixed versus (110+200)/30=10.333s, lead at least6.01s. The SDL ring can delay the
+mixed signal by at most64ms plus the audio-device pipeline. This is preliminary
+boundary evidence, not a measured render-frame cause; story04 had no profiler.
+
+For story05, enable `WRATH_PROFILE=1 WRATH_TRACE_AUDIO=1` and the sparse story
+probe. The probe now reads swap/vblank counters, Python host monotonic time,
+actual SDL submitted/played/queued/underrun counters, and the backing native
+stream's voice cursor and bounded packet-queue metadata. When all three original
+slots remain pending and the supported non-looped story stream is matched, it
+computes mixed-source seconds from loaded ADPCM frames minus native queued frames
+plus the head packet's16.16 source cursor. No guest/audio functions are invoked.
+Metadata unavailable in the debug image is reported explicitly. Native callback
+counts include silence; source cursor is therefore the story-specific clock.
+
+Compare changes in mixed-source seconds, SDL callbackframes/48000, vblanks/60,
+and cumulative scene animationframes/30 at matched boundaries. Pair the existing
+per60-present profile lines by swaps/vblank. Sparse debugger stops affect timing;
+separate any stop-related discontinuity from sustained render slowness. No audio
+implementation adjustment is justified solely by the earlier codec/header audit.

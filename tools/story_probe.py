@@ -7,7 +7,61 @@ use two stopped snapshots to establish animation movement, not these labels.
 """
 import json
 import struct
+import time
 import lldb
+
+
+def integer(value, signed=False):
+    if not value.IsValid() or not value.GetError().Success():
+        return None
+    return value.GetValueAsSigned() if signed else value.GetValueAsUnsigned()
+
+
+def native_output(target):
+    # These are real stopped-process counters, not calls into the audio API.
+    names = ('g_sdl_submitted', 'g_sdl_played', 'g_sdl_queued', 'g_sdl_underruns',
+             'g_sdl_overflows', 'g_sdl_nonzero_in', 'g_sdl_nonzero_out')
+    return {name: integer(target.FindFirstGlobalVariable(name)) for name in names}
+
+
+def native_stream(target, words):
+    streams = target.FindFirstGlobalVariable('s_streams')
+    for index in range(min(streams.GetNumChildren(), 64)):
+        entry = streams.GetChildAtIndex(index)
+        if integer(entry.GetChildMemberWithName('guest')) != words[1]:
+            continue
+        pointer = entry.GetChildMemberWithName('native')
+        if not integer(pointer):
+            continue
+        stream = pointer.Dereference()
+        slot = integer(stream.GetChildMemberWithName('slot'), True)
+        out = {'slot': slot, 'paused': integer(stream.GetChildMemberWithName('paused'))}
+        if slot is None or not 0 <= slot < 64:
+            return out
+        voice = target.FindFirstGlobalVariable('g_mixer_voices').GetChildAtIndex(slot)
+        for name in ('active', 'num_channels', 'sample_rate', 'play_offset'):
+            out[name] = integer(voice.GetChildMemberWithName(name))
+        out['volume'] = voice.GetChildMemberWithName('volume').GetValue()
+        queue = target.FindFirstGlobalVariable('g_mixer_queues').GetChildAtIndex(slot)
+        for name in ('capacity', 'head', 'count', 'bytes'):
+            out['queue_' + name] = integer(queue.GetChildMemberWithName(name))
+        head, count = out['queue_head'], out['queue_count']
+        if head is not None and count is not None and 0 <= head < 64 and 0 <= count <= 64:
+            packets = queue.GetChildMemberWithName('packets')
+            frames = [integer(packets.GetChildAtIndex((head + i) % 64).GetChildMemberWithName('frames'))
+                      for i in range(count)]
+            out['packet_frames'] = frames
+            # Exact for these non-looped mono ADPCM story streams while all
+            # three original packet slots are pending: no refill is in flight.
+            if (words[10] in (173, 174) and words[7] <= words[6]
+                    and words[7] % 36 == 0 and count == 3
+                    and words[3:6] == [0x8000000A] * 3
+                    and None not in frames and out['play_offset'] is not None
+                    and out['sample_rate'] == 44100 and out['num_channels'] == 1):
+                consumed = words[7] // 36 * 64 - sum(frames) + out['play_offset'] / 65536
+                out['source_seconds_mixed'] = consumed / 44100
+        return out
+    return {'error': 'native stream debug metadata unavailable'}
 
 
 def snapshot(frame):
@@ -38,7 +92,10 @@ def snapshot(frame):
         ('paused', 0x23B758, 'I'), ('audio_hold', 0x1BAA2C, 'I'),
         ('level', 0x19C068, 'i'), ('demo', 0x23B750, 'i'),
         ('load_thread', 0x1BAA8C, 'I'), ('loading_finished', 0x1BAA90, 'I'),
-        ('channel4_index', 0x427A10, 'i'), ('channel4_kind', 0x427A14, 'i'))}
+        ('channel4_index', 0x427A10, 'i'), ('channel4_kind', 0x427A14, 'i'),
+        ('swaps', 0x10EBD4, 'I'), ('vblank', 0x1BABB0, 'I'))}
+    out['host_monotonic_ns'] = time.monotonic_ns()
+    out['native_output'] = native_output(target)
     out['loaded_story_instances'] = [read(0x1BA928 + i * 4) for i in range(11)]
     index = out['scene']
     if index is not None and 0 <= index < 32:
@@ -62,6 +119,7 @@ def snapshot(frame):
         # Raw words retain evidence without assigning unaudited field meanings.
         out['stream_wrapper_words'] = [read(wrapper + i * 4) for i in range(17)]
         out['stream_feeding'] = read(wrapper + 0x24)
+        out['native_stream'] = native_stream(target, out['stream_wrapper_words'])
     pad = read(0x23C2D8)
     if pad:
         out['pad_rising_edges'] = read(pad + 0xD0)
