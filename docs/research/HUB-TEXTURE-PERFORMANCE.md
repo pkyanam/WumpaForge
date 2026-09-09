@@ -69,3 +69,35 @@ Run the same hub with `WRATH_PROFILE=1` and context timing absent/0. Compare ste
 FPS/work with the earlier windows, then use the upload-handle and surface summaries
 to choose a specific optimization. Preserve exact guest-byte mutation detection,
 palette variants, render-target ownership, copy orientation, and resource lifetime.
+
+## Story17/build57: attribution confirmed
+
+The27 heavy hub windows (`upload_MiB>160`, animation0) have median32.60FPS,
+28.156ms work wall time,22.855ms work CPU time,2.456ms Present, and5.536ms uploads.
+Context timing is explicitly0. Removing detailed lock timestamps modestly improves
+performance; it does not restore60FPS.
+
+Per-resource records identify linear BGRA8 (`format12hex`) texture01261060,
+640×480, uploaded120 times/60 frames. It accounts for140.625MiB/window and
+approximately3.9ms/frame by itself. Several128×128 RGBA8 targets account for the
+remaining roughly1.7ms/frame. `upload_untracked=0` in these windows.
+
+The25 surface windows with180 CopyRects and420 resolves per60 frames have median
+6.664ms CopyRects and3.811ms resolves per frame. There are600 GPU readbacks,
+237.188MiB/window, taking5.853ms/frame inclusive of row orientation conversion.
+Readback is nested in copy/resolve; adding it again would double-count work.
+Upload+copy+resolve is approximately16ms/frame of identified serial work. This
+confirms actual changed render textures and the GPU→CPU→guest→GPU conversion
+path, rather than snapshot-budget exhaustion or invalidation-only upload churn.
+
+A bounded next step is a byte-identical linear32-bit upload/row-copy path:
+format0x12 guest BGRA8 already matches native upload/readback format, but the
+current loops dispatch encode/decode per pixel. Preserve pitch, subrectangles,
+row orientation, guest CPU visibility, exact snapshots, mips and direct guest
+writes. GPU-authoritative resource coherence would require a larger independent
+audit; these measurements do not authorize dropping CPU-visible copies.
+
+This monitoring task made no production edits. The read-only sampling attempt
+found PID30506 already exited at the subsequent vertex-stream stop (report
+`story17-hub-sample-command.log`); it did not interrupt the live session. Parent
+owned game launch, input, stop captures and the next compatibility boundary.
