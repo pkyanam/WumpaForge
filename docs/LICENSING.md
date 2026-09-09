@@ -6,29 +6,28 @@ This is an engineering inventory and release decision record, not a legal
 clearance opinion. [Third-party notices](../THIRD_PARTY_NOTICES.md) contain exact
 revisions, attributions and retained license texts.
 
-## Private staging
+## Public source release
 
-WumpaForge is being staged as a private development repository. No blanket
-proprietary license, public-source release, commercial distribution permission,
-or game-rights grant is asserted. Repository visibility controls access; it does
-not change third-party terms. Private modification generally does not require
-public disclosure under the GPL; giving copies to other recipients can trigger
-distribution obligations even when access is invitation-only. See the FSF's
-[private changes and NDA explanations](https://www.gnu.org/licenses/gpl-faq.en.html).
+The owner selected **GPL-3.0-only** for WumpaForge project code on September9.
+The root [LICENSE](../LICENSE) contains the license. Files with existing component
+notices retain those terms; a project-wide notice does not remove third-party
+rights or replace an existing dual-license choice. The renderer's GPL-2.0-only OR
+GPL-3.0-only grant is used under its GPL-3.0 option for the combined project.
 
-Preserve existing file notices and the component license texts. Do not apply a
-repository-wide no-copy, no-modification, no-redistribution, or source-withholding
-restriction to code whose license already grants those rights. A future custom
-license can cover only material the project actually has authority to license.
-Authorship and third-party compatibility of currently unmarked contributions
-still need review; omitting a root license does not erase the existing GPL grant.
+The public deliverable is source and build tooling. Users supply their own
+supported original USA Xbox ISO and build a personal app locally. No retail
+assets, generated game C, game executable, ISO or prebuilt game app is published.
+The app's local inclusion of its user's assets/dependencies is a convenience,
+not permission to redistribute that built game.
 
-The [repository content audit](REPOSITORY-AUDIT.md) is a separate check of tracked
-history. Keeping the ISO and extracted files out of Git helps scope the staging
-operation; it is not proof that every tracked snippet or future binary is free
-of third-party rights.
+The earlier restrictive commercial-license idea is not the license chosen for
+this source release. GPL software can be sold subject to its terms; a blanket
+proprietary-only license for the current combined implementation is not offered.
+See the FSF's [commercial-use explanation](https://www.gnu.org/licenses/gpl-faq.en.html#DoesTheGPLAllowMoney).
+The [public source audit](PUBLIC-RELEASE-AUDIT.md) records technical inventory and
+its limits; this engineering record is not a general legal clearance opinion.
 
-## Current obstacles to a restrictive binary release
+## Separate considerations for any future binary distribution
 
 1. **A directly linked file already carries GPL terms.**
    `src/nv2a_vertex.c` explicitly says `GPL-2.0-only OR GPL-3.0-only`, and
@@ -91,9 +90,9 @@ of third-party rights.
   materials for the selected binary, rather than treating this inventory as the
   finished compliance bundle.
 - Re-review the actual archive, installer, app bundle, source offer and EULA
-  before sharing it. The existing `tools/package.py` is a local launch helper:
-  it copies the binary and symlinks local assets, without bundling notices or
-  establishing a distributable, self-contained app.
+  before sharing it. The updated `tools/package.py` creates a self-contained personal app with copied
+  assets, dependency libraries and retained notices. This does not establish
+  permission to distribute the game-containing result.
 
 Adding these notices changes no game behavior and grants no new rights over
-upstream or retail material. No build or game launch was performed for this audit.
+upstream or retail material. Fresh local build and packaging checks are recorded separately in STATUS.md.

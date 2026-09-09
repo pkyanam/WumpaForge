@@ -86,3 +86,15 @@ remain outside the demonstrated coverage. Some unsupported instruction and
 compatibility paths still stop explicitly. macOS on the development M3 is the
 only tested platform. See [testing](docs/TESTING.md), [licensing](docs/LICENSING.md)
 and the [Pro 2019 plan](docs/ANDROID-TV-PLAN.md) before extending or distributing.
+
+## 2026-09-09 — Public Mac source preparation
+
+- Added one-command setup and a double-click ISO picker; build prerequisites are
+  installed automatically where possible, with native macOS installer prompts.
+- Made personal apps self-contained with assets, native libraries, notices and
+  ad hoc signing. Bundled saves now live outside the app in Application Support.
+- Added verified translation reuse, preserved save migration and useful build logs.
+- Passed fresh ISO-to-app setup, rerun, relocation/dependency/signature and host
+  fixture checks. Kept Shield work in its experimental subdirectory.
+- Added public contributor guidance and asset-free CI; selected GPL-3.0-only for
+  project code while preserving component licenses and game-content exclusions.

@@ -1,132 +1,116 @@
 # WumpaForge
 
-<img src="assets/branding/wumpaforge-icon.png" width="128" align="right" alt="WumpaForge tropical fruit and crate icon">
+<img src="assets/branding/wumpaforge-icon.png" width="128" align="right" alt="WumpaForge fruit and crate icon">
 
-An experimental native Apple Silicon macOS port of **Crash Bandicoot: The Wrath of
-Cortex**, built from your own original USA Xbox disc image. The original Xbox game
-code is translated ahead of time to C and compiled to ARM64, with compatibility
-layers for graphics, audio, input, and system calls. There is no CPU interpreter
-or JIT fallback.
+Build **Crash Bandicoot: The Wrath of Cortex** as a native Apple Silicon Mac app
+from your own **USA original Xbox ISO**.
 
-**Is this a decompilation or recompilation?** Primarily static recompilation:
-machine-generated C carries the original game logic to ARM64. Reverse engineering
-informs the compatibility code, but this is not a full reconstruction of the
-game's original, readable source code.
+WumpaForge recompiles the original game code ahead of time to ARM64 and provides
+native graphics, audio and input compatibility. No CPU interpreter or JIT is used.
+No game files are included in this repository.
 
-The user has completed **Arctic Antics**, the first winter/penguin level. Bugs
-remain, and the rest of the game has not been validated. The target is 60 FPS;
-performance varies by scene and this is not a finished release. Development
-evidence and known issues are in [STATUS](docs/STATUS.md); the
-[development changelog](CHANGELOG.md) summarizes milestones. Intermittent story
-visual artifacts remain; the latest hub-return crash fix has passed GPU tests
-and awaits a full post-level return test. Physical Bluetooth controllers also
-need testing on the actual hardware.
+**Experimental:** Arctic Antics has been completed on an M3 MacBook Air. Other
+levels and some story effects still need testing. This is not a promise of a
+crash-free game or 60 FPS in every scene.
 
-## Setup
+## Build your app
 
-You need an Apple Silicon Mac running macOS 14 or newer, Xcode Command Line Tools
-(`xcode-select --install`), and native [Homebrew](https://brew.sh) at
-`/opt/homebrew`. Run Terminal natively, without Rosetta. Install the build tools:
+On an **Apple Silicon Mac with macOS 14 or newer**, paste this into Terminal:
 
 ```sh
-brew install gh python cmake sdl2 libepoxy pkg-config openssl@3
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pkyanam/WumpaForge/main/install.sh)"
 ```
 
-Python 3.11 or newer is required. This repository is currently private: your GitHub
-account needs access, and `gh auth login` must succeed first. Obtain your own
-original **USA Xbox** ISO; no game files or download links are provided here.
-Other regions and console versions are unsupported. The setup script checks the
-original executable's SHA-256 before extraction.
+1. Choose your USA **Xbox** ISO when the file picker opens.
+2. Let setup install the build tools, verify/extract your disc, recompile the game
+   and package the app. Apple or Homebrew may ask for installation approval or an
+   administrator password. If Apple Command Line Tools must be installed, finish
+   that installer and rerun setup.
+3. Open **`build/WumpaForge.app`** in the source folder printed by setup. You can
+   move the app into Applications; its game assets and libraries are included.
 
-From the directory where you want the checkout, replace the quoted ISO path with
-your own absolute path and run this one line:
+Use an original unmodified USA Xbox image. PS2/GameCube images, other regions and
+modified executables are unsupported. Setup verifies the executable's SHA-256
+before using it. Supply your own disc image; no game download is provided.
+
+Allow several GB of free space. Builds use at most two compiler jobs. No GitHub
+account, AI subscription or API key is required. The first build takes longer;
+rerunning the same checkout reuses verified translated code and compiled objects.
+The full build log is in `local/reports/setup.log`.
+
+Prefer to inspect the scripts first? Download the repository ZIP, extract it, and
+double-click **`Build WumpaForge.command`**. Or use an existing checkout:
 
 ```sh
-gh repo clone pkyanam/WumpaForge && python3 WumpaForge/tools/setup.py "/absolute/path/Crash Bandicoot - The Wrath of Cortex (USA).iso"
+./setup.sh "/absolute/path/Crash Bandicoot - The Wrath of Cortex (USA).iso"
 ```
 
-Setup downloads the pinned xboxrecomp toolkit, applies this repository's patches,
-creates a Python virtual environment, extracts and verifies your local game
-files, generates the translated sources, builds with at most two compiler jobs,
-and packages the app. The first build can take a while. The ISO is read-only and
-can remain anywhere on your disk. Extraction and build products stay ignored by
-Git. Keep several GB of free disk space for the assets, generated code and build.
-
-To preview the steps without downloading, extracting, or compiling:
-
-```sh
-python3 WumpaForge/tools/setup.py --dry-run "/absolute/path/game.iso"
-```
-
-If you already cloned the repository, run `python3 tools/setup.py "/absolute/path/game.iso"`
-from its root. Reruns preserve existing files and verify the extracted assets;
-use a fresh checkout for a different disc image. A successful build does not
-validate every level or feature.
+The ISO stays unchanged. After building, the app is independent of the source
+checkout and Homebrew installation. It is a **personal local build**, not a game
+binary for redistribution. Build on the Mac you intend to use: the app records
+the minimum macOS version required by its actual compiled dependencies. Only
+macOS 26 on Apple Silicon has received physical testing so far.
 
 ## Play
 
-Open `build/Wrath Native.app` inside the checkout, or run from its root:
+| Action | Keyboard / mouse |
+| --- | --- |
+| Move | WASD |
+| Jump / confirm | Space |
+| Spin | X or left mouse |
+| Crouch / slide | C or right mouse |
+| Pause | Enter |
+| Fullscreen | F11 or Control–Command–F |
 
-```sh
-open "build/Wrath Native.app"
-```
+Focus the game window before using controls. Pair Xbox One/Series or PS5 DualSense
+controllers in macOS Bluetooth settings; SDL supplies the mappings. Physical
+Bluetooth validation remains pending. See [all controls](docs/CONTROLS.md).
+The original story is available to watch or skip.
 
-The app currently uses a link to `local/assets` and local Homebrew libraries.
-Keep the checkout and dependencies in place; the app is not a standalone,
-redistributable bundle. **Extracted game assets are required at runtime.**
-The bundle records the compiled binary's actual minimum macOS version; building
-on a newer Mac does not automatically produce a binary for macOS 14. The current
-development host runs macOS 26.6; other OS versions have not been tested.
+For sharper output, use **Display → Window Size → 1440p** and
+**Display → Sharpening → Medium**. The window can be resized or maximized. This
+scales the original 640×480, 4:3 image; it does not create new scene detail.
+F10 changes sharpening, not resolution. [More display options](docs/WINDOW-PRESENTATION.md).
 
-Focus the game window, then use WASD to move, Space to jump/confirm, X or left
-mouse to spin, C or right mouse to crouch/slide, and Enter to pause. The original
-story can be watched or skipped with Space or Enter. From the first hub, walk
-into portal 1 and wait to enter Arctic Antics. See [all controls](docs/CONTROLS.md).
+Saves live in `~/Library/Application Support/WumpaForge/saves`. Replacing or moving
+the app keeps them intact. Setup copies older checkout saves on first migration
+without overwriting existing user saves.
 
-Xbox One/Series and PS5 DualSense mappings use SDL's game-controller interface.
-Pair the controller through macOS Bluetooth settings. Physical Bluetooth testing
-for both controller families remains unverified; keyboard and mouse are available.
+## Troubleshooting
 
-For QHD output, choose **Display → Window Size → 1440p** in the macOS menu bar.
-Choose **Display → Sharpening → Medium** or **Strong** for a more visible filter.
-The window title shows the measured output size and sharpening setting.
+- **Unsupported ISO:** verify the platform is original Xbox, region USA, and the
+  disc image is unmodified. The required `default.xbe` SHA-256 is
+  `e8d7cbf225d899eb88227c11d1f40434c34e27c1b23ed946fb2c3471168d2f4d`.
+- **Build stopped:** inspect `local/reports/setup.log`, resolve the displayed error
+  and rerun `./setup.sh` with the same ISO. Existing inputs are preserved.
+- **Wrong architecture:** disable “Open using Rosetta” for Terminal and rerun.
+- **macOS blocks a downloaded script:** review it, then run `bash setup.sh` from
+  Terminal. The locally built app is ad hoc signed, not Apple-notarized.
+- **Rendering or gameplay bug:** include your Mac model, macOS version, level,
+  reproduction steps and relevant logs in an issue. Never attach your ISO,
+  extracted assets or generated game code.
 
-Resize or maximize normally; F11 (or Control–Command–F) toggles fullscreen and
-F10 toggles the selected sharpening strength. A window-size preset exits
-fullscreen. Fullscreen already scales to the display drawable; F10 changes the
-filter, not the resolution. Internal rendering remains 640×480 with a 4:3 aspect
-ratio, so upscaling sharpens existing pixels without adding new scene detail. See
-[presentation details and limitations](docs/WINDOW-PRESENTATION.md).
+## Development
 
-## Development and AI agents
+This is primarily **static recompilation**, informed by reverse engineering;
+it is not a full reconstruction of the original readable game source.
+[Status and known issues](docs/STATUS.md) · [Testing](docs/TESTING.md) ·
+[Changelog](CHANGELOG.md) · [Source provenance](docs/UPSTREAM.md).
 
-Setup composes the existing tools: `bootstrap.py`, the `prepare`, `assets`,
-`analyze` and `lift` stages of `pipeline.py`, `verify_assets.py`, CMake, and
-`package.py`. Pipeline diagnostics are written to `local/reports/`. Run
-`python3 tools/setup.py --help` for options.
+For AI-assisted setup, open the repository in an agent and say:
+“Read AGENTS.md, then run setup.sh with my ISO at `/absolute/path/game.iso`.”
+Agents should preserve user saves, keep game content out of commits and report
+untested behavior honestly. AI assistance is entirely optional.
 
-For CPU-only source regressions after setup, run `.venv/bin/python tools/check.py`.
-See [testing instructions](docs/TESTING.md) for original-function checks, GPU/audio
-fixtures, and the limits of source-based validation.
+The [Shield Pro 2019 experiment](android/shield2019/README.md) is retained in
+`android/shield2019/`. It is separate from the Mac setup and **not a supported
+public-release target**. No Android SDK is needed to build the Mac app.
 
-An AI coding agent is optional. Open this checkout in your agent, ask it to read
-[AGENTS.md](AGENTS.md) and [STATUS](docs/STATUS.md), and give it the local ISO path
-and a concrete task. For example: “Read AGENTS.md and STATUS.md, then help me run
-the setup script with my ISO at `/absolute/path/game.iso`.” No agent subscription
-or API key is required to build or play.
+## Licensing and attribution
 
-macOS Apple Silicon is the only platform with demonstrated gameplay. An isolated
-[Shield Pro 2019 development build](android/shield2019/README.md) now produces an
-Android ARM64 game library and TV APK; it has not been run on the device. Sharing
-an ARM64 CPU does not establish operating-system, graphics or runtime compatibility. See the
-[future portability notes](docs/PORTABILITY.md) and the focused
-[SHIELD TV Pro 2019 plan](docs/ANDROID-TV-PLAN.md). The earlier [Android groundwork](android/README.md) remains available alongside
-the new build and device-test instructions.
-
-Game content, extracted executables, translated game sources, binaries, build
-outputs, and dependency checkouts must stay out of commits. Upstream provenance
-is recorded in [UPSTREAM](docs/UPSTREAM.md); see [third-party notices](THIRD_PARTY_NOTICES.md)
-and the [licensing inventory](docs/LICENSING.md) before planning distribution.
-The current implementation includes GPL/LGPL-covered components and is not offered
-under a blanket proprietary license. Private source access does not grant rights
-to redistribute the original game or its derived build products.
+WumpaForge project code is licensed under [GPL-3.0-only](LICENSE), except where
+a file carries its own third-party terms. Existing third-party licenses and notices
+are preserved. See [third-party notices](THIRD_PARTY_NOTICES.md) and the
+[licensing inventory](docs/LICENSING.md). Game content and trademarks belong to
+their respective owners; the project is unaffiliated with them. Source licenses
+do not grant rights to distribute the original game or a built copy containing it.

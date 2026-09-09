@@ -2,6 +2,8 @@
 """Create a self-contained, locally signed macOS app from your own game build."""
 from pathlib import Path
 import argparse
+import hashlib
+import json
 import plistlib
 import re
 import shutil
@@ -180,6 +182,8 @@ def package(binary, asset_source, app, linked_assets=False):
             shutil.copytree(asset_source, resources / 'assets', symlinks=False)
         shutil.copy2(ROOT / 'THIRD_PARTY_NOTICES.md', resources)
         shutil.copytree(ROOT / 'LICENSES', resources / 'LICENSES')
+        if (ROOT / 'LICENSE').is_file():
+            shutil.copy2(ROOT / 'LICENSE', resources / 'LICENSE')
         info = {
             'CFBundleIdentifier': 'org.wumpaforge.game',
             'CFBundleExecutable': 'wrath_native',
@@ -196,6 +200,15 @@ def package(binary, asset_source, app, linked_assets=False):
         (contents / 'Info.plist').write_bytes(plistlib.dumps(info))
         for library in sorted(libraries, key=lambda path: path == executable):
             subprocess.run(['codesign', '--force', '--sign', '-', str(library)], check=True)
+        manifest = {
+            'architecture': 'arm64', 'minimum_macos': deployment_target,
+            'game_executable_sha256': hashlib.sha256((asset_source / 'default.xbe').read_bytes()).hexdigest(),
+            'libraries': [{'path': str(path.relative_to(contents)),
+                           'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+                          for path in sorted(libraries)],
+            'personal_build': True,
+        }
+        (resources / 'build-info.json').write_text(json.dumps(manifest, indent=2) + '\n')
         subprocess.run(['codesign', '--force', '--sign', '-', str(staged)], check=True)
         subprocess.run(['codesign', '--verify', '--deep', '--strict', str(staged)], check=True)
         backup = Path(temporary) / 'previous.app'

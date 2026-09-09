@@ -1,6 +1,6 @@
 # Third-party notices
 
-Inventory checked 2026-09-08 for private WumpaForge source staging. This file
+Inventory updated for the September 9 public source preparation. This file
 preserves component attribution; it does not grant a blanket license to this
 repository, the game, or a future executable. See [licensing review](docs/LICENSING.md).
 
@@ -13,6 +13,7 @@ repository, the game, or a future executable. See [licensing review](docs/LICENS
 | [xemu shader references](https://github.com/xemu-project/xemu/tree/fdfb5a8f481b2f870c57080e74ec8d3a31a47053), `fdfb5a8f481b2f870c57080e74ec8d3a31a47053` | Tracked `src/nv2a_vertex.c` expressly retains `GPL-2.0-only OR GPL-3.0-only`; directly compiled into `wrath_native` | Reference copyrights: espes (2012), Jannik Vogel (2014), Matt Borgerson (2025); antecedents Aaron Robinson and Kingofc (2004), Shadow_tj and PatrickvL (2007). [GPL v2](LICENSES/GPL-2.0.txt), [GPL v3](LICENSES/GPL-3.0.txt). [Detailed provenance](docs/NV2A-VERTEX.md). This is a license choice between those versions, not unrestricted permission. |
 | [sdl2-compat release-2.32.70](https://github.com/libsdl-org/sdl2-compat/tree/release-2.32.70) and [SDL release-3.4.14](https://github.com/libsdl-org/SDL/tree/release-3.4.14) | Host SDL2 API implemented by Homebrew sdl2-compat over SDL3; video, audio and input | zlib license; Sam Lantinga. [sdl2-compat notice](LICENSES/sdl2-compat-LICENSE.txt), [SDL3 notice](LICENSES/SDL3-LICENSE.txt). These are observed installed versions, not bootstrap pins. |
 | [libepoxy 1.5.10](https://github.com/anholt/libepoxy/tree/1.5.10) | Host OpenGL dispatch; linked through CMake | MIT, with Intel Corporation and Khronos Group notices in [COPYING](LICENSES/libepoxy-COPYING.txt). Observed installed version, not a bootstrap pin. |
+| [OpenSSL 3](https://github.com/openssl/openssl) | SHA/crypto runtime dependency from native Homebrew; bundled into personal local apps | Apache-2.0; [retained license](LICENSES/OpenSSL-LICENSE.txt). Exact installed source and version are recorded by Homebrew; package manifest records the copied library. |
 | [Capstone 5.0.7](https://github.com/capstone-engine/capstone/tree/5.0.7) | Python disassembly/lifting dependency pinned by `requirements.txt`; not a game runtime library | BSD-3-Clause text: copyright 2013 COSEINC; designed/implemented by Nguyen Anh Quynh. [Installed package license](LICENSES/Capstone-LICENSE.txt). A distributed wheel/toolchain needs its complete package-level third-party inventory. |
 | [vgmstream](https://github.com/vgmstream/vgmstream/tree/09c9f40caae4747e44b6a993b3d5b654cef4d1f7), `09c9f40caae4747e44b6a993b3d5b654cef4d1f7` | `tools/generate_adpcm_fixture.py` downloads/extracts decoder code into an ignored test oracle; tracked numeric fixture is generated from synthetic input. The native ADPCM implementation cites this reference. | ISC-style permission; [complete upstream COPYING](LICENSES/vgmstream-COPYING.txt) retains all listed authors/portions. Reference source is not a compiled game dependency. See [ADPCM provenance](docs/ADPCM.md). |
 | [XbSymbolDatabase](https://github.com/Cxbx-Reloaded/XbSymbolDatabase/tree/20eced544726f5558c5a408458f38a086cc4e543), `20eced544726f5558c5a408458f38a086cc4e543` | SDK signature identification documented in D3D, input and audio integration notes | MIT, copyright 2023 The XbSymbolDatabase authors. [License text](LICENSES/XbSymbolDatabase-MIT.txt). Downloaded database stays ignored; retain notice with any copied substantial portions. |
@@ -60,4 +61,4 @@ research in tracked files remain subject to a separate rights review.
 xemu `COPYING` (GPL v2), the inspected PS2 checkout (GPL v3), pinned
 XbSymbolDatabase, ignored vgmstream COPYING, and the installed package paths
 listed above. These texts apply only where their component licenses apply; their
-presence does not relicense the repository. No root `LICENSE` is selected here.
+presence does not relicense the repository. Project licensing is described in the root README; these retained notices do not replace component terms.
