@@ -1,0 +1,53 @@
+--- a/src/input/xinput_device.c
++++ b/src/input/xinput_device.c
+@@ -203,6 +203,40 @@
+     }
+ }
+ 
++#ifdef WRATH_ANDROID_TV
++/* Android maps some TV remotes as controllers. Prefer controls sufficient for
++ * gameplay, without requiring a brand or changing an existing gamepad's port. */
++static int tv_gamepad(SDL_GameController *pad)
++{
++    return pad && ((SDL_GameControllerHasAxis(pad, SDL_CONTROLLER_AXIS_LEFTX) &&
++                    SDL_GameControllerHasAxis(pad, SDL_CONTROLLER_AXIS_LEFTY)) ||
++                   (SDL_GameControllerHasButton(pad, SDL_CONTROLLER_BUTTON_A) &&
++                    SDL_GameControllerHasButton(pad, SDL_CONTROLLER_BUTTON_B) &&
++                    SDL_GameControllerHasButton(pad, SDL_CONTROLLER_BUTTON_START)));
++}
++static void tv_promote_gamepad(void)
++{
++    if (tv_gamepad(g_pads[0])) return;
++    for (int slot = 1; slot < XBOX_MAX_CONTROLLERS; ++slot) {
++        if (!tv_gamepad(g_pads[slot])) continue;
++        /* Stop effects on the old devices before changing logical ownership.
++         * Port packets stay monotonic; no held input or vibration migrates. */
++        if (g_pads[0]) SDL_GameControllerRumble(g_pads[0], 0, 0, 0);
++        SDL_GameControllerRumble(g_pads[slot], 0, 0, 0);
++        SDL_GameController *old = g_pads[0];
++        g_pads[0] = g_pads[slot]; g_pads[slot] = old;
++        ++g_packet[0]; ++g_packet[slot];
++        memset(&g_previous[0], 0, sizeof(g_previous[0]));
++        memset(&g_previous[slot], 0, sizeof(g_previous[slot]));
++        memset(&g_vibration[0], 0, sizeof(g_vibration[0]));
++        memset(&g_vibration[slot], 0, sizeof(g_vibration[slot]));
++        g_rumble_tick[0] = g_rumble_tick[slot] = 0;
++        SDL_Log("Xbox port 0 promoted gamepad: %s", SDL_GameControllerName(g_pads[0]));
++        return;
++    }
++}
++#endif
++
+ /* Called on the SDL/main thread. Pump without consuming window/quit events.
+  * Instance IDs, unlike device indices, survive another controller detaching. */
+ static void refresh_controllers(void)
+@@ -240,6 +274,9 @@
+             }
+         }
+     }
++#ifdef WRATH_ANDROID_TV
++    tv_promote_gamepad();
++#endif
+     /* Xbox vibration persists until changed. Refresh bounded SDL effects while
+      * polling, and let them expire if the game hangs or stops polling. */
+     Uint32 now = SDL_GetTicks();

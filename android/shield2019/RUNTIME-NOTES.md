@@ -55,3 +55,38 @@ intended edits; reverse application checked successfully; the original checkout
 was verified unchanged. No compiler, device test, download or game launch was
 performed by this patch task. Root build integration owns NDK compilation and
 further validation.
+
+## TV remote versus player-one controller
+
+`runtime-input-tv.patch` is enabled only by `WRATH_ANDROID_TV`. The existing SDL
+backend opens mapped controllers in enumeration order; a mapped TV remote can
+therefore occupy Xbox port 0 before the player's Bluetooth controller. After
+normal refresh, the TV policy promotes the first already-open controller with
+both left-stick axes **or** A, B and Start if port 0 lacks those capabilities.
+It uses SDL mapping capabilities, not vendor/product names. An existing eligible
+port-0 pad remains in place, so adding another gamepad never steals player one.
+Other devices stay open and usable on their logical ports. The existing four
+open-controller limit remains; this does not evict devices to accommodate a
+fifth device when all four slots are occupied.
+
+Promotion swaps handles, explicitly stops both physical vibration effects,
+clears cached input/vibration, and increments each affected port's own packet
+counter. No cached buttons or rumble commands transfer to a different device.
+New state is sampled from the promoted device. Remote-only input remains available
+under the original enumeration behavior.
+
+The actual SDL backend regression is reproducible without game assets:
+
+```sh
+python3 android/shield2019/tests/test_input_tv.py
+```
+
+It applies the patch to a temporary source copy and compiles one small UBSan
+fixture against installed SDL2. The synthetic TV remote is followed by unknown
+analog and digital gamepads; tests check promotion, non-reordering of a second
+real pad, disconnect/reconnect, packet stability, old-button release and physical
+rumble routing. It passed on the development Mac. `--baseline` intentionally
+omits the patch and fails at the first gamepad-to-port-0 assertion (exit 134).
+The fake rumble callback accommodates the existing sdl2-compat 2.32.70 callback
+ABI issue, as the repository's earlier virtual-controller test does. Physical
+Android Bluetooth mappings and pairing behavior remain untested.
