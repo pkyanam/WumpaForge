@@ -75,7 +75,8 @@ def main():
             'int xbox_D3D8GLAcquire(void);\n'
             'void xbox_D3D8GLRelease(void);\n'
             'static int lazy_context_bind(void) {\n'
-            '    const char *v=getenv("WRATH_EGL_LAZY_BIND"); return v && !strcmp(v,"1");\n'
+            '    const char *v=getenv("WRATH_EGL_LAZY_BIND"), *d=getenv("WRATH_EGL_DEFER_STATE");\n'
+            '    return (v && !strcmp(v,"1")) || (d && !strcmp(d,"1"));\n'
             '}\n'
             'int xbox_D3D8GLEnsureCurrent(void) {\n'
             '    if (!g.glctx || SDL_GL_GetCurrentContext()==g.glctx) return 1;\n'
@@ -92,6 +93,11 @@ def main():
             '    if(!xbox_D3D8GLEnsureCurrent())abort();\n'
             '    return outer;\n'
             '}\n'
+            'int xbox_D3D8GLBeginStateCall(void) {\n'
+            '    int outer=!g_context_depth;\n'
+            '    if(outer && !xbox_D3D8GLAcquire())abort();\n'
+            '    return outer;\n'
+            '}\n'
             'void xbox_D3D8GLEndCall(int outer) { if(outer)xbox_D3D8GLRelease(); }')
     replace(backend,'    if (g.glctx && SDL_GL_MakeCurrent(g.window, g.glctx) < 0) goto fail;',
             '    if (!lazy_context_bind() && g.glctx && SDL_GL_MakeCurrent(g.window, g.glctx) < 0) goto fail;')
@@ -101,6 +107,7 @@ def main():
     replace(backend,'    if (g.window) {\n        last_pump_ns = now;',
             '    if (g.window) {\n'
             '        if(!xbox_D3D8GLEnsureCurrent())abort();\n'
+            '        wumpa_gl_flush_state();\n'
             '        last_pump_ns = now;')
     replace(backend,'            output_event(&ev);',
             '            if (ev.type == SDL_RENDER_DEVICE_RESET || SDL_HasEvent(SDL_RENDER_DEVICE_RESET)) {\n'
@@ -166,8 +173,12 @@ def generate_loader(registry):
     names=sorted(set(re.findall(r'\b(gl[A-Z]\w*)\s*\(',source)) | {'glGetStringi','glGetIntegerv','glGetString'})
     registry_text=registry.read_text()
     header=['/* Generated from pinned Khronos declarations; do not edit. */','#pragma once','#include <GL/glcorearb.h>','#define GL_FLAT 0x1D00 /* Guest shade-mode token; no legacy GL call. */','#define GL_SMOOTH 0x1D01','int wumpa_gl_load(void);','int epoxy_gl_version(void);','int epoxy_has_gl_extension(const char *name);']
-    body=['#include <SDL.h>','#include <stdio.h>','#include <string.h>','#include "epoxy/gl.h"',
-          'extern int xbox_D3D8GLBeginCall(void);','extern void xbox_D3D8GLEndCall(int outer);']
+    header += ['void wumpa_gl_flush_state(void); /* Caller holds context mutex. */']
+    body=['#include <SDL.h>','#include <stdio.h>','#include <stdlib.h>','#include <string.h>','#include "epoxy/gl.h"',
+          'extern int xbox_D3D8GLBeginCall(void);','extern int xbox_D3D8GLBeginStateCall(void);',
+          'extern int xbox_D3D8GLEnsureCurrent(void);','extern void xbox_D3D8GLEndCall(int outer);']
+    deferred=set('glEnable glDisable glDepthMask glDepthFunc glColorMask glBlendFunc glBlendFuncSeparate glBlendEquation glBlendEquationSeparate glStencilFunc glStencilFuncSeparate glStencilOp glStencilOpSeparate glStencilMask glStencilMaskSeparate glCullFace glFrontFace glPolygonMode glViewport glDepthRange'.split())
+    wrappers=[];queue_members=[];queue_cases=[]
     for name in names:
         typedef='PFN'+name.upper()+'PROC'
         if typedef not in registry_text: raise RuntimeError(f'Missing GL declaration: {name}')
@@ -181,14 +192,41 @@ def generate_loader(registry):
                 if not arg:raise RuntimeError(f'Cannot parse GL argument: {parameter}')
                 arguments.append(arg.group(1))
         header += [f'{result} wumpa_call_{name}({parameters});',f'#define {name} wumpa_call_{name}']
-        body += [f'static {typedef} wumpa_{name};',f'{result} wumpa_call_{name}({parameters}) {{',
-                 '    int wumpa_outer=xbox_D3D8GLBeginCall();']
+        body += [f'static {typedef} wumpa_{name};']
+        wrappers += [f'{result} wumpa_call_{name}({parameters}) {{']
+        if name in deferred:
+            assert result=='void' and '*' not in parameters and '[' not in parameters
+            index=len(queue_members)
+            queue_members += [f'        struct {{ {parameters.replace(",", ";")}; }} {name};']
+            queue_cases += [f'        case {index}: wumpa_{name}('+', '.join(f'command->args.{name}.{arg}' for arg in arguments)+'); break;']
+            wrappers += ['    if(wumpa_defer_state()) {',
+                         '        int wumpa_outer=xbox_D3D8GLBeginStateCall();',
+                         '        if(wumpa_state_count==WUMPA_STATE_CAPACITY)wumpa_gl_flush_state();',
+                         '        WumpaStateCommand *command=&wumpa_state_queue[wumpa_state_count++];',
+                         f'        command->kind={index};']
+            wrappers += [f'        command->args.{name}.{arg}={arg};' for arg in arguments]
+            wrappers += ['        xbox_D3D8GLEndCall(wumpa_outer); return;', '    }']
+        wrappers += ['    int wumpa_outer=xbox_D3D8GLBeginCall();', '    wumpa_gl_flush_state();']
         invocation=f'wumpa_{name}({", ".join(arguments)})'
-        body += [f'    {invocation};' if result=='void' else f'    {result} wumpa_result={invocation};',
+        wrappers += [f'    {invocation};' if result=='void' else f'    {result} wumpa_result={invocation};',
                  '    xbox_D3D8GLEndCall(wumpa_outer);']
-        if result!='void':body += ['    return wumpa_result;']
-        body += ['}']
-    body += ['int wumpa_gl_load(void) { int missing=0;']
+        if result!='void':wrappers += ['    return wumpa_result;']
+        wrappers += ['}']
+    body += ['/* Exact ordered scalar calls only: no pointer lifetime or state-cache assumptions. */',
+             '#define WUMPA_STATE_CAPACITY 256', 'typedef struct { unsigned kind; union {']+queue_members+[
+             '    } args; } WumpaStateCommand;',
+             'static WumpaStateCommand wumpa_state_queue[WUMPA_STATE_CAPACITY];',
+             'static unsigned wumpa_state_count;',
+             'static int wumpa_defer_state(void) { const char *v=getenv("WRATH_EGL_DEFER_STATE"); return v && !strcmp(v,"1"); }',
+             'void wumpa_gl_flush_state(void) {',
+             '    if(!wumpa_state_count)return;',
+             '    if(!xbox_D3D8GLEnsureCurrent())abort();',
+             '    for(unsigned i=0;i<wumpa_state_count;++i) {',
+             '        WumpaStateCommand *command=&wumpa_state_queue[i];',
+             '        switch(command->kind) {']+queue_cases+[
+             '        default: abort();', '        }', '    }', '    wumpa_state_count=0;', '}']
+    body += wrappers
+    body += ['int wumpa_gl_load(void) { int missing=0; wumpa_state_count=0;']
     for name in names:
         body += [f'    wumpa_{name}=({"PFN"+name.upper()+"PROC"})SDL_GL_GetProcAddress("{name}");',
                  f'    if (!wumpa_{name}) {{ fprintf(stderr,"Missing desktop GL entry: {name}\\n"); ++missing; }}']
