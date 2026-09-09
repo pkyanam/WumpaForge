@@ -1,5 +1,29 @@
 # Status — September 9 Shield follow-up
 
+## Latest: verified kernel TLS and renderer batching
+
+On September9 the dispatch crash was traced to a shared kernel thunk selector:
+EnterCriticalSection could dispatch Sleep or SetInformationFile on another thread's
+selector. Commit0364047 changes it to TLS;00763f2 fixes patch headers that caused
+Git to silently skip this change inside ignored build directories. Commit886266c
+isolates all Android patch replay from the parent Git repo and reverse-checks each
+application. The rebuilt installed ARM64 library's `g_kernel_dispatch_slot` symbol
+is now **TLS**, verified with NDK llvm-readelf; prior installed builds were OBJECT.
+The forced-interleaving actual-source fixture passes, but whole-game reliability
+still needs live validation. See the kernel concurrency audit for separate hazards.
+
+Persistent renderer plus whole-UP-draw batching passes the physical Shield GPU
+suite (9453 synchronous submissions versus11520 previously). Live run22299 light
+opening windows frame150/210 measure60.01/59.93FPS; heavier scenes remain well below
+target, including6–16FPS in later opening animation. Named profiling identifies
+large title shader-path RPC handoff overhead. Scalar sampler/uniform queue expansion
+fd1733a passes the generated-wrapper fixture but is not in that installed run.
+New Game reached the Cortex hologram after story skip; level loading is next.
+Reports: verified-tls-build.log, verified-tls-rpc-up-graphics.log,
+verified-tls-live.log, tls-current-tail.log under ignored local/reports/shield2019.
+No sustained60FPS, completed Shield level, or fixed audio sync is claimed.
+
+
 The latest work is isolated under [android/shield2019](../android/shield2019/README.md).
 The real AOT game library cross-compiles for Android ARM64, and a signed TV
 development APK includes asset-free memory/graphics/input/audio diagnostics.
