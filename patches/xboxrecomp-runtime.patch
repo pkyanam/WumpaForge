@@ -1,8 +1,19 @@
 diff --git a/src/kernel/kernel.h b/src/kernel/kernel.h
-index ade9b08..fd38337 100644
+index ade9b08..53395df 100644
 --- a/src/kernel/kernel.h
 +++ b/src/kernel/kernel.h
-@@ -477,7 +477,7 @@ void xbox_kernel_set_thunk_address(uint32_t xbox_va, uint32_t count);
+@@ -421,8 +421,9 @@ typedef VOID (__stdcall *PXBOX_SYSTEM_ROUTINE)(PVOID StartContext);
+ /* Wait constants */
+ #define XBOX_WAIT_OBJECT_0  0
+ 
+-/* SHA context for crypto */
++/* Guest SHA storage is116 bytes: reserved prefix, then92-byte hash state. */
+ typedef struct _XBOX_SHA_CONTEXT {
++    UCHAR Reserved[24];
+     ULONG State[5];
+     ULONG Count[2];
+     UCHAR Buffer[64];
+@@ -477,7 +478,7 @@ void xbox_kernel_set_thunk_address(uint32_t xbox_va, uint32_t count);
  
  /**
   * Get the kernel thunk table address and entry count currently in effect.
@@ -11,7 +22,7 @@ index ade9b08..fd38337 100644
   * zeroed if never configured.
   */
  void xbox_kernel_get_thunk_address(uint32_t *xbox_va, uint32_t *count);
-@@ -537,9 +537,10 @@ typedef char  xbox_host_char;
+@@ -537,9 +538,10 @@ typedef char  xbox_host_char;
   * host_path_buf must be at least MAX_PATH characters (not bytes).
   */
  /* Host path produced by the most recent xbox_translate_path call. */
@@ -23,7 +34,7 @@ index ade9b08..fd38337 100644
  
  /* ============================================================================
   * Pool Allocator (kernel_pool.c)
-@@ -776,6 +777,7 @@ VOID    __stdcall xbox_KeBugCheckEx(ULONG BugCheckCode, ULONG_PTR Param1, ULONG_
+@@ -776,6 +778,7 @@ VOID    __stdcall xbox_KeBugCheckEx(ULONG BugCheckCode, ULONG_PTR Param1, ULONG_
  
  VOID    __stdcall xbox_KeInitializeInterrupt(PXBOX_KINTERRUPT Interrupt, PVOID ServiceRoutine, PVOID ServiceContext, ULONG Vector, KIRQL Irql, ULONG InterruptMode, BOOLEAN ShareVector);
  BOOLEAN __stdcall xbox_KeConnectInterrupt(PXBOX_KINTERRUPT Interrupt);
@@ -493,6 +504,66 @@ index 2d996b1..2b7b232 100644
 + * values are per-title, not hardcoded. the base and count outputs are set to 0 if unavailable.
   */
  void xbox_kernel_get_thunk_address(uint32_t *xbox_va, uint32_t *count)
+ {
+diff --git a/src/kernel/kernel_crypto.c b/src/kernel/kernel_crypto.c
+index f8a502c..74dd18f 100644
+--- a/src/kernel/kernel_crypto.c
++++ b/src/kernel/kernel_crypto.c
+@@ -8,51 +8,15 @@
+  *   - Xbox Live authentication (RSA, RC4)
+  *   - Content verification (SHA-1)
+  *
+- * Implementation uses Windows BCrypt API (available since Vista).
+- * For save game compatibility, all crypto must produce identical outputs
+- * to the original Xbox implementations.
+- *
+- * Note: RC4 is implemented manually since BCrypt deprecated it in newer
+- * Windows versions. The Xbox RC4 is standard RC4 (ARC4).
++ * SHA-1, RC4 and HMAC below use portable software implementations. Guest
++ * SHA storage has a24-byte reserved prefix followed by92 bytes of hash state;
++ * the native structure preserves that layout rather than exposing a host handle.
+  */
+ 
+ #include "kernel.h"
+ #include <string.h>
+ 
+-/* SHA-1 / RC4 / HMAC below are portable software implementations, so the
+- * only platform dependency is BCrypt's types in the (unused) SHA_INTERNAL
+- * struct. Keep it Windows-only. */
+-#if defined(_WIN32)
+-#include <bcrypt.h>
+-#pragma comment(lib, "bcrypt.lib")
+-#endif
+-
+-/* ============================================================================
+- * SHA-1
+- *
+- * Xbox SHA-1 is standard FIPS 180-1 SHA-1. We use BCrypt for correctness.
+- * The XBOX_SHA_CONTEXT is our own structure (defined in kernel.h).
+- * We store the BCrypt hash handle inside it.
+- * ============================================================================ */
+-
+-/* We use a wrapper since XBOX_SHA_CONTEXT may not be large enough for
+- * BCrypt's internal state. Store BCrypt handles in a separate mapping. */
+-
+-#if defined(_WIN32)
+-typedef struct _SHA_INTERNAL {
+-    BCRYPT_ALG_HANDLE  hAlg;
+-    BCRYPT_HASH_HANDLE hHash;
+-    UCHAR              hashObject[256]; /* BCrypt hash object buffer */
+-} SHA_INTERNAL;
+-#endif
+-
+-/*
+- * Since XBOX_SHA_CONTEXT is only 92 bytes (State[5] + Count[2] + Buffer[64]),
+- * we can't fit a BCrypt handle in it. We use a simple software SHA-1 instead.
+- * This also ensures byte-exact compatibility with the Xbox implementation.
+- */
+-
+-/* Software SHA-1 implementation - matches Xbox/FIPS exactly */
++/* SHA-1 uses fixed-width ULONG words and byte-exact guest storage. */
+ 
+ static ULONG sha1_rotate_left(ULONG value, int bits)
  {
 diff --git a/src/kernel/kernel_file.c b/src/kernel/kernel_file.c
 index eaa98a4..aedfa7b 100644

@@ -11,11 +11,12 @@ run the CPU-only synthetic suite from the repository root:
 .venv/bin/python tools/check.py
 ```
 
-This runs eleven existing checks sequentially, with at most one compiler process.
+This runs the existing checks sequentially, with at most one compiler process.
 It does not launch the game, open graphics windows, play audio, or read the ISO.
 The tests construct their own inputs. Covered areas include instruction boundaries,
 incremental translation, flag joins, integer shifts and rotations, guest x87
-rounding/classification, thread-local floating-point state, and diagnostic reads
+rounding/classification, thread-local floating-point state, guest SHA context
+layout/standard vectors, and diagnostic reads
 with unavailable debugger metadata. Native arithmetic fixtures use Clang and,
 where specified by the individual test, UBSan instrumentation.
 

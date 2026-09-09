@@ -16,7 +16,7 @@ SYNTHETIC = (
     'test_mixed_flag_paths.py', 'test_logical_shift_widths.py',
     'test_shift_rotate_widths.py', 'test_carry_rotates.py',
     'test_x87_rounding.py', 'test_x87_status_rounding.py',
-    'test_x87_classification.py', 'test_audio_probe.py',
+    'test_x87_classification.py', 'test_sha_context.py', 'test_audio_probe.py',
 )
 ORIGINAL = ('test_double_shifts.py', 'test_crt_division.py')
 ORIGINAL_INPUTS = (
