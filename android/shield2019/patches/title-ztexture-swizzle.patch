@@ -1,0 +1,47 @@
+--- a/graphics.c
++++ b/graphics.c
+@@ -857,6 +857,15 @@
+     }
+     return result;
+ }
++/* Morton X/Y bits occupy disjoint positions even for rectangular dimensions.
++ * Bound scratch to128KiB and preserve the original per-pixel path on failure. */
++static uint32_t *morton_x_offsets(uint32_t width,uint32_t height)
++{
++    if(!width || width>128u*1024u/sizeof(uint32_t))return NULL;
++    uint32_t *offsets=malloc((size_t)width*sizeof(*offsets));
++    if(offsets)for(uint32_t x=0;x<width;++x)offsets[x]=morton_index(x,0,width,height);
++    return offsets;
++}
+ static uint32_t color565(uint16_t value)
+ {
+     uint32_t r = (value >> 11) & 31, g = (value >> 5) & 63, b = value & 31;
+@@ -971,7 +980,11 @@
+         profile_bytes+=(uint64_t)width*height*4;
+         const uint8_t *source = encoded + face * r->face_stride + r->offsets[level];
+         if(direct_bgra) glPixelStorei(GL_UNPACK_ROW_LENGTH,(GLint)(r->pitches[level]/4));
+-        else for (unsigned y = 0; y < height; ++y) for (unsigned x = 0; x < width; ++x) {
++        else {
++          uint32_t *x_offsets=bpp&&!linear?morton_x_offsets(width,height):NULL;
++          for (unsigned y = 0; y < height; ++y) {
++            uint32_t y_offset=x_offsets?morton_index(0,y,width,height):0;
++            for (unsigned x = 0; x < width; ++x) {
+             uint32_t color;
+             if (!bpp) {
+                 unsigned block_size = r->format == 0x0C ? 8 : 16;
+@@ -979,11 +992,14 @@
+                 color = dxt_color(source + block * block_size, (y % 4) * 4 + x % 4, r->format);
+             } else {
+                 uint32_t packed = 0;
+-                uint32_t offset = linear ? y * r->pitches[level] + x * bpp : morton_index(x, y, width, height) * bpp;
++                uint32_t offset = linear ? y * r->pitches[level] + x * bpp : (x_offsets?(x_offsets[x]|y_offset):morton_index(x,y,width,height)) * bpp;
+                 memcpy(&packed, source + offset, (size_t)bpp);
+                 color = r->format == 0x0B ? colors[packed] : uncompressed_color(packed, r->format);
+             }
+             pixels[y * width + x] = color;
++            }
++          }
++          free(x_offsets);
+         }
+         glTexImage2D(target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : GL_TEXTURE_2D,
+                      (GLint)level, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,direct_bgra?(const void *)source:pixels);
