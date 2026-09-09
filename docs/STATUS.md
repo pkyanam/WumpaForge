@@ -1,24 +1,26 @@
 # Status — 2026-09-08
 
-## Current: build58/story19 performance improves; reflection address diagnosis
-- Combined actualGPU tests pass for native fences (fa611de), retained NULL
-  vertex addresses (4357c0e), and linearBGRA copies (34b7452). Integrated137d68f.
-  Lift58/max2-job build58/package succeeds; actual binary Mach-O arm64.
-- Story19 simpler hub reaches60FPS; 640x480 screen upload~0.18ms vs prior2ms.
-  Full hologram remains heavier (~45FPS in one mixedtransitionwindow); detailed
-  comparison stillpending. User reports intermittent hologram distortion.
-- Story19 stops secondary4 reflection afterhologramskip,573indices230..555.
-  Extended capture proves intentionalqueuedoverride material selecting1B despite
-  ordinarymeshmaterial. Retainedaddress validator stillrejects; needcache fields.
-  No basis to changeoriginalshaderselection or fabricate tangent data.
-- Story20 currentbuild58 PID56082/session41490 running with newlyextended
-  shaderprobe reading16physicalcachedaddresses/generations and nativeowners.
-  Controller addednextbuildrejectionlog; mac independentlyauditsreflectioneffect.
-  Root owns UI/builds; nocompiler currentlyrunning.
-- Portal nativefence fix notyetreached live afterbuild58. Story18 proved actual
-  Hub0/slot0 ArcticAntics portal beforefencehang; Level7/Demo0 remainsunverified.
-- Audio overlap/release/recreate UBSan regressionpasses baab255; noaudiochanges.
-  Next capturedcachecause→targetedfix→build59→normalportal→snowcontrols.
+## Current: build58/story20 loads Arctic Antics Level7/Demo0; fixed fog next
+- Actual user-assisted movement reached portal1; native fence fix passed and
+  original warp played. Snow assets loaded; stopped currentLevel7/Demo0,
+  filenamelevels/a/snow_m/snow, fade102/rate−8. First playable snowframe pending.
+- New explicit boundary: fixed FVF fog. Captured enable1/tableLINEAR3/start1/end35,
+  range0 and c57=(0,0,1,0). mac_runtime implements original planar/radial/specalpha
+  fog generation in native fixed shader, with actualGPU tests. Build59 next.
+- Story20 PID56082/session41490 ended at deliberate shaderbreak. No game running.
+  Appstillbuild58. Shaderprobe nowreadsFVF/world/view/projection and boot reloads
+  it atstop (1bd29d0), so addedretainedaddressfields apply to alreadyrunningboots.
+- Story19 reflection queuedoverride/retainedbounds issue remains unresolved,
+  did not recur story20. Probe/logenhancements2e86eb6 nextbinary. Do not weaken
+  bounds or substitute missing tangents. Hologram/story visual artifacts remain.
+- Usernewscope: fullscreen/maximizable/resizable and optionalsharpened upscale
+  HD/FHD/QHD afterplayability. Controller stages isolatedinternal-FBO/presentation
+  changes withoutdelayingfogbuild59; native_audio owns isolatedupscalershader/test.
+  Preserve640x480rendering and4:3aspect; benchmarkcost, nozero-lossclaim.
+- CombinedGPU tests passed build58 fences/retention/BGRA. Simplerhub60FPS,
+  screenupload0.18msvs2ms. Rootownsallfullbuild/package/launch, max2compilerjobs.
+- Next frozenfogfix→build59→NewGame/skip/userorSkywalking→verifyactualsnow
+  movement/jump/spin/pause, thenintegratefullscreen/upscale andremainingvisuals.
 
 ## Earlier: build55/story15 reflection passes; Xbox address5 is next hub setting
 - b951812 implements actual[PROJECT2D,DOT,DOT,DOT_RFLCT_SPEC] shader chain, signed

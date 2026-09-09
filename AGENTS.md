@@ -15,6 +15,10 @@ realm; user now specifically requests the winter/penguin level in area1. Keep
 the original intro/story available to watch or skip. Maintain correct
 assets, audio synchronization and a 60 FPS performance target; report measured
 performance and unverified physical hardware honestly.
+After initial playability, the user also requests a resizable/maximizable window,
+fullscreen, and optional efficient sharpened upscaling to HD/FHD/QHD output.
+Keep original internal rendering and aspect ratio separate from output sizing;
+measure cost and latency rather than promising zero performance loss.
 The user permits subagents when they speed the work up; use bounded disjoint tasks.
 Do not equate a native emulator executable, title-screen mockup, asset viewer, or
 compilable console binary with a working native game.
