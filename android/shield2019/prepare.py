@@ -237,7 +237,9 @@ def generate_loader(registry):
           'extern int xbox_D3D8GLBeginCall(void);','extern int xbox_D3D8GLBeginStateCall(void);',
           'extern int xbox_D3D8GLEnsureCurrent(void);','extern void xbox_D3D8GLEndCall(int outer);',
           'static void wumpa_execute_state(void *unused);']
-    deferred=set('glEnable glDisable glDepthMask glDepthFunc glColorMask glBlendFunc glBlendFuncSeparate glBlendEquation glBlendEquationSeparate glStencilFunc glStencilFuncSeparate glStencilOp glStencilOpSeparate glStencilMask glStencilMaskSeparate glCullFace glFrontFace glPolygonMode glViewport glDepthRange glActiveTexture glBindTexture glTexParameteri glUseProgram glBindBuffer glBindFramebuffer glBindRenderbuffer glBindVertexArray glEnableVertexAttribArray glDisableVertexAttribArray glVertexAttrib4f'.split())
+    # Uniform locations apply to the program at their exact queue position.
+    # Sampler object IDs are scalar; vector/pointer setters remain flush barriers.
+    deferred=set('glEnable glDisable glDepthMask glDepthFunc glColorMask glBlendFunc glBlendFuncSeparate glBlendEquation glBlendEquationSeparate glStencilFunc glStencilFuncSeparate glStencilOp glStencilOpSeparate glStencilMask glStencilMaskSeparate glCullFace glFrontFace glPolygonMode glViewport glDepthRange glActiveTexture glBindTexture glTexParameteri glUseProgram glBindBuffer glBindFramebuffer glBindRenderbuffer glBindVertexArray glEnableVertexAttribArray glDisableVertexAttribArray glVertexAttrib4f glBindSampler glSamplerParameteri glUniform1i glUniform1f glUniform2i glUniform2f glUniform4f'.split())
     wrappers=[];queue_members=[];queue_cases=[]
     for name in names:
         typedef='PFN'+name.upper()+'PROC'

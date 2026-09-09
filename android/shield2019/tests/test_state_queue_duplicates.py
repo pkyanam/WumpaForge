@@ -54,6 +54,41 @@ static void integer_query(GLenum pname,GLint *output) {
     else if(pname==0xbadu)pending_error=GL_INVALID_ENUM;
     else *output=4096;
 }
+
+static GLuint active_program,bound_sampler;
+static unsigned shader_events;
+static int shader_order[32];
+static void program(GLuint value) { active_program=value;shader_order[shader_events++]=100+(int)value; }
+static void sampler_bind(GLuint unit,GLuint sampler) {
+    assert(unit==2);bound_sampler=sampler;shader_order[shader_events++]=200+(int)sampler;
+}
+static void sampler_parameter(GLuint sampler,GLenum pname,GLint value) {
+    assert(sampler==7 && bound_sampler==7);
+    if(pname==0xdead) { pending_error=GL_INVALID_ENUM;return; }
+    assert(pname==GL_TEXTURE_MIN_FILTER && value==GL_NEAREST);
+    shader_order[shader_events++]=300;
+}
+static void uniform_i(GLint location,GLint value) {
+    assert(location==5 && value==6);shader_order[shader_events++]=400+(int)active_program;
+}
+static void uniform_f(GLint location,GLfloat value) {
+    assert(location==6 && value==0.25f);shader_order[shader_events++]=500+(int)active_program;
+}
+static void uniform_2i(GLint location,GLint x,GLint y) {
+    assert(location==7 && x==8 && y==9);shader_order[shader_events++]=600+(int)active_program;
+}
+static void uniform_2f(GLint location,GLfloat x,GLfloat y) {
+    assert(location==8 && x==0.5f && y==0.75f);shader_order[shader_events++]=700+(int)active_program;
+}
+static void uniform_4f(GLint location,GLfloat x,GLfloat y,GLfloat z,GLfloat w) {
+    assert(location==9 && x==1 && y==2 && z==3 && w==4);
+    shader_order[shader_events++]=800+(int)active_program;
+}
+static void sampler_pointer(GLuint sampler,GLenum pname,const GLfloat *values) {
+    assert(sampler==7 && pname==GL_TEXTURE_BORDER_COLOR && values[0]==0.25f);
+    /* Pointer-bearing setter is an immediate barrier after all scalar setters. */
+    assert(shader_events==11);shader_order[shader_events++]=900;
+}
 int main(void) {
     assert(!setenv("WRATH_EGL_DEFER_STATE","1",1));
     wumpa_glEnable=enabled;wumpa_glDisable=disabled;wumpa_glDepthRange=depth;
@@ -85,6 +120,26 @@ int main(void) {
     assert(viewport[0]==77 && viewport[5]==88 && invalid==123 && limit==4096);
     for(int i=0;i<4;++i)assert(viewport[i+1]==10+i);
     assert(glGetError()==GL_INVALID_ENUM && glGetError()==GL_NO_ERROR);
+
+    wumpa_glUseProgram=program;wumpa_glBindSampler=sampler_bind;
+    wumpa_glSamplerParameteri=sampler_parameter;wumpa_glSamplerParameterfv=sampler_pointer;
+    wumpa_glUniform1i=uniform_i;wumpa_glUniform1f=uniform_f;
+    wumpa_glUniform2i=uniform_2i;wumpa_glUniform2f=uniform_2f;wumpa_glUniform4f=uniform_4f;
+    glUseProgram(1);glUniform1i(5,6);glUniform1i(5,6);
+    glUseProgram(2);glUniform1i(5,6); /* Same args, different program: must execute. */
+    glBindSampler(2,7);glBindSampler(2,7);
+    glSamplerParameteri(7,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+    glUniform1f(6,0.25f);glUniform2i(7,8,9);glUniform2f(8,0.5f,0.75f);
+    glUniform4f(9,1,2,3,4);glUniform4f(9,1,2,3,4);
+    glUseProgram(3);
+    assert(shader_events==0 && wumpa_state_count==11);
+    GLfloat border[4]={0.25f,0,0,0};glSamplerParameterfv(7,GL_TEXTURE_BORDER_COLOR,border);
+    const int expected_shader[]={101,401,102,402,207,300,502,602,702,802,103,900};
+    assert(shader_events==12 && wumpa_state_count==0);
+    assert(!memcmp(shader_order,expected_shader,sizeof(expected_shader)));
+    glSamplerParameteri(7,0xdead,0);assert(pending_error==0 && wumpa_state_count==1);
+    assert(glGetError()==GL_INVALID_ENUM && wumpa_state_count==0);
+    assert(glGetError()==GL_NO_ERROR);
     return 0;
 }
 ''')
@@ -93,7 +148,7 @@ int main(void) {
         subprocess.run(['cc', '-std=c11', '-O1', '-fsanitize=undefined', '-I'+str(work / 'gl'),
                         '-I'+str(sdl), '-I'+str(ROOT / 'android/shield2019'), str(fixture), '-o', str(binary)], check=True)
         subprocess.run([str(binary)], check=True)
-    print('PASS: adjacent exact duplicates, state order, signed zero/NaNs, barriers, capacity and non-idempotent calls')
+    print('PASS: scalar sampler/uniform program order, pointer/error barriers, exact duplicates, signed zero/NaNs and capacity')
 
 
 if __name__ == '__main__':
