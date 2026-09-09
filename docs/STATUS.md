@@ -1,26 +1,24 @@
 # Status — 2026-09-08
 
-## Current: build57/story18 reaches Arctic Antics portal; native fence hang
-- Normal keyboard navigation reached Hub0/portal0, displayed ARCTIC ANTICS and
-  snow preview. Portal dwell3, Level37/Demo0, target levels−1: no level load yet.
-  Actual route and snapshot are in research/ARCTIC-ANTICS-ENTRY.md.
-- Main thread spins in original103330 via103420/1035C0, called by FED90 after
-  DrawVertices101B20 in3AF90. Missing native fence boundary is next priority;
-  mac_runtime owns faithful API implementation. Root SIGSTOP captured all
-  threads then debugger closed PID66826/session42667; no game running.
-- 34b7452 linear BGRA8 upload/copy/row-flip fastpath passes full native GPU suite.
-  It is not in packaged build57 yet; measure actual performance after build58.
-- Controller implements original per-attribute address retention for NULL stream
-  binds, preserving new stride/type and strict allocation/bounds semantics.
-  Audited original deferred SDK explicitly skips only address writes for NULL.
-  This addresses prior story16/17 reflection fault without inventing tangents.
-- Audio continues at portal hang; native_audio audits transition test coverage.
-  Sporadic story13 null audio call remains unproven; retain on-stop audio probe.
-- User additionally reports intermittent Cortex hub-hologram warping/morphing
-  and scattered visual artifacts. Track separately; relation to vertex retention
-  is unverified. Recheck visually after fixes, retain original animations/effects.
-- Next freeze fixes, max2-job build58/package, story19 navigate original portal
-  and verify Level7/Demo0 plus movement/jump/spin in snow. Goal remains active.
+## Current: build58/story19 performance improves; reflection address diagnosis
+- Combined actualGPU tests pass for native fences (fa611de), retained NULL
+  vertex addresses (4357c0e), and linearBGRA copies (34b7452). Integrated137d68f.
+  Lift58/max2-job build58/package succeeds; actual binary Mach-O arm64.
+- Story19 simpler hub reaches60FPS; 640x480 screen upload~0.18ms vs prior2ms.
+  Full hologram remains heavier (~45FPS in one mixedtransitionwindow); detailed
+  comparison stillpending. User reports intermittent hologram distortion.
+- Story19 stops secondary4 reflection afterhologramskip,573indices230..555.
+  Extended capture proves intentionalqueuedoverride material selecting1B despite
+  ordinarymeshmaterial. Retainedaddress validator stillrejects; needcache fields.
+  No basis to changeoriginalshaderselection or fabricate tangent data.
+- Story20 currentbuild58 PID56082/session41490 running with newlyextended
+  shaderprobe reading16physicalcachedaddresses/generations and nativeowners.
+  Controller addednextbuildrejectionlog; mac independentlyauditsreflectioneffect.
+  Root owns UI/builds; nocompiler currentlyrunning.
+- Portal nativefence fix notyetreached live afterbuild58. Story18 proved actual
+  Hub0/slot0 ArcticAntics portal beforefencehang; Level7/Demo0 remainsunverified.
+- Audio overlap/release/recreate UBSan regressionpasses baab255; noaudiochanges.
+  Next capturedcachecause→targetedfix→build59→normalportal→snowcontrols.
 
 ## Earlier: build55/story15 reflection passes; Xbox address5 is next hub setting
 - b951812 implements actual[PROJECT2D,DOT,DOT,DOT_RFLCT_SPEC] shader chain, signed
