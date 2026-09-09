@@ -40,7 +40,9 @@ jobs:
           bash -n "Build WumpaForge.command"
       - name: Test source-only tooling
         run: |
+          python tools/test_setup.py
           python tools/test_package.py
+          python tools/test_macos_paths.py
           python tools/test_audio_probe.py
           python android/test_preflight.py
           python android/shield2019/test_artifacts.py
