@@ -15,8 +15,8 @@ python3 android/shield2019/tools/build_keyhold.py
 With the game already focused, push and run against the explicit authorized TV:
 
 ```sh
-adb -s 192.168.1.46:5555 push build/shield2019/keyhold/wumpa-keyhold.jar /data/local/tmp/wumpa-keyhold.jar
-adb -s 192.168.1.46:5555 shell 'CLASSPATH=/data/local/tmp/wumpa-keyhold.jar app_process /system/bin WumpaKeyHold UP 1500'
+adb -s SHIELD_IP:5555 push build/shield2019/keyhold/wumpa-keyhold.jar /data/local/tmp/wumpa-keyhold.jar
+adb -s SHIELD_IP:5555 shell 'CLASSPATH=/data/local/tmp/wumpa-keyhold.jar app_process /system/bin WumpaKeyHold UP 1500'
 ```
 
 Accepted keys: `UP`, `DOWN`, `LEFT`, `RIGHT`, `CENTER`, `BACK`, `PLAY_PAUSE`,
@@ -36,7 +36,7 @@ injection; that requires the authorized physical device.
 For an A/B test against the remote mapping, use keyboard source explicitly:
 
 ```sh
-adb -s 192.168.1.46:5555 shell 'CLASSPATH=/data/local/tmp/wumpa-keyhold.jar app_process /system/bin WumpaKeyHold W 1500 keyboard'
+adb -s SHIELD_IP:5555 shell 'CLASSPATH=/data/local/tmp/wumpa-keyhold.jar app_process /system/bin WumpaKeyHold W 1500 keyboard'
 ```
 
 Keyboard mode allows `W A S D I J K L SPACE C X E ENTER BACKSPACE Q R SHIFT CTRL`.
