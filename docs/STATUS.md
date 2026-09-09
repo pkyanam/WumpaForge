@@ -1,26 +1,28 @@
 # Status — 2026-09-08
 
-## Current: build59/story21 reaches next snow fog path; combined build60 pending
-- 91f3ed5 fixed XYZ fog passes fullGPU tests and build59/package. Actualstory21
-  reachesLevel7/Demo0 andcrossespreviousXYZguard, thenstopsXYZRHWfog FVF0x144.
-  Story21PID4981/session40898ended atshaderbreak; nogamerunning, appbuild59.
-- Mac decodedoriginal102850 three microprograms: tableNONE→specularalpha;
-  tableenabled +deviceflag2→originalZ; otherwise1/originalRHW. Rootverified
-  Projection setterFEA20 flag2 iffprojectivecolumn(0,0,0,1). Story21perspective.
-  All3implementedwithpreservedoriginaldistance staging; sourcesfrozenpendingGPU.
-- Controllerintegratedinternal640x480color/depth back/frontFBOs, resizablewindow,
-  aspectletterboxing, F11fullscreen/F10sharpen toggle. IsolatedresizeGPUtestpassed.
-  Native_audio's isolatedspatialfilter0fbf5ad passes720/1080/1440GPU/CPUcomparison.
-  Combinedpresentation+bothfogpaths smoke nowcontroller-owned(onecompiler).
-  Rootwillbuild60 onlyafterpass+cumulativepatchrefreshedincludingCMakeOpenGL.
-- Actualupscaler/fullscreen gameandlatency tests explicitlyrequestedbyuser,
-  nextlivebuild. Defaultbilinearuntilmeasured, optionalstrength0.25 sharperpass.
-  No extraframequeue, internalresolutionunchanged; donotclaimnativeHDdetail/zerooverhead.
-- Earlier story19queuedreflectionoverride/retainedboundsfaultstillunresolved;
-  no recurrenceonstory20/21. On-stopprobe includescachedaddresses andgenerations
-  plusFVF/matrices; bootreloadsPythonatstop(1bd29d0). Hologramdistortionstillopen.
-- Nextbuild60→NewGame→originalskip/userwalking→actualsnowcontrolverification,
-  fullscreen/sharpenA/B. Goalremainsactive; neverclaimgameplayfromloadalone.
+## Current: build60 preparation; snow fog and presentation tests pass
+- Build59/story21 reached Arctic Antics, Level7/Demo0, and passed the fixed XYZ
+  fog boundary. It then stopped on transformed FVF0x144 fog. PID4981/session40898
+  ended at the diagnostic breakpoint; no game is running. Packaged app is build59.
+- All three original transformed fog paths are now implemented: specular alpha
+  for table NONE, original Z for affine projection, and reciprocal original RHW
+  for perspective. The original values survive native clip-coordinate conversion.
+  Original102850 selects the microprogram; Projection setter FEA20 controls flag2.
+- Combined GPU tests pass: both fixed fog paths, programmable fog, retained vertex
+  addresses, native fences, textures, internal render targets and presentation.
+  Reports: presentation-combined-build.log and presentation-combined-smoke.log.
+  Controller is finishing thread/presentation checks and the cumulative patch.
+- Fullscreen work keeps internal color/depth buffers at640x480, with resizable
+  output and aspect-preserving borders. F11 toggles fullscreen; F10 toggles the
+  optional sharpening filter. Its isolated720p/1080p/1440p GPU tests pass. Actual
+  game fullscreen, visual quality and frame timing still need verification.
+- Earlier story19's queued reflection override/retained bounds fault remains open;
+  it did not recur in story20/21. The stop probe now records cached addresses,
+  allocation generations, FVF and matrices. Intermittent hologram distortion
+  remains an open visual issue. Do not fabricate tangent data or relax bounds.
+- Next: build60/package, original New Game/skip, enter Arctic Antics, verify real
+  movement/jump/spin/pause, then compare fullscreen and sharpening. Root owns all
+  full builds and game launches; at most two compiler jobs total. Goal stays active.
 
 ## Earlier: build55/story15 reflection passes; Xbox address5 is next hub setting
 - b951812 implements actual[PROJECT2D,DOT,DOT,DOT_RFLCT_SPEC] shader chain, signed

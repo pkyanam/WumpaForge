@@ -2,17 +2,23 @@ diff --git a/src/d3d/CMakeLists.txt b/src/d3d/CMakeLists.txt
 index f1b3606..4f014dc 100644
 --- a/src/d3d/CMakeLists.txt
 +++ b/src/d3d/CMakeLists.txt
-@@ -27,2 +27,5 @@ else()
+@@ -25,6 +25,9 @@ else()
+     pkg_check_modules(EPOXY REQUIRED epoxy)
+     target_include_directories(xbox_d3d8 PRIVATE ${EPOXY_INCLUDE_DIRS})
      target_link_libraries(xbox_d3d8 PUBLIC platform SDL2::SDL2 ${EPOXY_LIBRARIES})
 +    if(APPLE)
 +        target_link_libraries(xbox_d3d8 PUBLIC "-framework OpenGL")
 +    endif()
  endif()
+ 
+ target_include_directories(xbox_d3d8 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 diff --git a/src/d3d/d3d8_gl.c b/src/d3d/d3d8_gl.c
-index 7888785..cd8f42f 100644
+index 7888785..2de7a7a 100644
 --- a/src/d3d/d3d8_gl.c
 +++ b/src/d3d/d3d8_gl.c
-@@ -33,2 +33,8 @@
+@@ -31,6 +31,12 @@
+ #include <stdlib.h>
+ #include <string.h>
  #include <math.h>
 +#include <pthread.h>
 +#include <time.h>
@@ -21,17 +27,21 @@ index 7888785..cd8f42f 100644
 +#include <OpenGL/OpenGL.h>
 +#endif
  
-@@ -97,3 +103,4 @@ typedef struct {
+ #ifndef D3D_OK
+ #define D3D_OK ((HRESULT)0)
+@@ -95,13 +101,194 @@ typedef struct {
+ 
+     /* GL fixed shader program */
      GLuint           prog;
 -    GLint            u_mvp;
 +    GLint            u_mvp, u_model_view;
 +    GLint            u_fog_mode, u_fog_distance, u_fog_params, u_fog_plane, u_fog_color;
      GLint            u_use_tex;
-@@ -101,2 +108,3 @@ typedef struct {
+     GLint            u_use_xform;
      GLint            u_tex0;
 +    GLint            u_alpha_enable, u_alpha_func, u_alpha_ref, u_flat_shade;
  } D3DGL;
-@@ -104,2 +112,177 @@ typedef struct {
+ 
  static D3DGL g;
 +/* Retail NV2A fixed fog: distance0 specular alpha,1 radial,2 planar. The
 + * title bridge supplies original SDK coefficients and the physical fog plane. */
@@ -183,6 +193,8 @@ index 7888785..cd8f42f 100644
 +    pthread_mutex_unlock(&g_context_mutex);
 +    if(profiling) { ++g_profile_calls.releases; g_profile_calls.mutex_unlock+=monotonic_ns()-unlock_begin; }
 +}
++#include "d3d8_present.inc"
++
 +void xbox_D3D8GLPumpEvents(void)
 +{
 +#ifdef __APPLE__
@@ -197,6 +209,7 @@ index 7888785..cd8f42f 100644
 +        last_pump_ns = now;
 +        SDL_Event ev;
 +        while (SDL_PollEvent(&ev)) {
++            output_event(&ev);
 +            if (ev.type == SDL_QUIT) {
 +                fprintf(stderr, "[d3d8_gl] window close requested\n");
 +                /* This is a host app quit, not a fabricated guest return.
@@ -205,14 +218,20 @@ index 7888785..cd8f42f 100644
 +            }
 +        }
 +    }
++    refresh_output_size();
 +    xbox_D3D8GLRelease();
 +    if(profile_pump) { ++g_profile_calls.event_pumps; g_profile_calls.event_pump_time+=monotonic_ns()-profile_pump; }
 +}
  
-@@ -180,5 +363,11 @@ static const char *VS_SRC =
+ /* ======================================================================== */
+ /* Tiny helpers                                                             */
+@@ -178,32 +365,72 @@ static const char *VS_SRC =
+     "layout(location=0) in vec4 a_pos;\n"
+     "layout(location=1) in vec4 a_color;\n"
      "layout(location=2) in vec2 a_uv;\n"
 -    "uniform mat4 u_mvp;\n"
 +    "layout(location=3) in vec4 a_specular;\n"
++    "layout(location=4) in float a_fog_input;\n"
 +    "uniform mat4 u_mvp, u_model_view;\n"
 +    "uniform int u_fog_mode, u_fog_distance;\n"
 +    "uniform vec2 u_fog_params;\n"
@@ -222,11 +241,15 @@ index 7888785..cd8f42f 100644
      "out vec4 v_color;\n"
 +    "flat out vec4 v_flat_color;\n"
      "out vec2 v_uv;\n"
-@@ -187,2 +376,3 @@ static const char *VS_SRC =
+     "void main() {\n"
+     "  if (u_use_xform != 0) {\n"
      "    gl_Position = u_mvp * vec4(a_pos.xyz, 1.0);\n"
 +    "    gl_Position.z = 2.0 * gl_Position.z - gl_Position.w;\n"
      "  } else {\n"
-@@ -193,3 +383,16 @@ static const char *VS_SRC =
+     "    /* XYZRHW: a_pos.w is RHW; emit clip-space directly. The caller is\n"
+     "       expected to feed already-clip-space coords. */\n"
+     "    gl_Position = a_pos;\n"
+     "  }\n"
      "  v_color = a_color;\n"
 +    "  v_flat_color = a_color;\n"
      "  v_uv    = a_uv;\n"
@@ -234,6 +257,7 @@ index 7888785..cd8f42f 100644
 +    "  if (u_fog_mode != 0) {\n"
 +    "    vec3 eye=(u_model_view*vec4(a_pos.xyz,1.0)).xyz;\n"
 +    "    float d=u_fog_distance==0 ? clamp(a_specular.a,0.0,1.0) :\n"
++    "      u_fog_distance==3 ? 1.0/a_fog_input : u_fog_distance==4 ? a_fog_input :\n"
 +    "      u_fog_distance==1 ? length(eye) : dot(u_fog_plane.xyz,eye)+u_fog_plane.w;\n"
 +    "    float f;\n"
 +    "    if(u_fog_mode==1) f=(u_fog_params.x+d*u_fog_params.y)-1.0;\n"
@@ -243,7 +267,9 @@ index 7888785..cd8f42f 100644
 +    "      clamp(f,-uintBitsToFloat(0x7f7fffffu),uintBitsToFloat(0x7f7fffffu));\n"
 +    "  }\n"
      "}\n";
-@@ -199,9 +402,27 @@ static const char *FS_SRC =
+ 
+ static const char *FS_SRC =
+     "#version 330 core\n"
      "in  vec4 v_color;\n"
 +    "flat in vec4 v_flat_color;\n"
 +    "uniform int u_flat_shade;\n"
@@ -272,7 +298,11 @@ index 7888785..cd8f42f 100644
 +    "  }\n"
 +    "  if(u_fog_mode!=0) c.rgb=mix(u_fog_color,c.rgb,clamp(v_fog,0.0,1.0));\n"
      "  frag_color = c;\n"
-@@ -266,2 +487,8 @@ static void init_gl_pipeline(void)
+     "}\n";
+ 
+@@ -264,9 +491,19 @@ static void init_gl_pipeline(void)
+     glDeleteShader(fs);
+ 
      g.u_mvp       = glGetUniformLocation(g.prog, "u_mvp");
 +    g.u_model_view = glGetUniformLocation(g.prog,"u_model_view");
 +    g.u_fog_mode = glGetUniformLocation(g.prog,"u_fog_mode");
@@ -281,14 +311,18 @@ index 7888785..cd8f42f 100644
 +    g.u_fog_plane = glGetUniformLocation(g.prog,"u_fog_plane");
 +    g.u_fog_color = glGetUniformLocation(g.prog,"u_fog_color");
      g.u_use_tex   = glGetUniformLocation(g.prog, "u_use_tex");
-@@ -269,2 +496,6 @@ static void init_gl_pipeline(void)
+     g.u_use_xform = glGetUniformLocation(g.prog, "u_use_xform");
      g.u_tex0      = glGetUniformLocation(g.prog, "u_tex0");
 +    g.u_flat_shade = glGetUniformLocation(g.prog, "u_flat_shade");
 +    g.u_alpha_enable = glGetUniformLocation(g.prog, "u_alpha_enable");
 +    g.u_alpha_func = glGetUniformLocation(g.prog, "u_alpha_func");
 +    g.u_alpha_ref = glGetUniformLocation(g.prog, "u_alpha_ref");
  }
-@@ -485,2 +716,10 @@ static HRESULT __stdcall tex_UnlockRect(IDirect3DTexture8 *self, UINT lvl)
+ 
+ /* ======================================================================== */
+@@ -483,6 +720,14 @@ static HRESULT __stdcall tex_UnlockRect(IDirect3DTexture8 *self, UINT lvl)
+     return D3D_OK;
+ }
  
 +/* Native programmable-shader integration shares these real texture objects
 + * and the existing D3D state cache without serializing host pointers in RAM. */
@@ -299,7 +333,11 @@ index 7888785..cd8f42f 100644
 +void xbox_D3D8GLApplyRenderStates(void) { apply_render_states(); }
 +
  static const IDirect3DTexture8Vtbl g_tex_vtbl = {
-@@ -546,2 +785,31 @@ static HRESULT __stdcall dev_Reset(IDirect3DDevice8 *s, D3DPRESENT_PARAMETERS *p
+     tex_QueryInterface, tex_AddRef, tex_Release,
+     tex_GetDevice, tex_SetPriority, tex_GetPriority, tex_PreLoad, tex_GetType,
+@@ -544,19 +789,54 @@ static HRESULT __stdcall dev_GetCreationParameters(IDirect3DDevice8 *s, void *pP
+ static HRESULT __stdcall dev_Reset(IDirect3DDevice8 *s, D3DPRESENT_PARAMETERS *pPP)
+ { (void)s;(void)pPP; return D3D_OK; }
  
 +/* Optional timing uses CPU clocks only: never forces GPU completion. The
 + * existing device lock protects counters; keep main and loading-worker windows
@@ -331,7 +369,8 @@ index 7888785..cd8f42f 100644
 +}
 +
  static HRESULT __stdcall dev_Present(IDirect3DDevice8 *s, const RECT *src, const RECT *dst,
-@@ -550,11 +818,16 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *s, const RECT *src, const
+                                      HWND hwnd, void *dirty)
+ {
      (void)s;(void)src;(void)dst;(void)hwnd;(void)dirty;
 -    SDL_GL_SwapWindow(g.window);
 -    /* Pump events so the window stays responsive. Quit closes the window
@@ -344,6 +383,7 @@ index 7888785..cd8f42f 100644
 -    }
 +    int profiling=profile_present_enabled();
 +    uint64_t profile_start=profiling?monotonic_ns():0;
++    xbox_D3D8GLPresentImage();
 +#ifdef __APPLE__
 +    if (!pthread_main_np()) {
 +        if (!g_cgl || CGLFlushDrawable(g_cgl) != kCGLNoError)
@@ -357,7 +397,11 @@ index 7888785..cd8f42f 100644
 +    xbox_D3D8GLPumpEvents();
 +    if(profiling) profile_present(profile_start,swap_end,pace_end,monotonic_ns());
      return D3D_OK;
-@@ -689,3 +962,10 @@ static void setup_fvf_attribs(DWORD fvf, UINT stride)
+ }
+ 
+@@ -687,7 +967,23 @@ static void setup_fvf_attribs(DWORD fvf, UINT stride)
+         glVertexAttrib4f(1, 1.f, 1.f, 1.f, 1.f);
+     }
      /* Specular */
 -    if (fvf & D3DFVF_SPECULAR) off += 4;
 +    if (fvf & D3DFVF_SPECULAR) {
@@ -368,8 +412,21 @@ index 7888785..cd8f42f 100644
 +        glDisableVertexAttribArray(3);
 +        glVertexAttrib4f(3,0,0,0,1);
 +    }
++    /* The native title conversion appends originalZ/RHW for the transformed
++     * SDK fog program; current clip-space position cannot recover both. */
++    if (g_fixed_fog.mode && g_fixed_fog.distance>=3) {
++        glEnableVertexAttribArray(4);
++        glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,stride,(const void *)(uintptr_t)(stride-4));
++    } else {
++        glDisableVertexAttribArray(4);
++        glVertexAttrib1f(4,0);
++    }
      /* Texcoord 0 */
-@@ -716,2 +996,7 @@ static void bind_texture0(void)
+     if (has_tex) {
+         glEnableVertexAttribArray(2);
+@@ -714,6 +1010,11 @@ static void bind_texture0(void)
+     }
+     glUniform1i(g.u_tex0, 0);
      glUniform1i(g.u_use_tex, use_tex);
 +    glUniform1i(g.u_flat_shade, g.rs[D3DRS_SHADEMODE] == 1);
 +    glProvokingVertex(GL_FIRST_VERTEX_CONVENTION);
@@ -377,7 +434,11 @@ index 7888785..cd8f42f 100644
 +    glUniform1i(g.u_alpha_func, g.rs[D3DRS_ALPHAFUNC]);
 +    glUniform1f(g.u_alpha_ref, (g.rs[D3DRS_ALPHAREF] & 255) / 255.0f);
  }
-@@ -723,4 +1008,12 @@ static void update_mvp(DWORD fvf)
+ 
+ static void update_mvp(DWORD fvf)
+@@ -721,8 +1022,16 @@ static void update_mvp(DWORD fvf)
+     D3DMATRIX wv, mvp;
+     mat4_mul(&wv, &g.m_world, &g.m_view);
      mat4_mul(&mvp, &wv, &g.m_proj);
 -    /* GL is column-major; D3D MATRIX is row-major. Tell GL to transpose. */
 -    glUniformMatrix4fv(g.u_mvp, 1, GL_TRUE, (const GLfloat *)mvp.m);
@@ -392,7 +453,11 @@ index 7888785..cd8f42f 100644
 +    glUniform4fv(g.u_fog_plane,1,g_fixed_fog.plane);
 +    glUniform3fv(g.u_fog_color,1,g_fixed_fog.color);
      glUniform1i(g.u_use_xform, d3d8_fvf_transformed(fvf) ? 0 : 1);
-@@ -739,8 +1032,7 @@ static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETY
+ }
+ 
+@@ -737,17 +1046,18 @@ static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETY
+     glUseProgram(g.prog);
+     glBindVertexArray(g.vao);
      glBindBuffer(GL_ARRAY_BUFFER, g.stream_vbo);
 -    if (size > g.stream_vbo_size) {
 -        glBufferData(GL_ARRAY_BUFFER, size, verts, GL_STREAM_DRAW);
@@ -406,13 +471,18 @@ index 7888785..cd8f42f 100644
 +    glBufferData(GL_ARRAY_BUFFER, size, verts, GL_STREAM_DRAW);
 +    g.stream_vbo_size = size;
      setup_fvf_attribs(g.current_fvf, stride);
-@@ -749,3 +1041,5 @@ static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETY
+     bind_texture0();
+     update_mvp(g.current_fvf);
      apply_render_states();
 +    uint64_t profile_draw=xbox_D3D8GLProfileDrawBegin();
      glDrawArrays(mode, 0, (GLsizei)vcount);
 +    xbox_D3D8GLProfileDrawEnd(profile_draw);
      return D3D_OK;
-@@ -767,7 +1061,7 @@ static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s, D3DPRIM
+ }
+ 
+@@ -765,16 +1075,18 @@ static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s, D3DPRIM
+     glUseProgram(g.prog);
+     glBindVertexArray(g.vao);
      glBindBuffer(GL_ARRAY_BUFFER, g.stream_vbo);
 -    if (vbytes > g.stream_vbo_size) { glBufferData(GL_ARRAY_BUFFER, vbytes, verts, GL_STREAM_DRAW); g.stream_vbo_size = vbytes; }
 -    else glBufferSubData(GL_ARRAY_BUFFER, 0, vbytes, verts);
@@ -424,13 +494,18 @@ index 7888785..cd8f42f 100644
 +    glBufferData(GL_ELEMENT_ARRAY_BUFFER, ibytes, idx, GL_STREAM_DRAW);
 +    g.stream_ibo_size = ibytes;
      setup_fvf_attribs(g.current_fvf, stride);
-@@ -776,3 +1070,5 @@ static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s, D3DPRIM
+     bind_texture0();
+     update_mvp(g.current_fvf);
      apply_render_states();
 +    uint64_t profile_draw=xbox_D3D8GLProfileDrawBegin();
      glDrawElements(mode, (GLsizei)icount, itype, 0);
 +    xbox_D3D8GLProfileDrawEnd(profile_draw);
      return D3D_OK;
-@@ -976,2 +1272,10 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+ }
+ 
+@@ -974,6 +1286,14 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+ {
+     (void)s; (void)adapter; (void)devtype; (void)hwnd; (void)flags;
      if (!pp || !pPP) return D3DERR_INVALIDCALL;
 +    UINT refresh_hz = pPP->FullScreen_RefreshRateInHz;
 +    if (!refresh_hz) refresh_hz = 60;
@@ -441,7 +516,20 @@ index 7888785..cd8f42f 100644
 +    g_present_period_ns = (1000000000ull + refresh_hz - 1) / refresh_hz;
 +    g_present_deadline_ns = 0;
  
-@@ -1008,3 +1312,18 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+     /* Initialise SDL video + GL 3.3 core context. */
+     if (!SDL_WasInit(SDL_INIT_VIDEO)) SDL_InitSubSystem(SDL_INIT_VIDEO);
+@@ -993,7 +1313,7 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+     g.window = SDL_CreateWindow(g_window_title,
+                                 SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                                 g.backbuf_w, g.backbuf_h,
+-                                SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
++                                SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+     if (!g.window) {
+         fprintf(stderr, "[d3d8_gl] SDL_CreateWindow failed: %s\n", SDL_GetError());
+         return D3DERR_INVALIDCALL;
+@@ -1006,11 +1326,28 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+         return D3DERR_INVALIDCALL;
+     }
      SDL_GL_MakeCurrent(g.window, g.glctx);
 +#ifdef __APPLE__
 +    g_cgl = CGLGetCurrentContext();
@@ -460,13 +548,197 @@ index 7888785..cd8f42f 100644
      SDL_GL_SetSwapInterval(1);
 +#endif
  
-@@ -1020,2 +1339,3 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+     fprintf(stderr, "[d3d8_gl] GL %s / GLSL %s\n",
+             glGetString(GL_VERSION), glGetString(GL_SHADING_LANGUAGE_VERSION));
+ 
++    if (!init_output_buffers()) return D3DERR_INVALIDCALL;
++    refresh_output_size();
+     init_gl_pipeline();
+ 
+     /* Reasonable default states */
+@@ -1018,9 +1355,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+     mat4_identity(&g.m_view);
+     mat4_identity(&g.m_proj);
      g.rs[D3DRS_ZENABLE]            = 1;
 +    g.rs[D3DRS_SHADEMODE]          = 2;
      g.rs[D3DRS_ZWRITEENABLE]       = 1;
-@@ -1023,2 +1343,5 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+     g.rs[D3DRS_ZFUNC]              = D3DCMP_LESSEQUAL;
      g.rs[D3DRS_ALPHABLENDENABLE]   = 0;
 +    g.rs[D3DRS_ALPHATESTENABLE]    = 0;
 +    g.rs[D3DRS_ALPHAFUNC]          = D3DCMP_ALWAYS;
 +    g.rs[D3DRS_ALPHAREF]           = 0;
      g.rs[D3DRS_SRCBLEND]           = D3DBLEND_SRCALPHA;
+     g.rs[D3DRS_DESTBLEND]          = D3DBLEND_INVSRCALPHA;
+     g.rs[D3DRS_CULLMODE]           = D3DCULL_CCW;
+diff --git a/src/d3d/d3d8_present.inc b/src/d3d/d3d8_present.inc
+new file mode 100644
+index 0000000..38b3006
+--- /dev/null
++++ b/src/d3d/d3d8_present.inc
+@@ -0,0 +1,166 @@
++/* Native output presentation. Internal game pixels/depth never resize with the
++ * Cocoa drawable; only the final image is scaled. Included after D3DGL globals. */
++static struct {
++    GLuint fbo[2], color[2], depth;
++    int width, height;
++    GLuint program, vao;
++    GLint u_source,u_size,u_sharpness;
++    const char *filter_source;
++    float sharpness;
++} g_output;
++
++GLuint xbox_D3D8GLBackBuffer(unsigned index)
++{ return index < 2 ? g_output.fbo[index] : 0; }
++
++int xbox_D3D8GLSetPresentationFilter(const char *source,float strength)
++{
++    if (!source || !(strength>=0 && strength<=1)) return 0;
++    g_output.filter_source=source;
++    if (strength>0 && !g_output.program) {
++        const char *vs="#version 330 core\n out vec2 v_uv; void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);v_uv=p;gl_Position=vec4(p*2.0-1.0,0,1);}";
++        GLuint shaders[2]={glCreateShader(GL_VERTEX_SHADER),glCreateShader(GL_FRAGMENT_SHADER)};
++        const char *sources[2]={vs,source};
++        int valid=1;
++        for(unsigned i=0;i<2;++i) {
++            glShaderSource(shaders[i],1,&sources[i],NULL);glCompileShader(shaders[i]);
++            GLint success;glGetShaderiv(shaders[i],GL_COMPILE_STATUS,&success);
++            if(!success) { char log[2048];glGetShaderInfoLog(shaders[i],sizeof(log),NULL,log);fprintf(stderr,"[d3d8_gl] presentation shader: %s\n",log);valid=0; }
++        }
++        GLuint program=glCreateProgram();
++        if(valid) {
++            glAttachShader(program,shaders[0]);glAttachShader(program,shaders[1]);glLinkProgram(program);
++            GLint success;glGetProgramiv(program,GL_LINK_STATUS,&success);valid=success;
++            if(!success) { char log[2048];glGetProgramInfoLog(program,sizeof(log),NULL,log);fprintf(stderr,"[d3d8_gl] presentation link: %s\n",log); }
++        }
++        glDeleteShader(shaders[0]);glDeleteShader(shaders[1]);
++        if(!valid) { glDeleteProgram(program);return 0; }
++        g_output.program=program;glGenVertexArrays(1,&g_output.vao);
++        g_output.u_source=glGetUniformLocation(program,"u_source");
++        g_output.u_size=glGetUniformLocation(program,"u_source_size");
++        g_output.u_sharpness=glGetUniformLocation(program,"u_sharpness");
++    }
++    g_output.sharpness=strength;
++    fprintf(stderr,"[d3d8_gl] output filter %s (strength%.2f)\n",strength>0?"bounded sharpening":"bilinear",strength);
++    return 1;
++}
++
++static void filtered_output(int x,int y,int width,int height)
++{
++    GLint program,vao,active,texture,sampler,viewport[4],polygon[2];
++    const GLenum states[]={GL_BLEND,GL_DEPTH_TEST,GL_STENCIL_TEST,GL_CULL_FACE,GL_RASTERIZER_DISCARD,GL_COLOR_LOGIC_OP,GL_FRAMEBUFFER_SRGB};
++    GLboolean enabled[sizeof(states)/sizeof(*states)];
++    for(unsigned i=0;i<sizeof(states)/sizeof(*states);++i){enabled[i]=glIsEnabled(states[i]);glDisable(states[i]);}
++    glGetIntegerv(GL_CURRENT_PROGRAM,&program);glGetIntegerv(GL_VERTEX_ARRAY_BINDING,&vao);
++    glGetIntegerv(GL_ACTIVE_TEXTURE,&active);glGetIntegerv(GL_VIEWPORT,viewport);
++    glGetIntegerv(GL_POLYGON_MODE,polygon);glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
++    glActiveTexture(GL_TEXTURE0);glGetIntegerv(GL_TEXTURE_BINDING_2D,&texture);glGetIntegerv(GL_SAMPLER_BINDING,&sampler);
++    glBindTexture(GL_TEXTURE_2D,g_output.color[0]);glBindSampler(0,0);
++    glUseProgram(g_output.program);glBindVertexArray(g_output.vao);glViewport(x,y,width,height);
++    glUniform1i(g_output.u_source,0);
++    glUniform2f(g_output.u_size,(float)g.backbuf_w,(float)g.backbuf_h);
++    glUniform1f(g_output.u_sharpness,g_output.sharpness);
++    glDrawArrays(GL_TRIANGLES,0,3);
++    glUseProgram(program);glBindVertexArray(vao);glViewport(viewport[0],viewport[1],viewport[2],viewport[3]);
++    glBindSampler(0,sampler);glBindTexture(GL_TEXTURE_2D,texture);glActiveTexture(active);
++    glPolygonMode(GL_FRONT_AND_BACK,polygon[0]);
++    for(unsigned i=0;i<sizeof(states)/sizeof(*states);++i)if(enabled[i])glEnable(states[i]);
++}
++
++static int init_output_buffers(void)
++{
++    if (g.backbuf_w > 4096 || g.backbuf_h > 4096) return 0;
++    GLint texture, renderbuffer;
++    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
++    glGetIntegerv(GL_RENDERBUFFER_BINDING, &renderbuffer);
++    glGenFramebuffers(2, g_output.fbo);
++    glGenTextures(2, g_output.color);
++    glGenRenderbuffers(1, &g_output.depth);
++    glBindRenderbuffer(GL_RENDERBUFFER, g_output.depth);
++    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, g.backbuf_w, g.backbuf_h);
++    int valid=1;
++    for (unsigned i=0;i<2;++i) {
++        glBindTexture(GL_TEXTURE_2D, g_output.color[i]);
++        glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,g.backbuf_w,g.backbuf_h,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
++        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
++        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
++        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
++        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
++        glBindFramebuffer(GL_FRAMEBUFFER,g_output.fbo[i]);
++        glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,g_output.color[i],0);
++        if (!i) glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,GL_RENDERBUFFER,g_output.depth);
++        glDrawBuffer(GL_COLOR_ATTACHMENT0); glReadBuffer(GL_COLOR_ATTACHMENT0);
++        if (glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE) valid=0;
++        glClearColor(0,0,0,1);
++        glClear(GL_COLOR_BUFFER_BIT | (i?0:GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT));
++    }
++    glBindTexture(GL_TEXTURE_2D,texture); glBindRenderbuffer(GL_RENDERBUFFER,renderbuffer);
++    glBindFramebuffer(GL_FRAMEBUFFER,g_output.fbo[0]);
++    return valid;
++}
++
++/* Caller is Cocoa main and owns the recursive native device lock. Workers use
++ * only these cached pixel dimensions, never SDL window/view APIs. */
++static void refresh_output_size(void)
++{
++    if (!g.window) return;
++    int width=0,height=0;
++    SDL_GL_GetDrawableSize(g.window,&width,&height);
++    if (width!=g_output.width || height!=g_output.height) {
++#ifdef __APPLE__
++        if (g_cgl) CGLUpdateContext(g_cgl);
++#endif
++        g_output.width=width; g_output.height=height;
++    }
++}
++
++static void output_event(const SDL_Event *event)
++{
++    if (event->type!=SDL_KEYDOWN || event->key.repeat ||
++        event->key.windowID!=SDL_GetWindowID(g.window)) return;
++    SDL_Keycode key=event->key.keysym.sym;
++    SDL_Keymod mods=(SDL_Keymod)event->key.keysym.mod;
++    if (key==SDLK_F10 && g_output.filter_source) {
++        if (!xbox_D3D8GLSetPresentationFilter(g_output.filter_source,g_output.sharpness>0?0:.25f))
++            fprintf(stderr,"[d3d8_gl] output filter toggle failed\n");
++    }
++    if (key==SDLK_F11 || (key==SDLK_f && (mods&KMOD_GUI) && (mods&KMOD_CTRL))) {
++        Uint32 mode=SDL_GetWindowFlags(g.window)&SDL_WINDOW_FULLSCREEN_DESKTOP;
++        if (SDL_SetWindowFullscreen(g.window,mode?0:SDL_WINDOW_FULLSCREEN_DESKTOP)<0)
++            fprintf(stderr,"[d3d8_gl] fullscreen toggle failed: %s\n",SDL_GetError());
++        refresh_output_size();
++    }
++}
++
++/* Also exported for a focused GPU readback before the window swap. This draws
++ * only the actual game image. Preserve every GL state changed by presentation. */
++void xbox_D3D8GLPresentImage(void)
++{
++    if (g_output.width<=0 || g_output.height<=0) return;
++    GLint read_fbo,draw_fbo,read_buffer,draw_buffer;
++    GLfloat clear[4]; GLboolean mask[4],scissor=glIsEnabled(GL_SCISSOR_TEST);
++    GLboolean discard=glIsEnabled(GL_RASTERIZER_DISCARD),srgb=glIsEnabled(GL_FRAMEBUFFER_SRGB);
++    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&read_fbo);
++    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw_fbo);
++    glGetIntegerv(GL_READ_BUFFER,&read_buffer); glGetIntegerv(GL_DRAW_BUFFER,&draw_buffer);
++    glGetFloatv(GL_COLOR_CLEAR_VALUE,clear); glGetBooleanv(GL_COLOR_WRITEMASK,mask);
++    glDisable(GL_SCISSOR_TEST); glDisable(GL_RASTERIZER_DISCARD); glDisable(GL_FRAMEBUFFER_SRGB); glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
++    /* Front-surface reads see the last fully presented image at game size. */
++    glBindFramebuffer(GL_READ_FRAMEBUFFER,g_output.fbo[0]); glReadBuffer(GL_COLOR_ATTACHMENT0);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,g_output.fbo[1]); glDrawBuffer(GL_COLOR_ATTACHMENT0);
++    glBlitFramebuffer(0,0,g.backbuf_w,g.backbuf_h,0,0,g.backbuf_w,g.backbuf_h,GL_COLOR_BUFFER_BIT,GL_NEAREST);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0); glDrawBuffer(GL_BACK);
++    glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT);
++    int width=g_output.width,height=(int)((int64_t)width*g.backbuf_h/g.backbuf_w);
++    if (height>g_output.height) { height=g_output.height; width=(int)((int64_t)height*g.backbuf_w/g.backbuf_h); }
++    int x=(g_output.width-width)/2,y=(g_output.height-height)/2;
++    if (width>0 && height>0) {
++        if(g_output.sharpness>0)filtered_output(x,y,width,height);
++        else glBlitFramebuffer(0,0,g.backbuf_w,g.backbuf_h,x,y,x+width,y+height,GL_COLOR_BUFFER_BIT,GL_LINEAR);
++    }
++    glBindFramebuffer(GL_READ_FRAMEBUFFER,read_fbo); glReadBuffer(read_buffer);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,draw_fbo); glDrawBuffer(draw_buffer);
++    glClearColor(clear[0],clear[1],clear[2],clear[3]); glColorMask(mask[0],mask[1],mask[2],mask[3]);
++    if(scissor)glEnable(GL_SCISSOR_TEST);
++    if(discard)glEnable(GL_RASTERIZER_DISCARD);
++    if(srgb)glEnable(GL_FRAMEBUFFER_SRGB);
++}

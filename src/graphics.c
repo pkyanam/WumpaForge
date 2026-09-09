@@ -2,8 +2,11 @@
  * Compiled host SDK replacements serialize GPU/resource access across game
  * threads; SDL window creation and event handling stay on the Cocoa main thread. */
 #include "d3d/d3d8_xbox.h"
+#include "presentation_filter.h"
 #include <SDL.h>
 #include <epoxy/gl.h>
+extern GLuint xbox_D3D8GLBackBuffer(unsigned index);
+extern int xbox_D3D8GLSetPresentationFilter(const char *source, float strength);
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -148,6 +151,18 @@ void sub_000FD6E0(void)
         fprintf(stderr, "[wrath graphics] native CreateDevice failed: 0x%08X\n", (unsigned)result);
         finish(24, result < 0 ? (uint32_t)result : (uint32_t)D3DERR_INVALIDCALL);
         return;
+    }
+    const char *sharpness=getenv("WRATH_SHARPNESS");
+    float strength=0;
+    if (sharpness && *sharpness) {
+        char *end=NULL; strength=strtof(sharpness,&end);
+        if (!end || *end || !isfinite(strength) || strength<0 || strength>1) {
+            fprintf(stderr,"[wrath graphics] WRATH_SHARPNESS must be a number in0..1; using bilinear output\n");
+            strength=0;
+        }
+    }
+    if (!xbox_D3D8GLSetPresentationFilter(wrath_presentation_filter_glsl,strength)) {
+        fprintf(stderr,"[wrath graphics] presentation filter initialization failed\n");abort();
     }
     s_depth_available = pp.EnableAutoDepthStencil != 0;
     s_width = pp.BackBufferWidth;
@@ -591,7 +606,7 @@ static void capture_frame(uint32_t frame)
     glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING,&old_pack); glGetIntegerv(GL_PACK_ALIGNMENT,&old_alignment);
     glGetIntegerv(GL_PACK_ROW_LENGTH,&old_row); glGetIntegerv(GL_PACK_SKIP_ROWS,&old_skip_rows);
     glGetIntegerv(GL_PACK_SKIP_PIXELS,&old_skip_pixels);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER,0); glReadBuffer(GL_BACK);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,xbox_D3D8GLBackBuffer(0)); glReadBuffer(GL_COLOR_ATTACHMENT0);
     glBindBuffer(GL_PIXEL_PACK_BUFFER,0); glPixelStorei(GL_PACK_ALIGNMENT,4);
     glPixelStorei(GL_PACK_ROW_LENGTH,0); glPixelStorei(GL_PACK_SKIP_ROWS,0); glPixelStorei(GL_PACK_SKIP_PIXELS,0);
     glReadPixels(0,0,s_width,s_height,GL_BGRA,GL_UNSIGNED_BYTE,pixels);
@@ -1480,18 +1495,34 @@ static HRESULT draw_vertices_data_fetch(uint32_t type, uint32_t count, const voi
     }
     float fog_parameters[2],fog_color[4];
     int fog_mode=shader_fog_parameters(fog_parameters);
-    if (fog_mode && (s_fvf&0xE)==D3DFVF_XYZRHW)
-        shader_error("fixed fog", "transformed FVF fog requires original SDK102850 microprogram distance");
     /* Original108000 selects specular alpha for tableNONE, otherwise radial
      * or signed planar view-space distance. Physical c57 is SET_FOG_PLANE. */
     int fog_distance=read32(0x10EF64)==0?0:read32(0x10EF74)?1:2;
+    /* Original102850 selects SDK microcode: tableNONE uses specular alpha;
+     * affine projection (device flag2) uses inputZ, otherwise RCP inputRHW.
+     * FEA20 derives flag2 from projection[3,7,11]==0 and projection[15]==1. */
+    if (fog_mode && (s_fvf&0xE)==D3DFVF_XYZRHW && read32(0x10EF64)!=0)
+        fog_distance=(read32(GUEST_DEVICE+8)&2)?4:3;
     shader_rgba(read32(0x10EFF4),fog_color);
     extern void xbox_D3D8GLSetFixedFog(int,int,const float *,const float *,const float *);
     xbox_D3D8GLSetFixedFog(fog_mode,fog_distance,fog_parameters,s_vertex_constants[57],fog_color);
     apply_fixed_transforms();
     if ((s_fvf & 0xE) == D3DFVF_XYZRHW) {
         if (stride < 16 || !s_viewport.Width || !s_viewport.Height) { free(converted); return D3DERR_INVALIDCALL; }
-        if (!converted) {
+        if (fog_mode && fog_distance>=3) {
+            /* Preserve the original fog input before screen-to-clip conversion
+             * overwrites Z/RHW. A trailing float is native staging only. */
+            uint32_t native_stride=stride+4;
+            void *with_fog=malloc((size_t)count*native_stride);
+            if (!with_fog) { free(converted); return (HRESULT)0x8007000E; }
+            for (unsigned i=0;i<count;++i) {
+                uint8_t *dst=(uint8_t *)with_fog+i*native_stride;
+                const uint8_t *src=(const uint8_t *)vertices+i*stride;
+                memcpy(dst,src,stride);
+                memcpy(dst+stride,src+(fog_distance==3?12:8),4);
+            }
+            free(converted);converted=with_fog;stride=native_stride;
+        } else if (!converted) {
             converted = malloc((size_t)count * stride);
             if (!converted) return (HRESULT)0x8007000E;
             memcpy(converted, vertices, (size_t)count * stride);
@@ -1602,9 +1633,9 @@ void sub_000FEF20(void) /* SetRenderTarget(color,depth), ret8. NULL color keeps 
         HRESULT result = prepare_texture_target(r);
         if (result < 0) { finish(8,(uint32_t)result); return; }
     }
-    glBindFramebuffer(GL_FRAMEBUFFER,window ? 0 : r->target_fbo);
-    glDrawBuffer(window ? GL_BACK : GL_COLOR_ATTACHMENT0);
-    glReadBuffer(window ? GL_BACK : GL_COLOR_ATTACHMENT0);
+    glBindFramebuffer(GL_FRAMEBUFFER,window ? xbox_D3D8GLBackBuffer(0) : r->target_fbo);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
     s_target_width=r->width; s_target_height=r->height;
     write32(GUEST_DEVICE+0x2070,color); write32(GUEST_DEVICE+0x2074,depth);
     s_depth_available=depth!=0;
@@ -1689,8 +1720,8 @@ static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
         glGetIntegerv(GL_PACK_ROW_LENGTH, &old_row);
         glGetIntegerv(GL_PACK_SKIP_ROWS, &old_rows);
         glGetIntegerv(GL_PACK_SKIP_PIXELS, &old_pixels);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, r->target_fbo);
-        glReadBuffer(r->framebuffer ? r->framebuffer : GL_COLOR_ATTACHMENT0); glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, r->framebuffer ? xbox_D3D8GLBackBuffer(r->framebuffer==GL_FRONT) : r->target_fbo);
+        glReadBuffer(GL_COLOR_ATTACHMENT0); glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         glPixelStorei(GL_PACK_ALIGNMENT, 4); glPixelStorei(GL_PACK_ROW_LENGTH, 0);
         glPixelStorei(GL_PACK_SKIP_ROWS, 0); glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
         glReadPixels(0, 0, r->width, r->height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
@@ -1808,9 +1839,9 @@ static HRESULT pixels_to_framebuffer(struct Resource *destination, const uint32_
     glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     HRESULT result = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE ? 0 : D3DERR_INVALIDCALL;
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination->target_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination->framebuffer ? xbox_D3D8GLBackBuffer(destination->framebuffer==GL_FRONT) : destination->target_fbo);
     GLint old_draw_buffer; glGetIntegerv(GL_DRAW_BUFFER, &old_draw_buffer);
-    glDrawBuffer(destination->framebuffer ? destination->framebuffer : GL_COLOR_ATTACHMENT0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
     if (result >= 0) {
         glDisable(GL_SCISSOR_TEST);
         glBlitFramebuffer(0, 0, width, height, x, destination->height - y,
@@ -2215,6 +2246,7 @@ static void test_shader_bridge(void)
 #include "../tools/test_shader_constant_mode.inc"
 #include "../tools/test_native_fog.inc"
 #include "../tools/test_fixed_fog.inc"
+#include "../tools/test_transformed_fog.inc"
 #include "../tools/test_dot_reflection.inc"
 #include "../tools/test_mirror_once.inc"
 #include "../tools/test_linear_bgra.inc"
@@ -2517,13 +2549,16 @@ int main(void)
     ref[0] = back; call(0x103AD0, ref, 1); assert(g_eax == 0 && resource(back));
     uint32_t swap[] = {0};
     GLuint capture_pbo; glGenBuffers(1,&capture_pbo); glBindBuffer(GL_PIXEL_PACK_BUFFER,capture_pbo);
-    glBufferData(GL_PIXEL_PACK_BUFFER,16,NULL,GL_STREAM_READ); glReadBuffer(GL_FRONT);
+    glBufferData(GL_PIXEL_PACK_BUFFER,16,NULL,GL_STREAM_READ);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,xbox_D3D8GLBackBuffer(1)); glReadBuffer(GL_COLOR_ATTACHMENT0);
     glPixelStorei(GL_PACK_ROW_LENGTH,17); glPixelStorei(GL_PACK_SKIP_ROWS,2);
     glPixelStorei(GL_PACK_SKIP_PIXELS,3); glPixelStorei(GL_PACK_ALIGNMENT,8);
     call(0x100C40, swap, 1);
     GLint capture_pack; glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING,&capture_pack); assert((GLuint)capture_pack==capture_pbo);
-    glGetIntegerv(GL_READ_BUFFER,&capture_pack); assert(capture_pack==GL_FRONT);
-    glBindBuffer(GL_PIXEL_PACK_BUFFER,0); glDeleteBuffers(1,&capture_pbo); glReadBuffer(GL_BACK);
+    glGetIntegerv(GL_READ_BUFFER,&capture_pack); assert(capture_pack==GL_COLOR_ATTACHMENT0);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&capture_pack); assert((GLuint)capture_pack==xbox_D3D8GLBackBuffer(1));
+    glBindBuffer(GL_PIXEL_PACK_BUFFER,0); glDeleteBuffers(1,&capture_pbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,xbox_D3D8GLBackBuffer(0)); glReadBuffer(GL_COLOR_ATTACHMENT0);
     glGetIntegerv(GL_PACK_ROW_LENGTH,&capture_pack); assert(capture_pack==17);
     glGetIntegerv(GL_PACK_SKIP_ROWS,&capture_pack); assert(capture_pack==2);
     glGetIntegerv(GL_PACK_SKIP_PIXELS,&capture_pack); assert(capture_pack==3);
@@ -2557,6 +2592,7 @@ int main(void)
     test_shader_constant_mode();
     test_native_fog();
     test_fixed_fog();
+    test_transformed_fog();
     test_dot_reflection();
     test_mirror_once();
     test_linear_bgra();
