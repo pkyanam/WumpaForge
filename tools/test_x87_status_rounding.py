@@ -28,6 +28,8 @@ class X87StatusRounding(unittest.TestCase):
 RECOMP_TLS double g_fp_stack[8];
 RECOMP_TLS int g_fp_top, g_fp_cmp;
 RECOMP_TLS uint16_t g_fp_control_word;
+RECOMP_TLS uint16_t g_fp_status_word;
+RECOMP_TLS uint8_t g_fp_empty_mask;
 #define fp_top() g_fp_stack[g_fp_top]
 static double guest_round(double value, unsigned rc) {
     g_fp_top=3; g_fp_stack[3]=value; g_fp_control_word=0x37f|(rc<<10);

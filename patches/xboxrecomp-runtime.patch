@@ -864,7 +864,7 @@ index e9b6344..4bec709 100644
  #include <stdint.h>
  #include <stdlib.h>
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index fe24fdc..8501b8c 100644
+index fe24fdc..854dc7a 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -15,6 +15,14 @@
@@ -903,7 +903,16 @@ index fe24fdc..8501b8c 100644
      }
      return 0;
  }
-@@ -984,6 +997,14 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -770,6 +783,8 @@ RECOMP_TLS int g_fp_top = 0;
+  * rounds to nearest, which is what the CRT expects before _control87. */
+ RECOMP_TLS uint16_t g_fp_control_word = 0x037Fu;
+ RECOMP_TLS int g_fp_cmp = 0;
++RECOMP_TLS uint16_t g_fp_status_word = 0;
++RECOMP_TLS uint8_t g_fp_empty_mask = 0xFFu;
+ 
+ /* Defined below, with the other guest registers. */
+ extern RECOMP_TLS uint32_t g_ebp;
+@@ -984,6 +999,14 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
      DWORD old_protect;
      const uint8_t *xbe = (const uint8_t *)xbe_data;
  
@@ -918,7 +927,7 @@ index fe24fdc..8501b8c 100644
      if (g_memory_base) {
          fprintf(stderr, "xbox_MemoryLayoutInit: already initialized\n");
          return FALSE;
-@@ -1033,6 +1054,16 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1033,6 +1056,16 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       * Windows 11 where low addresses are often reserved), try page-aligned
       * addresses upward until we find a free region.
       */
@@ -935,7 +944,7 @@ index fe24fdc..8501b8c 100644
      {
          static const uintptr_t try_bases[] = {
              XBOX_BASE_ADDRESS,      /* 0x00010000 - original Xbox address */
-@@ -1043,7 +1074,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1043,7 +1076,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
              0,                      /* sentinel - let OS choose */
          };
  
@@ -944,7 +953,7 @@ index fe24fdc..8501b8c 100644
              LPVOID hint = try_bases[i] ? (LPVOID)try_bases[i] : NULL;
              g_memory_base = MapViewOfFileEx(
                  g_mapping_handle,
-@@ -1064,6 +1095,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1064,6 +1097,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          }
      }
  
@@ -953,7 +962,7 @@ index fe24fdc..8501b8c 100644
      if (!g_memory_base) {
          fprintf(stderr, "xbox_MemoryLayoutInit: failed to map base view (%zu KB)\n",
                  g_memory_size / 1024);
-@@ -1229,6 +1262,47 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1229,6 +1264,47 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                  sections_loaded, num_sections, total_bytes);
      }
  
@@ -1001,7 +1010,7 @@ index fe24fdc..8501b8c 100644
      /*
       * Parse the kernel thunk table address from the XBE header.
       * The XBE stores KernelImageThunkAddress at offset 0x0158, XOR-encrypted.
-@@ -1338,7 +1412,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1338,7 +1414,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
           * only worked while page zero was mapped. Pointing at real zeroed
           * memory says the same thing to the title and survives that page being
           * unmapped, which is what makes a genuine null dereference visible. */
@@ -1010,7 +1019,7 @@ index fe24fdc..8501b8c 100644
          memset(XBOX_VA(FAKE_PRCB_VA), 0, 0x400);
          MEM32_INIT(XBOX_FS_BASE + 0x20, FAKE_PRCB_VA);
          #undef FAKE_PRCB_VA
-@@ -1346,11 +1420,11 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1346,11 +1422,11 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          /*
           * fs:[0x28] - Thread local storage / RW engine context.
           * The RW engine reads [fs:[0x28] + 0x28] to get a pointer
@@ -1026,7 +1035,7 @@ index fe24fdc..8501b8c 100644
  
          MEM32_INIT(XBOX_FS_BASE + 0x28, FAKE_TLS_VA);
          /* TLS[0x28] = pointer to RW data area */
-@@ -1384,8 +1458,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+@@ -1384,8 +1460,8 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
           * Every guest thread therefore shares LastError. Give this a per-thread
           * allocation when a title is observed to care.
           */
@@ -1037,7 +1046,7 @@ index fe24fdc..8501b8c 100644
          {
              DWORD tls_dir_va = *(const DWORD *)(xbe + XBE_TLS_ADDR_OFFSET);
  
-@@ -1855,6 +1929,15 @@ void xbox_MemoryLayoutShutdown(void)
+@@ -1855,6 +1931,15 @@ void xbox_MemoryLayoutShutdown(void)
          CloseHandle(g_mapping_handle);
          g_mapping_handle = NULL;
      }
@@ -1053,7 +1062,7 @@ index fe24fdc..8501b8c 100644
      fprintf(stderr, "xbox_MemoryLayoutShutdown: released\n");
  }
  
-@@ -1917,38 +2000,45 @@ ptrdiff_t xbox_GetMemoryOffset(void)
+@@ -1917,38 +2002,45 @@ ptrdiff_t xbox_GetMemoryOffset(void)
  
  /* ── Dynamic heap allocator ────────────────────────────────
   *
@@ -1113,7 +1122,7 @@ index fe24fdc..8501b8c 100644
  
  /* A TIB and TLS block for a newly spawned guest thread.
   *
-@@ -1991,6 +2081,7 @@ uint32_t xbox_AllocThreadTib(void)
+@@ -1991,6 +2083,7 @@ uint32_t xbox_AllocThreadTib(void)
      memset(TIB_VA(thread_data), 0, g_tls_thread_size);
  
      *(uint32_t *)TIB_VA(tib + 0x00) = 0xFFFFFFFFu;   /* own SEH chain    */
@@ -1121,7 +1130,7 @@ index fe24fdc..8501b8c 100644
      *(uint32_t *)TIB_VA(block)      = thread_data;   /* slot 0           */
      *(uint32_t *)TIB_VA(tib + 0x04) = block + total; /* fs:[4], see above*/
  
-@@ -2002,7 +2093,8 @@ uint32_t xbox_AllocThreadStack(void)
+@@ -2002,7 +2095,8 @@ uint32_t xbox_AllocThreadStack(void)
  {
      uint32_t base;
  
@@ -1131,7 +1140,7 @@ index fe24fdc..8501b8c 100644
          return 0;
      }
  
-@@ -2021,9 +2113,10 @@ uint32_t xbox_AllocThreadStack(void)
+@@ -2021,9 +2115,10 @@ uint32_t xbox_AllocThreadStack(void)
       * for small ones.
       */
      base = xbox_HeapAlloc(XBOX_THREAD_STACK_SIZE, 4096);
@@ -1144,7 +1153,7 @@ index fe24fdc..8501b8c 100644
  
      /* Top of the slice, 16-byte aligned, growing down. */
      return base + XBOX_THREAD_STACK_SIZE - 16;
-@@ -2048,8 +2141,7 @@ void xbox_FreeThreadStack(uint32_t stack_top)
+@@ -2048,8 +2143,7 @@ void xbox_FreeThreadStack(uint32_t stack_top)
      if (!stack_top)
          return;
      xbox_HeapFree(stack_top + 16 - XBOX_THREAD_STACK_SIZE);
@@ -1154,7 +1163,7 @@ index fe24fdc..8501b8c 100644
  }
  
  /* Bump allocator over the contiguous window mapped at XBOX_CONTIG_BASE.
-@@ -2104,42 +2196,65 @@ uint32_t xbox_ContiguousAllocatedBytes(void)
+@@ -2104,42 +2198,65 @@ uint32_t xbox_ContiguousAllocatedBytes(void)
  }
  
  
@@ -1239,7 +1248,7 @@ index fe24fdc..8501b8c 100644
          fprintf(stderr, "xbox_HeapAlloc: out of memory (requested %u, used %u/%u)\n",
                  size, g_heap_next - XBOX_HEAP_BASE,
                  (unsigned)(XBOX_HEAP_TOP - XBOX_HEAP_BASE));
-@@ -2150,10 +2265,17 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
+@@ -2150,10 +2267,17 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
              static struct { uint32_t size; int n; } hist[256];
              if (!dumped) {
                  int used = 0;
@@ -1258,7 +1267,7 @@ index fe24fdc..8501b8c 100644
                      while (j < used && hist[j].size != g_heap_blocks[i].size) j++;
                      if (j == used) {
                          if (used == 256) continue;   /* ponytail: 256 distinct sizes is plenty */
-@@ -2162,6 +2284,9 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
+@@ -2162,6 +2286,9 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
                      }
                      hist[j].n++;
                  }
@@ -1268,7 +1277,7 @@ index fe24fdc..8501b8c 100644
                  for (int j = 0; j < used; j++) {
                      if ((uint64_t)hist[j].n * hist[j].size < 1024 * 1024) continue;
                      fprintf(stderr, "  [HEAP] %d live blocks of %u bytes (%u KB)\n",
-@@ -2174,18 +2299,21 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
+@@ -2174,18 +2301,21 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
          return 0;
      }
  
@@ -1297,7 +1306,7 @@ index fe24fdc..8501b8c 100644
      g_heap_alloc_count++;
      /* Rate-limited: a debug title makes thousands of these and the log is a
       * diagnostic, not a transaction record. */
-@@ -2213,7 +2341,7 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
+@@ -2213,7 +2343,7 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
   * forward is asking about the block that contains it. Returns 0 for an address
   * this heap never handed out, which is what "not one of mine" has to look like.
   */
@@ -1306,7 +1315,7 @@ index fe24fdc..8501b8c 100644
  {
      int i;
  
-@@ -2229,12 +2357,12 @@ uint32_t xbox_HeapBlockSize(uint32_t xbox_va)
+@@ -2229,12 +2359,12 @@ uint32_t xbox_HeapBlockSize(uint32_t xbox_va)
      return 0;
  }
  
@@ -1321,7 +1330,7 @@ index fe24fdc..8501b8c 100644
      }
      frees++;
      if (frees <= 8) {
-@@ -2253,24 +2381,59 @@ void xbox_HeapFree(uint32_t xbox_va)
+@@ -2253,24 +2383,59 @@ void xbox_HeapFree(uint32_t xbox_va)
              fflush(stderr);
          }
  
@@ -1578,7 +1587,7 @@ index 0000000..7e61554
 +}
 +#endif
 diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
-index 1d37f3e..fb8eaf9 100644
+index 1d37f3e..0288e48 100644
 --- a/src/platform/win32_compat.c
 +++ b/src/platform/win32_compat.c
 @@ -15,6 +15,10 @@
@@ -1704,7 +1713,94 @@ index 1d37f3e..fb8eaf9 100644
          obj_release(o);
      return TRUE;
  }
-@@ -640,21 +714,37 @@ VOID ExitThread(DWORD exitCode)
+@@ -416,9 +490,73 @@ DWORD WaitForMultipleObjects(DWORD count, const HANDLE *handles, BOOL waitAll, D
+     return WaitForMultipleObjectsEx(count, handles, waitAll, ms, FALSE);
+ }
+ 
++/* WaitAll is one acquisition: polling individual consuming waits can lose an
++ * auto-reset event or semaphore token even when the aggregate wait times out.
++ * Hold all object locks in stable address order while checking and acquiring.
++ * Sorting a bounded stack array avoids allocation and opposite-order deadlocks.
++ * Like Win32, callers must keep handles open for the duration of the wait. */
++static DWORD wait_all_once(DWORD count, w32_object **ordered)
++{
++    for (DWORD i = 0; i < count; ++i) pthread_mutex_lock(&ordered[i]->lock);
++    DWORD result = WAIT_OBJECT_0;
++    DWORD tid = GetCurrentThreadId();
++    for (DWORD i = 0; i < count; ++i) {
++        w32_object *o = ordered[i];
++        int ready = 0;
++        switch (o->kind) {
++        case K_EVENT: ready = o->signaled; break;
++        case K_THREAD: ready = o->exited; break;
++        case K_SEM: ready = o->sem_count > 0; break;
++        case K_MUTEX: ready = !o->mtx_owner || o->mtx_owner == tid; break;
++        default: result = WAIT_FAILED; SetLastError(ERROR_INVALID_HANDLE); break;
++        }
++        if (result == WAIT_FAILED || !ready) {
++            if (result != WAIT_FAILED) result = WAIT_TIMEOUT;
++            break;
++        }
++    }
++    if (result == WAIT_OBJECT_0) {
++        for (DWORD i = 0; i < count; ++i) {
++            w32_object *o = ordered[i];
++            switch (o->kind) {
++            case K_EVENT: if (!o->manual_reset) o->signaled = 0; break;
++            case K_SEM: --o->sem_count; break;
++            case K_MUTEX: o->mtx_owner = tid; ++o->mtx_recursion; break;
++            default: break;
++            }
++        }
++    }
++    for (DWORD i = count; i > 0; --i) pthread_mutex_unlock(&ordered[i - 1]->lock);
++    return result;
++}
++
+ DWORD WaitForMultipleObjectsEx(DWORD count, const HANDLE *handles, BOOL waitAll,
+                                DWORD ms, BOOL alertable)
+ {
++    if (!count || count > MAXIMUM_WAIT_OBJECTS || !handles) {
++        SetLastError(ERROR_INVALID_PARAMETER);
++        return WAIT_FAILED;
++    }
++    w32_object *ordered[MAXIMUM_WAIT_OBJECTS];
++    if (waitAll) {
++        for (DWORD i = 0; i < count; ++i) {
++            HANDLE h = handles[i];
++            if (!h || h == INVALID_HANDLE_VALUE || h == PSEUDO_CURRENT_PROCESS ||
++                h == PSEUDO_CURRENT_THREAD) {
++                SetLastError(ERROR_INVALID_HANDLE);
++                return WAIT_FAILED;
++            }
++            DWORD j = i;
++            while (j && (uintptr_t)ordered[j - 1] > (uintptr_t)h) {
++                ordered[j] = ordered[j - 1]; --j;
++            }
++            if (j && ordered[j - 1] == (w32_object *)h) {
++                SetLastError(ERROR_INVALID_PARAMETER);
++                return WAIT_FAILED; /* duplicate object would lock twice */
++            }
++            ordered[j] = (w32_object *)h;
++        }
++    }
+     struct timespec ts;
+     int timed = (ms != INFINITE);
+     if (timed) deadline_from_ms(ms, &ts);
+@@ -428,10 +566,8 @@ DWORD WaitForMultipleObjectsEx(DWORD count, const HANDLE *handles, BOOL waitAll,
+             return WAIT_IO_COMPLETION;
+ 
+         if (waitAll) {
+-            DWORD got = 0;
+-            for (DWORD i = 0; i < count; i++)
+-                if (WaitForSingleObject(handles[i], 0) == WAIT_OBJECT_0) got++;
+-            if (got == count) return WAIT_OBJECT_0;
++            DWORD result = wait_all_once(count, ordered);
++            if (result != WAIT_TIMEOUT) return result;
+         } else {
+             for (DWORD i = 0; i < count; i++)
+                 if (WaitForSingleObject(handles[i], 0) == WAIT_OBJECT_0)
+@@ -640,21 +776,37 @@ VOID ExitThread(DWORD exitCode)
          o->signaled  = 1;
          pthread_cond_broadcast(&o->cond);
          pthread_mutex_unlock(&o->lock);
@@ -1745,7 +1841,7 @@ index 1d37f3e..fb8eaf9 100644
  DWORD ResumeThread(HANDLE h)
  {
      w32_object *o = (w32_object *)h;
-@@ -897,33 +987,69 @@ static int prot_from_page(DWORD protect)
+@@ -897,33 +1049,69 @@ static int prot_from_page(DWORD protect)
      }
  }
  
@@ -1833,7 +1929,7 @@ index 1d37f3e..fb8eaf9 100644
      return p;
  }
  
-@@ -933,6 +1059,9 @@ BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD freeType)
+@@ -933,6 +1121,9 @@ BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD freeType)
          /* Win32 MEM_RELEASE passes size 0; we can't know the length, so this
           * path is only safe when callers pass the real size. */
          if (size == 0) return TRUE;
@@ -1843,7 +1939,7 @@ index 1d37f3e..fb8eaf9 100644
          return munmap(address, size) == 0;
      }
      if (freeType & MEM_DECOMMIT)
-@@ -1139,6 +1268,17 @@ DWORD GetFileSize(HANDLE h, LPDWORD high)
+@@ -1139,6 +1330,17 @@ DWORD GetFileSize(HANDLE h, LPDWORD high)
      return (DWORD)(st.st_size & 0xFFFFFFFFu);
  }
  
@@ -1861,7 +1957,7 @@ index 1d37f3e..fb8eaf9 100644
  BOOL FlushFileBuffers(HANDLE h)
  {
      int fd = w32_handle_fd(h);
-@@ -1296,8 +1436,14 @@ static size_t view_take(const void *addr)
+@@ -1296,8 +1498,14 @@ static size_t view_take(const void *addr)
  static int anon_map_fd(const char *name)
  {
  #if defined(__APPLE__)
@@ -1878,7 +1974,7 @@ index 1d37f3e..fb8eaf9 100644
  #else
      return memfd_create(name ? name : "xbox_map", 0);
  #endif
-@@ -1340,10 +1486,22 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
+@@ -1340,10 +1548,22 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
      off_t  off = ((off_t)offHigh << 32) | offLow;
      SIZE_T len = count ? count : (o->map_size - (SIZE_T)off);
      int prot   = PROT_READ | ((access != FILE_MAP_READ) ? PROT_WRITE : 0);
@@ -1903,7 +1999,7 @@ index 1d37f3e..fb8eaf9 100644
      view_register(p, len);
      return p;
  }
-@@ -1357,6 +1515,11 @@ BOOL UnmapViewOfFile(LPCVOID baseAddr)
+@@ -1357,6 +1577,11 @@ BOOL UnmapViewOfFile(LPCVOID baseAddr)
  {
      size_t len = view_take(baseAddr);
      if (len == 0) return FALSE;

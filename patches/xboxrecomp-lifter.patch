@@ -1,5 +1,5 @@
 diff --git a/templates/runtime/recomp_types.h b/templates/runtime/recomp_types.h
-index 4cf3d79..7437e9a 100644
+index 4cf3d79..a80867e 100644
 --- a/templates/runtime/recomp_types.h
 +++ b/templates/runtime/recomp_types.h
 @@ -60,6 +60,8 @@
@@ -11,11 +11,173 @@ index 4cf3d79..7437e9a 100644
  
  /* MSVC's __forceinline -> gcc/clang equivalent on POSIX. */
  #if !defined(_MSC_VER) && !defined(__forceinline)
+@@ -244,6 +246,11 @@ extern RECOMP_TLS int g_df;
+    word has to survive a call. (g_fp_stack/g_fp_top are declared above.) */
+ extern RECOMP_TLS uint16_t g_fp_control_word;
+ extern RECOMP_TLS int g_fp_cmp;
++/* Separate x87 status from the comparison snapshot used by EFLAGS branches.
++ * TOP comes from g_fp_top. Empty bits track physical registers, with 1=empty.
++ * This does not add 80-bit arithmetic or arithmetic exception generation. */
++extern RECOMP_TLS uint16_t g_fp_status_word;
++extern RECOMP_TLS uint8_t g_fp_empty_mask;
+ 
+ /* Result of an x87 compare, in the shape the status word wants:
+  *   -1 less, 0 equal, 1 greater, 2 unordered (either operand is NaN).
+@@ -251,6 +258,23 @@ extern RECOMP_TLS int g_fp_cmp;
+  * followed by `test ah, 0x44; jp` is how this era's CRT asks "is this a NaN",
+  * and collapsing it to "equal" answers no every time. */
+ #define RECOMP_FCMP(a, b)     (((a) != (a) || (b) != (b)) ? 2 : (a) < (b) ? -1 : (a) > (b) ? 1 : 0)
++#define RECOMP_FP_COMPARE_STATUS() do { \
++    g_fp_status_word = (uint16_t)((g_fp_status_word & ~0x4700u) | \
++        (g_fp_cmp == 2 ? 0x4500u : g_fp_cmp < 0 ? 0x0100u : \
++         g_fp_cmp > 0 ? 0u : 0x4000u)); \
++} while (0)
++#define RECOMP_FP_STATUS() ((uint16_t)((g_fp_status_word & ~0x3800u) | \
++                                     ((g_fp_top & 7u) << 11)))
++static inline void recomp_fp_examine(void)
++{
++    double value = g_fp_stack[g_fp_top & 7u];
++    unsigned category = (g_fp_empty_mask & (1u << (g_fp_top & 7u))) ? 0x4100u :
++        isnan(value) ? 0x0100u : isinf(value) ? 0x0500u : value == 0 ? 0x4000u : 0x0400u;
++    /* Every nonzero finite binary64 value is normal in x87's extended range,
++     * including a binary64 subnormal loaded by FLD. C1 reports sign even empty. */
++    g_fp_status_word = (uint16_t)((g_fp_status_word & ~0x4700u) | category |
++                                 (signbit(value) ? 0x0200u : 0u));
++}
+ 
+ /* ================================================================
+  * ICALL trace ring buffer (for debugging indirect calls)
+@@ -574,6 +598,38 @@ static inline uint32_t SUB32_CF(uint32_t a, uint32_t b, int *cf) {
+  * Rotation / shift helpers
+  * ================================================================ */
+ 
++/* Operand-width rotation; counts use the x86 five-bit mask. OF is defined
++ * only when that masked count is 1. Zero count leaves both output flags alone. */
++static inline uint32_t RECOMP_ROTATE(uint32_t value, unsigned count, unsigned bits,
++                                    int right, int *cf, int *of)
++{
++    uint32_t mask = bits == 32 ? UINT32_MAX : (1u << bits) - 1u;
++    value &= mask;
++    unsigned masked = count & 31u, shift = masked & (bits - 1u);
++    uint32_t result = value;
++    if (shift) result = right ? (value >> shift) | (value << (bits - shift)) :
++                               (value << shift) | (value >> (bits - shift));
++    result &= mask;
++    if (masked) {
++        unsigned carry = right ? result >> (bits - 1u) : result & 1u;
++        if (cf) *cf = (int)carry;
++        if (of && masked == 1u)
++            *of = (int)(((result >> (bits - 1u)) ^
++                         (right ? result >> (bits - 2u) : carry)) & 1u);
++    }
++    return result;
++}
++static inline uint32_t RECOMP_SAR(uint32_t value, unsigned count, unsigned bits, int *cf)
++{
++    uint32_t mask = bits == 32 ? UINT32_MAX : (1u << bits) - 1u;
++    value &= mask;count &= 31u;
++    if (!count) return value;
++    uint32_t sign = value >> (bits - 1u);
++    if (cf) *cf = count >= bits ? (int)sign : (int)((value >> (count - 1u)) & 1u);
++    if (count >= bits) return sign ? mask : 0;
++    return (value >> count) | (sign ? mask ^ (mask >> count) : 0);
++}
++
+ static inline uint32_t ROL32(uint32_t val, int n) {
+     n &= 31;
+     return (val << n) | (val >> (32 - n));
+@@ -886,9 +942,8 @@ void recomp_abi_violation_log(uint32_t va, uint32_t ebx0, uint32_t esi0,
+  *
+  * mm0..mm7 alias the x87 stack on real hardware. Nothing here does, and
+  * nothing needs to: a title that interleaves the two calls emms between, and
+- * emms is a no-op for us. Modelling the aliasing would mean giving up the
+- * separate x87 model that the FPU work depends on, to reproduce a hazard the
+- * hardware exists to let software avoid.
++ * EMMS empties the x87 tags; the register values remain separate. MMX/x87
++ * value aliasing and MMX writes marking x87 registers valid remain unmodeled.
+  * ================================================================ */
+ 
+ #ifndef RECOMP_MMX_DEFINED
+diff --git a/tools/conformance/corpus_run.py b/tools/conformance/corpus_run.py
+index 69145dd..ef03b6d 100644
+--- a/tools/conformance/corpus_run.py
++++ b/tools/conformance/corpus_run.py
+@@ -163,6 +163,7 @@ RECOMP_TLS uint32_t g_seh_ebp, g_ebp;
+ RECOMP_TLS int g_df;   /* EFLAGS.DF: the direction the string ops walk */
+ RECOMP_TLS double g_fp_stack[8]; RECOMP_TLS int g_fp_top;
+ RECOMP_TLS uint16_t g_fp_control_word = 0x027F; RECOMP_TLS int g_fp_cmp;
++RECOMP_TLS uint16_t g_fp_status_word; RECOMP_TLS uint8_t g_fp_empty_mask = 0xFF;
+ RECOMP_TLS RecompXmm g_xmm0,g_xmm1,g_xmm2,g_xmm3,g_xmm4,g_xmm5,g_xmm6,g_xmm7;
+ RECOMP_TLS RecompMmx g_mm0,g_mm1,g_mm2,g_mm3,g_mm4,g_mm5,g_mm6,g_mm7;
+ volatile uint32_t g_icall_trace[16]; volatile uint32_t g_icall_trace_idx;
+@@ -199,7 +200,7 @@ static int g_total, g_fail;
+    recompiler's own generated code assumes. Setting that up here is the point:
+    it exercises the real calling path rather than a special one. */
+ static void enter(void) {
+-    g_fp_top = 0; g_fp_cmp = 0; g_fp_control_word = 0x027Fu;
++    g_fp_top = 0; g_fp_cmp = 0; g_fp_status_word = 0; g_fp_empty_mask = 0xFF; g_fp_control_word = 0x027Fu;
+     memset(g_fp_stack, 0, sizeof g_fp_stack);
+     g_eax = g_ecx = g_edx = g_ebx = g_esi = g_edi = 0;
+     g_seh_ebp = g_ebp = 0;
+diff --git a/tools/conformance/harness.py b/tools/conformance/harness.py
+index 0d8eece..c1eb914 100644
+--- a/tools/conformance/harness.py
++++ b/tools/conformance/harness.py
+@@ -104,6 +104,7 @@ RECOMP_TLS uint32_t g_seh_ebp, g_ebp;
+ RECOMP_TLS int g_df;   /* EFLAGS.DF: the direction the string ops walk */
+ RECOMP_TLS double g_fp_stack[8]; RECOMP_TLS int g_fp_top;
+ RECOMP_TLS uint16_t g_fp_control_word = 0x027F; RECOMP_TLS int g_fp_cmp;
++RECOMP_TLS uint16_t g_fp_status_word; RECOMP_TLS uint8_t g_fp_empty_mask = 0xFF;
+ RECOMP_TLS RecompXmm g_xmm0,g_xmm1,g_xmm2,g_xmm3,g_xmm4,g_xmm5,g_xmm6,g_xmm7;
+ RECOMP_TLS RecompMmx g_mm0,g_mm1,g_mm2,g_mm3,g_mm4,g_mm5,g_mm6,g_mm7;
+ volatile uint32_t g_icall_trace[16]; volatile uint32_t g_icall_trace_idx;
+@@ -133,7 +134,7 @@ static unsigned char l_xmm[128];
+ 
+ _LIFTED_PROLOGUE = {
+     "gpr": """    g_eax = g_in_a; g_ecx = g_in_b; g_edx = 0;""",
+-    "fpu": """    g_fp_top = 0; g_fp_control_word = 0x027Fu; g_fp_cmp = 0;
++    "fpu": """    g_fp_top = 0; g_fp_control_word = 0x027Fu; g_fp_cmp = 0; g_fp_status_word = 0; g_fp_empty_mask = 0xFF;
+ @FPMACROS@
+     memset(g_fp_stack, 0, sizeof(g_fp_stack));
+     g_eax = (uint32_t)(uintptr_t)g_scratch; g_ecx = 0; g_edx = 0;""",
+diff --git a/tools/conformance/xbe_run.py b/tools/conformance/xbe_run.py
+index 7f55de0..662c5be 100644
+--- a/tools/conformance/xbe_run.py
++++ b/tools/conformance/xbe_run.py
+@@ -284,6 +284,7 @@ RECOMP_TLS uint32_t g_eax, g_ecx, g_edx, g_esp, g_ebx, g_esi, g_edi;
+ RECOMP_TLS uint32_t g_seh_ebp, g_ebp;
+ RECOMP_TLS double g_fp_stack[8]; RECOMP_TLS int g_fp_top;
+ RECOMP_TLS uint16_t g_fp_control_word = 0x027F; RECOMP_TLS int g_fp_cmp;
++RECOMP_TLS uint16_t g_fp_status_word; RECOMP_TLS uint8_t g_fp_empty_mask = 0xFF;
+ RECOMP_TLS RecompXmm g_xmm0,g_xmm1,g_xmm2,g_xmm3,g_xmm4,g_xmm5,g_xmm6,g_xmm7;
+ volatile uint32_t g_icall_trace[16]; volatile uint32_t g_icall_trace_idx;
+ volatile uint64_t g_icall_count;
+@@ -579,10 +580,10 @@ static void run_one(uint32_t va, const uint32_t *raw, int vec, int *shown) {
+ 
+     reset_memory();
+ 
+-    g_fp_cmp = 0; g_fp_control_word = 0x027Fu;
++    g_fp_cmp = 0; g_fp_status_word = 0; g_fp_empty_mask = 0xFF; g_fp_control_word = 0x027Fu;
+     memset(g_fp_stack, 0, sizeof g_fp_stack);
+     /* one value on the x87 stack, matching the native side's fld */
+-    g_fp_top = 7; g_fp_stack[7] = g_fp_arg;
++    g_fp_top = 7; g_fp_stack[7] = g_fp_arg; g_fp_empty_mask = 0x7F;
+     g_eax = g_ecx = g_edx = g_ebx = g_esi = g_edi = 0;
+     g_seh_ebp = g_ebp = 0;
+     for (i = 3; i >= 0; i--) { sp -= 4; memcpy(sp, &args[i], 4); }
 diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
-index 468312d..d25e6c8 100644
+index 468312d..592e27b 100644
 --- a/tools/recomp/lifter.py
 +++ b/tools/recomp/lifter.py
-@@ -342,6 +342,10 @@ def _make_condition(jcc, flag_setter, flag_ops):
+@@ -254,6 +254,7 @@ FLAG_SETTERS = frozenset({
+ # this shape: "add reg, reg" to shift the top bit into CF, then jae on it.
+ CF_TRACKED = frozenset({
+     "add", "sub", "adc", "sbb", "shl", "shr", "sar",
++    "rol", "ror",
+ })
+ 
+ # Additional instructions that modify EFLAGS (tracked but handled as generic)
+@@ -342,6 +343,10 @@ def _make_condition(jcc, flag_setter, flag_ops):
      if not cond_info:
          return None
      cmp_macro, test_macro, desc = cond_info
@@ -26,7 +188,54 @@ index 468312d..d25e6c8 100644
  
      # A cmp/test that is not fused with its jcc snapshots its operands into
      # _fa/_fb (zero-extended) and _fas/_fbs (sign-extended) at the point the
-@@ -1290,7 +1294,7 @@ class Lifter:
+@@ -385,6 +390,18 @@ def _make_condition(jcc, flag_setter, flag_ops):
+     if lhs is None:
+         return None
+ 
++    if flag_setter in ("rol", "ror"):
++        if jcc in ("jb", "jnae", "jc"): return "_cf", desc
++        if jcc in ("jae", "jnb", "jnc"): return "!_cf", desc
++        if (jcc in ("jo", "jno") and len(flag_ops) > 1 and
++                flag_ops[1].type == "imm" and (flag_ops[1].imm & 31) == 1):
++            bits = (_operand_width(flag_ops[0]) or 4) * 8
++            other = "_rotate_result" if flag_setter == "rol" else f"(_rotate_result >> {bits - 2})"
++            overflow = f"(((_rotate_result >> {bits - 1}) ^ {other}) & 1u)"
++            return (overflow if jcc == "jo" else f"!{overflow}"), desc
++        # Rotation never establishes ZF/SF/PF. A multi-bit OF is undefined.
++        return None
++
+     # ── comiss/ucomiss: float comparison, sets CF/ZF/PF ──
+     if flag_setter in ("comiss", "comisd", "ucomiss", "ucomisd"):
+         def _sse_op(op):
+@@ -636,9 +653,9 @@ def _make_condition(jcc, flag_setter, flag_ops):
+         if jcc in ("jne", "jnz"):
+             return f"({lhs} != 0)", desc
+         if jcc == "js":
+-            return f"((int32_t){lhs} < 0)", desc
++            return f"({_sf_cast}{lhs} < 0)", desc
+         if jcc == "jns":
+-            return f"((int32_t){lhs} >= 0)", desc
++            return f"({_sf_cast}{lhs} >= 0)", desc
+         return None
+ 
+     # ── shld/shrd: double-precision shift, result-based ──
+@@ -1172,12 +1189,9 @@ class Lifter:
+             if len(ops) >= 2:
+                 return [f"/* bt {_fmt_operand_read(ops[0])}, {_fmt_operand_read(ops[1])} - bit test */"]
+             return [f"/* bt {insn.op_str} */"]
+-        if m == "emms":
+-            # A statement rather than a comment: emms genuinely has no
+-            # effect here (mm/x87 aliasing is not modelled), and a
+-            # comment-only lift is how the conformance suite reports a
+-            # silently dropped instruction.
+-            return ["(void)0; /* emms - empty MMX state */"]
++        if m in ("emms", "femms"):
++            # EMMS marks every physical x87 register empty without changing TOP.
++            return [f"g_fp_empty_mask = 0xFFu; /* {m}: all x87 registers empty */"]
+         if m in ("xlat", "xlatb"):
+             # AL indexes the byte table at EBX. With an address-size override,
+             # the effective offset is calculated and wrapped at 16 bits.
+@@ -1290,7 +1304,7 @@ class Lifter:
          if m in ("bsf", "bsr"):
              if len(ops) < 2:
                  self.unimplemented.setdefault(m, []).append(insn.address)
@@ -35,7 +244,7 @@ index 468312d..d25e6c8 100644
              dst = _fmt_operand_read(ops[0])
              src = _fmt_operand_read(ops[1])
              width = (_operand_width(ops[1]) or 4) * 8
-@@ -1359,11 +1363,14 @@ class Lifter:
+@@ -1359,11 +1373,14 @@ class Lifter:
          #
          # Recorded, not merely commented -- see self.unimplemented.
          self.unimplemented.setdefault(m, []).append(insn.address)
@@ -51,7 +260,36 @@ index 468312d..d25e6c8 100644
          if nops := len(ops) < 2:
              return [f"/* mov: bad operands */"]
          src = _fmt_operand_read(ops[1])
-@@ -1681,6 +1688,9 @@ class Lifter:
+@@ -1631,19 +1648,21 @@ class Lifter:
+             return ["/* sar: bad operands */"]
+         dst = _fmt_operand_read(ops[0])
+         cnt = _fmt_operand_read(ops[1])
+-        out = []
+-        if self.needs_cf:
+-            out.append(f"if ({cnt}) _cf = (int)((({dst}) >> (({cnt}) - 1)) & 1);")
+-        out.append(_fmt_operand_write(ops[0], f"(uint32_t)((int32_t){dst} >> {cnt})"))
+-        return out
++        bits = (_operand_width(ops[0]) or 4) * 8
++        carry = "&_cf" if self.needs_cf else "NULL"
++        return [_fmt_operand_write(ops[0], f"RECOMP_SAR({dst}, {cnt}, {bits}, {carry})")]
+ 
+     def _lift_rotate(self, insn, ops, m):
+         if len(ops) < 2:
+             return [f"/* {m}: bad operands */"]
+         dst = _fmt_operand_read(ops[0])
+         cnt = _fmt_operand_read(ops[1])
+-        func = "ROL32" if m == "rol" else "ROR32"
+-        return [_fmt_operand_write(ops[0], f"{func}({dst}, {cnt})")]
++        bits = (_operand_width(ops[0]) or 4) * 8
++        carry = "&_cf" if self.needs_cf else "NULL"
++        expression = f"RECOMP_ROTATE({dst}, {cnt}, {bits}, {int(m == 'ror')}, {carry}, NULL)"
++        if getattr(self, "needs_rotate_snapshot", False):
++            return [f"_rotate_result = {expression};", _fmt_operand_write(ops[0], "_rotate_result")]
++        return [_fmt_operand_write(ops[0], expression)]
+ 
+     # ── Compare / Test (standalone) ──
+ 
+@@ -1681,6 +1700,9 @@ class Lifter:
              f"_fas = (int32_t){sx}(_fa); _fbs = (int32_t){sx}(_fb);"
              f" /* {kind} {lhs}, {rhs} ({size*8}-bit) */",
          ]
@@ -61,7 +299,21 @@ index 468312d..d25e6c8 100644
          # A cmp sets the carry flag too, and sbb/adc/setc/rcl read it directly
          # rather than through _fa/_fb. Leaving CF alone here let those pick up
          # whatever an earlier instruction had left in it.
-@@ -2277,7 +2287,7 @@ class Lifter:
+@@ -2263,21 +2285,13 @@ class Lifter:
+         if not ops:
+             return [f"/* {m}: no operands */"]
+ 
+-        # emms/femms: only the x87 tag word, which is not modelled.
+-        if m in ("emms", "femms"):
+-            # A real statement, not a comment: this instruction genuinely has
+-            # no effect in this model, and the conformance suite treats a
+-            # comment-only lift as a silently dropped instruction -- which is
+-            # exactly the signal that must stay meaningful for the ones that
+-            # really are missing.
+-            return [f"(void)0; /* {m}: mm/x87 aliasing is not modelled */"]
+ 
+         dst = ops[0]
+ 
          if m in self._MMX_BINARY and len(ops) >= 2:
              a, b = src(dst), src(ops[1])
              if a is None or b is None:
@@ -70,7 +322,7 @@ index 468312d..d25e6c8 100644
              if is_mm(dst):
                  return [f"{dst.reg} = {self._MMX_BINARY[m]}({a}, {b}); /* {m} */"]
              return [f"/* TODO: {m} {insn.op_str} (dst not mm) */"]
-@@ -2291,7 +2301,7 @@ class Lifter:
+@@ -2291,7 +2305,7 @@ class Lifter:
              elif count.type == "mem":
                  cnt = f"MMX_MEM({_fmt_mem(count)}).q"
              else:
@@ -79,7 +331,7 @@ index 468312d..d25e6c8 100644
              return [f"{dst.reg} = {self._MMX_SHIFT[m]}({dst.reg}, {cnt}); /* {m} */"]
  
          # cvtps2pi / cvttps2pi: two singles in, two dwords out. The source is
-@@ -2306,20 +2316,20 @@ class Lifter:
+@@ -2306,20 +2320,20 @@ class Lifter:
                  addr = _fmt_mem(s_op)
                  lo, hi = f"MEMF({addr})", f"MEMF(({addr}) + 4)"
              else:
@@ -103,7 +355,7 @@ index 468312d..d25e6c8 100644
              return [f"{dst.reg} = MMX_PINSRW({dst.reg}, {v}, "
                      f"{ops[2].imm & 0xFF}u); /* pinsrw */"]
  
-@@ -2351,14 +2361,14 @@ class Lifter:
+@@ -2351,14 +2365,14 @@ class Lifter:
                               " /* movd */"])
                  if dst.type == "reg":
                      return [f"{dst.reg} = {ops[1].reg}.ud[0]; /* movd */"]
@@ -120,7 +372,18 @@ index 468312d..d25e6c8 100644
  
      def _lift_sse(self, insn, m, ops):
          """Translate SSE instructions to C float operations."""
-@@ -2776,9 +2786,32 @@ class Lifter:
+@@ -2758,6 +2772,10 @@ class Lifter:
+                     dst = "fp_st1()" if idx == 1 else \
+                           f"g_fp_stack[(g_fp_top + {idx}) & 7]"
+                     parts.append(f"{dst} = fp_top();")
++                    parts.append(f"g_fp_empty_mask = (uint8_t)((g_fp_empty_mask & "
++                                 f"~(1u << ((g_fp_top + {idx}) & 7u))) | "
++                                 f"(((g_fp_empty_mask >> g_fp_top) & 1u) << "
++                                 f"((g_fp_top + {idx}) & 7u)));")
+                 if m == "fstp":
+                     parts.append("fp_pop();")
+                 body = " ".join(parts) if parts else "(void)0;"
+@@ -2776,9 +2794,32 @@ class Lifter:
                  mem_acc = _smem_accessor(size)
                  int_type = {2: "int16_t", 4: "int32_t", 8: "int64_t"}.get(
                      size, "int32_t")
@@ -155,7 +418,7 @@ index 468312d..d25e6c8 100644
              return [f"/* {m} {insn.op_str} */"]
  
          if m in ("fadd", "faddp", "fsub", "fsubp", "fsubr", "fsubrp",
-@@ -2903,7 +2936,25 @@ class Lifter:
+@@ -2903,7 +2944,25 @@ class Lifter:
          if m == "fscale":
              return [f"fp_top() = ldexp(fp_top(), (int)fp_st1()); /* fscale */"]
          if m == "frndint":
@@ -182,20 +445,71 @@ index 468312d..d25e6c8 100644
          if m == "fldpi":
              return [f"fp_push(3.14159265358979323846); /* fldpi */"]
          if m == "fldl2e":
-@@ -2915,8 +2966,7 @@ class Lifter:
+@@ -2915,8 +2974,15 @@ class Lifter:
          if m == "fldln2":
              return [f"fp_push(0.69314718055994530942); /* fldln2 */"]
          if m == "ftst":
 -            return [f"g_fp_cmp = (fp_top() < 0.0) ? -1 : "
 -                    f"(fp_top() > 0.0) ? 1 : 0; /* ftst */"]
-+            return ["g_fp_cmp = RECOMP_FCMP(fp_top(), 0.0); /* ftst */"]
++            return ["g_fp_cmp = RECOMP_FCMP(fp_top(), 0.0); "
++                    "RECOMP_FP_COMPARE_STATUS(); /* ftst */"]
++        if m == "fxam":
++            return ["recomp_fp_examine(); /* fxam: class/sign/empty at current TOP */"]
++        if m in ("fnclex", "fclex"):
++            return ["g_fp_status_word &= (uint16_t)~0x80FFu; /* fnclex: preserve TOP/condition codes */"]
++        if m in ("fninit", "finit"):
++            return ["g_fp_control_word = 0x037Fu; g_fp_status_word = 0; "
++                    "g_fp_cmp = 0; g_fp_top = 0; g_fp_empty_mask = 0xFFu; /* fninit */"]
          if m == "fxch":
              # fxch st(i) swaps st0 with st(i); the bare form is st(1). Was
              # hardcoded to st1, so fxch st(2)/st(3)/st(4) (86/7/1 sites in Halo)
-@@ -3018,6 +3068,71 @@ class Lifter:
-         return [f"/* FPU: {m} {insn.op_str} */"]
+@@ -2930,7 +2996,12 @@ class Lifter:
+             i = (self._st_index(ops[-1].reg)
+                  if (ops and ops[-1].type == "reg" and ops[-1].reg) else 1)
+             dst = self._st_expr(i)
+-            return [f"{{ double _t = fp_top(); fp_top() = {dst}; {dst} = _t; }}"
++            return [f"{{ double _t = fp_top(); fp_top() = {dst}; {dst} = _t; "
++                    f"unsigned _other = (g_fp_top + {i}) & 7u; "
++                    f"unsigned _different = ((g_fp_empty_mask >> g_fp_top) ^ "
++                    f"(g_fp_empty_mask >> _other)) & 1u; "
++                    f"g_fp_empty_mask ^= (uint8_t)((_different << g_fp_top) | "
++                    f"(_different << _other)); }}"
+                     f" /* fxch {insn.op_str} */"]
+         if m in ("fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp"):
+             # Compare st0 against the operand, not always st1. `fcomp [mem]`
+@@ -2950,7 +3021,7 @@ class Lifter:
+             npop = 2 if m.endswith("pp") else (1 if m.endswith("p") else 0)
+             pops = " fp_pop();" * npop
+             return [f"g_fp_cmp = RECOMP_FCMP(fp_top(), {rhs});"
+-                    f"{pops} /* {m} {insn.op_str} */"]
++                    f" RECOMP_FP_COMPARE_STATUS();{pops} /* {m} {insn.op_str} */"]
+         if m in ("fcompi", "fcomip", "fucomi", "fucompi", "fucomip", "fcomi"):
+             # These set EFLAGS directly (CF, ZF, PF) from FPU comparison
+             # fcompi/fucompi pop st(0) after comparing; fcomi/fucomi do not
+@@ -2976,10 +3047,7 @@ class Lifter:
+             # `test ah, 0x44; jp` -- the standard isnan idiom -- reads exactly
+             # those two bits. Reporting equal for a NaN compare sends every
+             # float classification in a title down the wrong branch.
+-            status = ("(uint16_t)(((g_fp_top & 7u) << 11) |"
+-                      " (g_fp_cmp == 2 ? 0x4500u :"
+-                      " g_fp_cmp < 0 ? 0x0100u :"
+-                      " g_fp_cmp > 0 ? 0x0000u : 0x4000u))")
++            status = "RECOMP_FP_STATUS()"
+             if insn.op_str.strip() in ("ax", "eax"):
+                 # `fnstsw ax` writes the whole of AX, not just AH.
+                 return [f"eax = (eax & 0xFFFF0000u) | (uint32_t){status};"
+@@ -3015,7 +3083,79 @@ class Lifter:
+         if m == "fld1":
+             return [f"fp_push(1.0); /* fld1 */"]
  
- 
+-        return [f"/* FPU: {m} {insn.op_str} */"]
++        # Save/restore requires the original 108-byte x87 environment/register
++        # image, including exception/tag state not represented by this model.
++        # Preserve an explicit execution boundary instead of dropping the op.
++        self.unimplemented.setdefault(m, []).append(insn.address)
++        return [f"recomp_unsupported_instruction(0x{insn.address:08X}u); /* TODO: x87 {m} {insn.op_str} */"]
++
++
 +
 +def merge_flag_states(states, allow_zf=True):
 +    """Meet known predecessor states without discarding compatible snapshots.
@@ -234,6 +548,9 @@ index 468312d..d25e6c8 100644
 +def advance_flag_state(curr, state):
 +    """Pure flag transfer shared by CFG analysis and instruction emission."""
 +    m = curr.mnemonic
++    if (m in ("rol", "ror", "sar", "shl", "shr") and len(curr.operands) > 1 and
++            curr.operands[1].type == "imm" and (curr.operands[1].imm & 31) == 0):
++        return state
 +    if m in FLAG_SETTERS: return (m, list(curr.operands))
 +    if m in _FLAGS_UNDEFINED: return None
 +    if m in _EFLAGS_SETTERS: return (m, list(curr.operands))
@@ -259,12 +576,10 @@ index 468312d..d25e6c8 100644
 +        else:
 +            state = advance_flag_state(insn, state)
 +    return state
-+
-+
+ 
+ 
  def lift_basic_block(lifter, bb, flag_state=None):
-     """
-     Lift a basic block to C statements.
-@@ -3134,53 +3249,9 @@ def lift_basic_block(lifter, bb, flag_state=None):
+@@ -3134,53 +3274,9 @@ def lift_basic_block(lifter, bb, flag_state=None):
              results = lifter.lift_instruction(insns[i])
          stmts.extend(results)
  
@@ -322,7 +637,7 @@ index 468312d..d25e6c8 100644
          i += 1
  
 diff --git a/tools/recomp/translator.py b/tools/recomp/translator.py
-index 978b319..c6d4f4e 100644
+index 978b319..e185e76 100644
 --- a/tools/recomp/translator.py
 +++ b/tools/recomp/translator.py
 @@ -22,7 +22,7 @@ import struct
@@ -334,7 +649,29 @@ index 978b319..c6d4f4e 100644
                       detect_setjmp_helpers)
  
  
-@@ -914,19 +914,61 @@ class FunctionTranslator:
+@@ -138,8 +138,10 @@ def _fixup_icall_esp_save(lines):
+ FP_STACK_MACROS = [
+     "    #define fp_push(v) do { double _fp_value = (v); \\",
+     "        g_fp_top = (g_fp_top + 7u) & 7u; \\",
++    "        g_fp_empty_mask &= (uint8_t)~(1u << g_fp_top); \\",
+     "        g_fp_stack[g_fp_top] = _fp_value; } while (0)",
+-    "    #define fp_pop() (g_fp_top = (g_fp_top + 1u) & 7u)",
++    "    #define fp_pop() (g_fp_empty_mask |= (uint8_t)(1u << g_fp_top), \\",
++    "                      g_fp_top = (g_fp_top + 1u) & 7u)",
+     "    #define fp_top() g_fp_stack[g_fp_top]",
+     "    #define fp_st(i) g_fp_stack[(g_fp_top + (i)) & 7u]",
+     "    #define fp_st1() fp_st(1)",
+@@ -859,6 +861,9 @@ class FunctionTranslator:
+         # corrupts multi-word arithmetic (add/adc pairs) and the shr/adc
+         # idiom MSVC emits for odd trailing elements.
+         self.lifter.needs_cf = has_carry
++        self.lifter.needs_rotate_snapshot = any(insn.mnemonic in ("rol", "ror") for insn in instructions)
++        if self.lifter.needs_rotate_snapshot:
++            lines.append("    uint32_t _rotate_result = 0; (void)_rotate_result;")
+         self.lifter.publishes_ebp = self._func_owns_a_frame(instructions)
+ 
+         # SSE and MMX are architectural state, declared globally by the
+@@ -914,19 +919,61 @@ class FunctionTranslator:
          # whatever instruction happens to sit above it -- silently, and with a
          # perfectly plausible-looking condition.
          preds = {bb.start: set() for bb in blocks}
@@ -397,7 +734,7 @@ index 978b319..c6d4f4e 100644
          for bb in blocks:
              # Emit label if this block is a branch target
              if bb.start in label_addrs or bb.start == start:
-@@ -937,25 +979,8 @@ class FunctionTranslator:
+@@ -937,25 +984,8 @@ class FunctionTranslator:
                  # compile. The null statement costs nothing and is always valid.
                  lines.append(f"loc_{bb.start:08X}: ;")
  
@@ -425,7 +762,7 @@ index 978b319..c6d4f4e 100644
              for stmt in stmts:
                  lines.append(f"    {stmt}")
  
-@@ -1378,7 +1403,7 @@ class BatchTranslator:
+@@ -1378,7 +1408,7 @@ class BatchTranslator:
              "/**",
              f" * {_config.banner_name(getattr(self, 'title', None))}"
              f" - Recompiled Function Declarations",
@@ -434,7 +771,7 @@ index 978b319..c6d4f4e 100644
              " */",
              "",
              "#ifndef RECOMP_FUNCS_H",
-@@ -1387,23 +1412,15 @@ class BatchTranslator:
+@@ -1387,23 +1417,15 @@ class BatchTranslator:
              '#include "recomp_types.h"',
              "",
          ]
@@ -464,7 +801,7 @@ index 978b319..c6d4f4e 100644
          header_lines.extend(["", "#endif /* RECOMP_FUNCS_H */", ""])
  
          with open(header_path, "w", encoding="utf-8") as f:
-@@ -1461,8 +1478,12 @@ class BatchTranslator:
+@@ -1461,8 +1483,12 @@ class BatchTranslator:
  
          # Split translations into chunks and write .c files
          generated_files = [header_path]
@@ -479,7 +816,7 @@ index 978b319..c6d4f4e 100644
  
          # Remove chunk files a previous, larger run left behind. Projects glob
          # gen/*.c into their build, so a stale chunk keeps compiling: it still
-@@ -1485,8 +1506,8 @@ class BatchTranslator:
+@@ -1485,8 +1511,8 @@ class BatchTranslator:
                  "/**",
                  f" * {_config.banner_name(getattr(self, 'title', None))}"
                  f" - Recompiled code chunk {ci}",
@@ -490,7 +827,7 @@ index 978b319..c6d4f4e 100644
                  " */",
                  "",
                  "#define RECOMP_GENERATED_CODE",
-@@ -1541,7 +1562,7 @@ class BatchTranslator:
+@@ -1541,7 +1567,7 @@ class BatchTranslator:
                  popped = self.translator._stub_ret_bytes(addr)
                  note = (f"ret {popped}" if popped else "not detected")
                  stub_lines.append(
