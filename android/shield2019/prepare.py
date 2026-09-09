@@ -238,8 +238,9 @@ def generate_loader(registry):
           'extern int xbox_D3D8GLEnsureCurrent(void);','extern void xbox_D3D8GLEndCall(int outer);',
           'static void wumpa_execute_state(void *unused);']
     # Uniform locations apply to the program at their exact queue position.
-    # Sampler object IDs are scalar; vector/pointer setters remain flush barriers.
+    # Small uniform vectors own their copied payload; other pointers remain barriers.
     deferred=set('glEnable glDisable glDepthMask glDepthFunc glColorMask glBlendFunc glBlendFuncSeparate glBlendEquation glBlendEquationSeparate glStencilFunc glStencilFuncSeparate glStencilOp glStencilOpSeparate glStencilMask glStencilMaskSeparate glCullFace glFrontFace glPolygonMode glViewport glDepthRange glActiveTexture glBindTexture glTexParameteri glUseProgram glBindBuffer glBindFramebuffer glBindRenderbuffer glBindVertexArray glEnableVertexAttribArray glDisableVertexAttribArray glVertexAttrib4f glBindSampler glSamplerParameteri glUniform1i glUniform1f glUniform2i glUniform2f glUniform4f'.split())
+    copied_vectors={'glUniform2fv':2,'glUniform3fv':3,'glUniform4fv':4}
     wrappers=[];queue_members=[];queue_cases=[]
     for name in names:
         typedef='PFN'+name.upper()+'PROC'
@@ -285,6 +286,21 @@ def generate_loader(registry):
                          f'        command->kind={index};']
             wrappers += [f'        command->args.{name}.{arg}={arg};' for arg in arguments]
             wrappers += ['        xbox_D3D8GLEndCall(wumpa_outer); return;', '    }']
+        if name in copied_vectors:
+            components=copied_vectors[name]
+            assert result=='void' and arguments==['location','count','value']
+            index=len(queue_members)
+            queue_members += [f'        struct {{ GLint location; GLsizei count; GLfloat value[{192*components}]; }} {name};']
+            queue_cases += [f'        case {index}: wumpa_{name}(command->args.{name}.location,command->args.{name}.count,command->args.{name}.value); break;']
+            wrappers += ['    if(wumpa_defer_state() && value && count>0 && count<=192) {',
+                         '        int wumpa_outer=xbox_D3D8GLBeginStateCall();',
+                         '        if(wumpa_state_count==WUMPA_STATE_CAPACITY)wumpa_gl_flush_state();',
+                         '        WumpaStateCommand *command=&wumpa_state_queue[wumpa_state_count++];',
+                         f'        command->kind={index};',
+                         f'        command->args.{name}.location=location;',
+                         f'        command->args.{name}.count=count;',
+                         f'        memcpy(command->args.{name}.value,value,(size_t)count*{components}*sizeof(GLfloat));',
+                         '        xbox_D3D8GLEndCall(wumpa_outer); return;', '    }']
         wrappers += ['    int wumpa_outer=xbox_D3D8GLBeginCall();']
         initializer=', '.join(f'.{arg}={arg}' for arg in arguments) if arguments else '.unused=0'
         wrappers += [f'    WumpaRPC_{name} request={{ {initializer} }};',
@@ -292,7 +308,7 @@ def generate_loader(registry):
                      '    xbox_D3D8GLEndCall(wumpa_outer);']
         if result!='void':wrappers += ['    return request.result;']
         wrappers += ['}']
-    body += ['/* Exact ordered scalar calls only: no pointer lifetime or state-cache assumptions. */',
+    body += ['/* Ordered scalar calls and owned small vector payloads; no borrowed queued pointers. */',
              '#define WUMPA_STATE_CAPACITY 256', 'typedef struct { unsigned kind; union {']+queue_members+[
              '    } args; } WumpaStateCommand;',
              'static WumpaStateCommand wumpa_state_queue[WUMPA_STATE_CAPACITY];',
