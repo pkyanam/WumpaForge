@@ -39,6 +39,9 @@ int wumpa_host_start(const char *log_name)
     profile_n=snprintf(profile,sizeof(profile),"%s/trace-loading-cs",storage);
     if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
         SDL_setenv("WRATH_TRACE_LOADING_CS","1",1);
+    profile_n=snprintf(profile,sizeof(profile),"%s/trace-loading-cs-outer",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
+        SDL_setenv("WRATH_TRACE_LOADING_CS","outer",1);
     SDL_setenv("WRATH_STATE_ROOT",state,1);
     profile_n=snprintf(profile,sizeof(profile),"%s/shader-cache",storage);
     if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0){

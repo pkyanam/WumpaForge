@@ -35,8 +35,14 @@ UBSan signed-zero/NaN/reuse/change checks and the full physical GPU suite pass.
 Its final run measured51.73/52.72FPS in lighter opening windows,28.32/21.32FPS
 in heavier windows, and16.20FPS at animation686.5. Early loading still contains a
 9.95-second maximum frame. No sustained60FPS or corrected audio synchronization.
-At77% weekly used (23% remaining), new work is paused with the requested20% floor
-buffer. Latest installed source9166913; native process8695 was left running.
+The user explicitly resumed after the77% usage-buffer pause, requesting parallel
+performance/allocation work and Shield architecture research. They confirm hub
+movement and level selection, followed by endless green portal loading; no actual
+levelplay milestone is established. Indexed expansion now reuses bounded scratch
+memory, adjacent identical queued state calls are coalesced, and routine successful
+read logging uses the existing diagnostic budget. Fixtures pass; combined device
+validation is underway. Driver-threading on/off showed no useful gain and was
+removed. Direct compressed DXT upload is under isolated implementation/testing.
 Source/pixel checks do not establish crash freedom; the original heap issue remains. Android worker/main profiling is
 now separated and reports actual internal/drawable dimensions. Repeat source
 preparation passes after cleaning disposable title copies before patch replay.

@@ -231,3 +231,16 @@ worker2BF30's first lock acquisition and stops after3000 records; it does not
 change locking. Remove its marker and restart for clean performance measurements.
 The NVIDIA driver does not advertise the optional release-flush control extension;
 `no-release-flush` therefore produced no applicable optimization on this device.
+
+## Resumed Shield performance work
+
+The user reports hub movement and level selection, followed by endless green
+portal loading. This is progress beyond menus, but not a successful level load.
+See [architecture research](SHIELD-ARCHITECTURE-RESEARCH.md) for primary sources
+and the driver-threading experiment, which showed no useful gain and was removed.
+New bounded work reuses up to1MiB of indexed-draw scratch memory, skips adjacent
+identical queued state setters, and limits routine successful read diagnostics.
+Read failures and short reads remain visible. Direct DXT upload is undergoing
+physical GPU validation; do not infer level loading or60FPS from component tests.
+An external `trace-loading-cs-outer` marker captures only outer loading-worker lock
+pairs across later loads; remove it for uninstrumented measurements.

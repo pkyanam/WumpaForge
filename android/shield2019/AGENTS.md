@@ -48,3 +48,10 @@ bounds-current-report (different later scene; do not claim controlledcomparison)
 uniform-values-graphics.log (fullphysicalGPU pass), hub-crash-logcat.txt.
 Latest weeklycheck77%used (23%remaining): new work paused at buffer. Finish
 source handoff only; preserve20%remaining. All implementation agents finished.
+
+## Explicit resume authorization
+The user explicitly resumed after the77%buffer pause and requests parallel
+performance/allocation work plus primary-source Shield architecture research.
+Continue bounded work beyond the old77%buffer; preserve20%remaining and check
+before builds. The old clock deadline/pause is superseded. User reports hub
+movement and level selection, followed by endless green loading; not levelplay.
