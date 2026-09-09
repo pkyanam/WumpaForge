@@ -32,7 +32,7 @@ index ade9b08..fd38337 100644
  /* KeTickCount - exported as a data pointer, not a function */
  extern volatile ULONG xbox_KeTickCount;
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 2d996b1..2169100 100644
+index 2d996b1..2b7b232 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -26,6 +26,7 @@
@@ -417,6 +417,15 @@ index 2d996b1..2169100 100644
  }
  
  /* ── RtlRaiseException (ordinal 302) ─────────────────────
+@@ -3370,7 +3531,7 @@ static void bridge_generic_stub(void)
+ /* ══════════════════════════════════════════════════════════════════════════
+  * Wrappers for the ordinals Halo 2276's thunk table binds but the bridge did
+  * not route. Every one of these already had a working xbox_* implementation in
+- * src/kernel/*.c; only the wrapper that moves arguments off the simulated stack
++ * the C files under src/kernel; only the wrapper that moves arguments off the simulated stack
+  * was missing, so each call was silently a no-op returning 0.
+  *
+  * Guest pointers go through XBOX_TO_NATIVE, which maps NULL to NULL. Scalars
 @@ -3606,7 +3767,8 @@ static void bridge_NtResumeThread(void)
   * dereference whatever the caller happened to leave there. */
  static void bridge_ObfDereferenceObject(void)
@@ -476,6 +485,15 @@ index 2d996b1..2169100 100644
      g_eax = 0;
  }
  
+@@ -5279,7 +5456,7 @@ static uint32_t g_thunk_table_count = XBOX_KERNEL_THUNK_TABLE_SIZE;
+ /**
+  * Return the kernel thunk table address and entry count currently in effect.
+  * The address is parsed from the XBE header during memory layout init, so the
+- * values are per-title, not hardcoded. *base/*count are set to 0 if unavailable.
++ * values are per-title, not hardcoded. the base and count outputs are set to 0 if unavailable.
+  */
+ void xbox_kernel_get_thunk_address(uint32_t *xbox_va, uint32_t *count)
+ {
 diff --git a/src/kernel/kernel_file.c b/src/kernel/kernel_file.c
 index eaa98a4..aedfa7b 100644
 --- a/src/kernel/kernel_file.c
@@ -813,6 +831,63 @@ index b2a6bf1..4015777 100644
 +{
 +    return xbox_translate_path_mode(path, out, size, FALSE);
 +}
+diff --git a/src/kernel/kernel_rtl.c b/src/kernel/kernel_rtl.c
+index 9957219..1c02dec 100644
+--- a/src/kernel/kernel_rtl.c
++++ b/src/kernel/kernel_rtl.c
+@@ -427,7 +427,7 @@ static void crt_lock_trace(const char *what, PRTL_CRITICAL_SECTION guest)
+             watch_va = w ? (uint32_t)strtoul(w, NULL, 0) : 0;
+         }
+         if (watch && va == watch_va) {
+-            fprintf(stderr, "  [CSWATCH] t%-6lu %s 0x%08X\n",
++            fprintf(stderr, "  [CSWATCH] t%-6u %s 0x%08X\n",
+                     GetCurrentThreadId(), what, va);
+             xbox_guest_backtrace(8);
+             fflush(stderr);
+@@ -435,14 +435,14 @@ static void crt_lock_trace(const char *what, PRTL_CRITICAL_SECTION guest)
+     }
+ 
+     if (all) {
+-        fprintf(stderr, "  [CSTRACE] t%-6lu %-4s 0x%08X idx %d\n",
++        fprintf(stderr, "  [CSTRACE] t%-6u %-4s 0x%08X idx %d\n",
+                 GetCurrentThreadId(), what, va, idx);
+         fflush(stderr);
+         return;
+     }
+     if (idx < 0)
+         return;
+-    fprintf(stderr, "  [CSTRACE] t%-6lu %-4s lock %d\n",
++    fprintf(stderr, "  [CSTRACE] t%-6u %-4s lock %d\n",
+             GetCurrentThreadId(), what, idx);
+     fflush(stderr);
+ }
+@@ -482,7 +482,7 @@ VOID __stdcall xbox_RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSectio
+         return;
+     }
+     if (InterlockedIncrement(&g_cs_contention_reports) <= 16) {
+-        fprintf(stderr, "  [CS] thread %lu waiting on guest lock 0x%08X"
++        fprintf(stderr, "  [CS] thread %u waiting on guest lock 0x%08X"
+                         " (held by thread %lu)\n",
+                 GetCurrentThreadId(),
+                 (uint32_t)((uintptr_t)CriticalSection
+@@ -505,7 +505,7 @@ VOID __stdcall xbox_RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSectio
+                                 " 0x%08X (depth %ld)\n",
+                         slot->owner_tid, slot->owner_site, slot->depth);
+         }
+-        fprintf(stderr, "  [CS] enters=%ld leaves=%ld (outstanding %ld)\n",
++        fprintf(stderr, "  [CS] enters=%d leaves=%d (outstanding %d)\n",
+                 g_cs_enters, g_cs_leaves, g_cs_enters - g_cs_leaves);
+         xbox_guest_backtrace(10);
+         fflush(stderr);
+@@ -513,7 +513,7 @@ VOID __stdcall xbox_RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSectio
+     EnterCriticalSection(cs);
+     xbox_cs_note_owner(cs);
+     if (g_cs_contention_reports <= 16) {
+-        fprintf(stderr, "  [CS] thread %lu acquired 0x%08X\n",
++        fprintf(stderr, "  [CS] thread %u acquired 0x%08X\n",
+                 GetCurrentThreadId(),
+                 (uint32_t)((uintptr_t)CriticalSection
+                            - (uintptr_t)g_xbox_mem_offset));
 diff --git a/src/kernel/kernel_thread.c b/src/kernel/kernel_thread.c
 index 17cb31f..dd415a9 100644
 --- a/src/kernel/kernel_thread.c
