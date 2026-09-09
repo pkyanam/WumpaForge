@@ -153,8 +153,16 @@ def main():
             '        assert(depth && color[0] && color[1] && !color[2] && color[3]);\n'
             '        glDepthMask(old_depth);\n'
             '        glColorMask(old_color[0],old_color[1],old_color[2],old_color[3]);\n'
+            '        GLint old_buffer,bound;GLuint buffer;\n'
+            '        glGetIntegerv(GL_ARRAY_BUFFER_BINDING,&old_buffer);\n'
+            '        glGenBuffers(1,&buffer);glBindBuffer(GL_ARRAY_BUFFER,buffer);\n'
+            '        glGetIntegerv(GL_ARRAY_BUFFER_BINDING,&bound);assert((GLuint)bound==buffer);\n'
+            '        glBindBuffer(GL_ARRAY_BUFFER,0);glBindBuffer(GL_ARRAY_BUFFER,buffer);\n'
+            '        glDeleteBuffers(1,&buffer);\n'
+            '        glGetIntegerv(GL_ARRAY_BUFFER_BINDING,&bound);assert(bound==0);\n'
+            '        glBindBuffer(GL_ARRAY_BUFFER,(GLuint)old_buffer);\n'
             '        assert(glGetError()==GL_NO_ERROR);\n'
-            '        puts("PASS: ordered scalar GL state queue overflow and getter observation");\n'
+            '        puts("PASS: ordered scalar GL state queue overflow, getters and binding/deletion observation");\n'
             '    }')
     assert fixture.count('#include "../tools/test_multistream.inc"')==1
     fixture=fixture.replace('#include "../tools/test_multistream.inc"', '#include "test_multistream.inc"')
@@ -198,7 +206,7 @@ def generate_loader(registry):
     body=['#include <SDL.h>','#include <stdio.h>','#include <stdlib.h>','#include <string.h>','#include "epoxy/gl.h"',
           'extern int xbox_D3D8GLBeginCall(void);','extern int xbox_D3D8GLBeginStateCall(void);',
           'extern int xbox_D3D8GLEnsureCurrent(void);','extern void xbox_D3D8GLEndCall(int outer);']
-    deferred=set('glEnable glDisable glDepthMask glDepthFunc glColorMask glBlendFunc glBlendFuncSeparate glBlendEquation glBlendEquationSeparate glStencilFunc glStencilFuncSeparate glStencilOp glStencilOpSeparate glStencilMask glStencilMaskSeparate glCullFace glFrontFace glPolygonMode glViewport glDepthRange'.split())
+    deferred=set('glEnable glDisable glDepthMask glDepthFunc glColorMask glBlendFunc glBlendFuncSeparate glBlendEquation glBlendEquationSeparate glStencilFunc glStencilFuncSeparate glStencilOp glStencilOpSeparate glStencilMask glStencilMaskSeparate glCullFace glFrontFace glPolygonMode glViewport glDepthRange glActiveTexture glBindTexture glTexParameteri glUseProgram glBindBuffer glBindFramebuffer glBindRenderbuffer glBindVertexArray glEnableVertexAttribArray glDisableVertexAttribArray glVertexAttrib4f'.split())
     wrappers=[];queue_members=[];queue_cases=[]
     for name in names:
         typedef='PFN'+name.upper()+'PROC'
