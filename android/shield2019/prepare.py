@@ -32,6 +32,15 @@ def main():
     if not sdl.exists():
         with tarfile.open(deps/'sdl2.tar.gz') as archive:
             archive.extractall(deps,filter='data')
+    # Reset the one patched SDL file from the verified archive before replay;
+    # this dependency checkout is isolated to the Android build tree.
+    with tarfile.open(deps/'sdl2.tar.gz') as archive:
+        member=archive.extractfile(f'SDL-{SDL_REV}/src/video/SDL_egl.c')
+        if member is None:raise RuntimeError('Pinned SDL EGL source missing')
+        (sdl/'src/video/SDL_egl.c').write_bytes(member.read())
+    sdl_patch=HERE/'patches/sdl-egl-release.patch'
+    subprocess.run(['git','apply','--check',str(sdl_patch)],cwd=sdl,check=True)
+    subprocess.run(['git','apply',str(sdl_patch)],cwd=sdl,check=True)
     # Source copies are disposable build inputs; the original Mac checkout stays intact.
     runtime_source=OUT/'runtime/src'
     if runtime_source.is_symlink():raise RuntimeError('Unexpected runtime source symlink')
@@ -52,7 +61,11 @@ def main():
             '    SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);\n'
             '    SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);\n'
             '    SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);\n'
-            '    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);')
+            '    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);\n'
+            '    { const char *mode=getenv("WRATH_EGL_NO_RELEASE_FLUSH");\n'
+            '      SDL_GL_SetAttribute(SDL_GL_CONTEXT_RELEASE_BEHAVIOR,\n'
+            '          mode && !strcmp(mode,"1") ? SDL_GL_CONTEXT_RELEASE_BEHAVIOR_NONE\n'
+            '                                    : SDL_GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH); }')
     replace(backend,'    SDL_GL_MakeCurrent(g.window, g.glctx);\n#ifdef __APPLE__',
             '    SDL_GL_MakeCurrent(g.window, g.glctx);\n    if (!wumpa_gl_load()) return D3DERR_INVALIDCALL;\n#ifdef __APPLE__')
     replace(backend,'void xbox_D3D8GLPumpEvents(void)\n{',

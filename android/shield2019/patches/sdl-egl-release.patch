@@ -1,0 +1,38 @@
+--- a/src/video/SDL_egl.c
++++ b/src/video/SDL_egl.c
+@@ -935,8 +935,8 @@
+ 
+ SDL_GLContext SDL_EGL_CreateContext(_THIS, EGLSurface egl_surface)
+ {
+-    /* max 14 values plus terminator. */
+-    EGLint attribs[15];
++    /* max 16 values plus terminator (including release behavior). */
++    EGLint attribs[17];
+     int attr = 0;
+ 
+     EGLContext egl_context, share_context = EGL_NO_CONTEXT;
+@@ -1025,6 +1025,24 @@
+     }
+ #endif
+ 
++    /* The same context migrates under WumpaForge's mutex. Submitting its
++       command buffer on every SDK call is unnecessary; swaps, fences and
++       readbacks retain their normal flush/wait semantics. Opt-in for A/B. */
++#ifdef EGL_KHR_context_flush_control
++    {
++        const SDL_bool supported = SDL_EGL_HasExtension(_this,
++            SDL_EGL_DISPLAY_EXTENSION, "EGL_KHR_context_flush_control");
++        const SDL_bool requested = _this->gl_config.release_behavior ==
++            SDL_GL_CONTEXT_RELEASE_BEHAVIOR_NONE;
++        SDL_Log("[shield] EGL release-flush extension=%d requested_none=%d selected_none=%d",
++                supported, requested, supported && requested);
++        if (supported && requested) {
++            attribs[attr++] = EGL_CONTEXT_RELEASE_BEHAVIOR_KHR;
++            attribs[attr++] = EGL_CONTEXT_RELEASE_BEHAVIOR_NONE_KHR;
++        }
++    }
++#endif
++
+     attribs[attr++] = EGL_NONE;
+ 
+     /* Bind the API */
