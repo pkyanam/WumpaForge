@@ -103,3 +103,20 @@ loading run separately. Keep original frame pacing and audio clocks intact.
 Successful component checks do not prove a level loads or 60 FPS: root should
 verify the hub, Arctic Antics and a second first-realm level, and distinguish
 source movie frame rate from the display's 60 Hz presentation cadence.
+
+## Checked hypothesis: Android quad-precision overhead
+
+The different platform `long double` ABI is not implicated by the current code.
+The generated header declares `g_fp_stack[8]` as **double**; generated `fp_push`
+temporaries and remainder/examine helpers also use double. Transcendentals call
+`sin`, `cos`, `sqrt`, not their long-double variants. Searches of generated source,
+prepared title/runtime, and stored CPU reports found no long-double/float128 or
+`__addtf3`/`__multf3` path. `llvm-nm` on the current `libmain.so` likewise found no
+`__*tf2` or `__*tf3` symbols. This is evidence against hidden quad arithmetic here,
+not evidence of complete x87 fidelity: the header explicitly describes its
+binary64 model and absent 80-bit arithmetic/exception generation. Preserve that
+known limitation rather than describing binary64 as exact original x87.
+
+Do not mix the subsequently reported 2.3 FPS RPC-profile hub observation into the
+older CPU baseline. Profiling overhead and RPC mode require separate controlled
+measurements with the same installed binary and scene.
