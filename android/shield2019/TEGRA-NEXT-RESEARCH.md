@@ -113,3 +113,59 @@ unprofiled runs separate. Test sampler restoration, queued pointer lifetime,
 multiple programs, retained writes and lifecycle handling before game checks.
 One or two completed levels plus hub return are useful gates; they do not prove
 all levels or constant60FPS.
+
+## Follow-up: whole shader draw seam audit
+
+A deeper transitive source audit changes the earlier conservative recommendation:
+**guest-memory reads alone do not require packetizing the entire draw.** The
+whole `shader_draw` body appears suitable for synchronous owner execution with
+the adaptations below. This is a source conclusion, pending focused tests.
+
+| Path | Operations and ownership |
+| --- | --- |
+| `guest_ptr` / `read32` | Global `g_xbox_mem_offset` plus pointer arithmetic/memcpy; no guest-register TLS except when the supplied address explicitly comes from `g_esp`. |
+| `shader_program` | Shared protected shader cache/age, native GLSL generation and GL calls. No guest execution. Static GLSL buffers remain serialized by the caller's graphics mutex. |
+| `shader_adjust_texture_modes` / fog / viewport | Shared title state and ordinary guest-memory reads, no callbacks. |
+| `resource` | Protected lookup cache and paged table scan. No SDK entry or resource allocation callback. |
+| `gather_vertex_attribute` / retained variant / index lookup | Guest byte reads, bounds/generation validation, host malloc/memcpy. No SDK call, guest function or graphics acquisition. |
+| `texture_gl_name` | Optional glGenTextures for palette view, or `xbox_D3D8GLTextureName`, which only returns a host object's field. |
+| `xbox_D3D8GLApplyRenderStates` | Reads protected backend `g.rs`, invokes GL setters and pure enum conversion. No lock acquisition or event pump. |
+| Native vertex/pixel generation and dead-input proof | Host C arithmetic, output formatting and explicit input arrays. No guest dispatch, thread-local guest register dependency or callback. |
+| Shader binary cache | Host filesystem, malloc, GL; errno is consumed on the same executing thread. Directory lock is nonblocking, no callback to waiting guest. |
+| GL wrappers | Existing owner branches in BeginCall/BeginStateCall return0 and avoid the caller-held graphics mutex; EnsureCurrent checks the owner's actual context. Scalar commands and nested RPC execute in order on the owner. |
+
+The sole production caller is `draw_vertices_data_fetch`. It acquires through
+`graphics_thread()` before entering this seam. `vertex_array_commit`, texture
+uploads, title `wrath_profile_draw`, `probe_begin`, `probe_end`, converted-buffer
+free and guest `finish` stay on the original caller. The synchronous wait keeps
+its stack `VertexFetch`, indices and converted vertex array alive. Moving the
+whole enclosing caller instead would cross these additional boundaries and is
+outside this conclusion.
+
+Concrete TLS dependencies inside the seam:
+
+- `shader_error` reads `read32(g_esp)`; one rejected-secondary-fetch diagnostic
+  also does so. Capture the caller's return value before submission and provide
+  it via a scoped diagnostic override on the owner, restoring the previous
+  override afterward. Other shader setters retain their normal caller lookup.
+  Do not initialize or impersonate the entire guest register bank on the owner.
+- Backend `xbox_D3D8GLProfileDrawBegin/End` uses thread-local enable cache and
+  `g_profile_calls.draws/draw_time`. Capture the owner's before values, return the
+  exact delta, restore those values, then add the delta on the caller, as for UP
+  draw. A narrow backend callback/profile adapter can avoid exposing its struct.
+- Backend context depth is TLS but the owner-aware wrapper guards already bypass
+  it. Title `s_graphics_held` is TLS but is not read inside this seam.
+- RPC `owner` TLS is intentionally true. Native errno/driver TLS remain local to
+  the executing owner. No explicit floating-point-environment mutation was found
+  in the audited shader/gather/generator helpers.
+
+Minimal implementation: rename the body `shader_draw_impl`; retain a wrapper
+with the original signature and opt-in marker. On the caller retain/acquire the
+existing serialization token, flush preceding scalar state, capture diagnostic
+return, submit arguments and profile delta storage synchronously; merge profile
+results and return the original HRESULT. Already-owner or disabled mode executes
+inline. Preserve every early return/error, cache mutation and final GL error
+check. The callback must not expand to invoke guest/SDK/event-pump functions.
+Validate actual wrapper arguments, borrowed lifetimes, early failure, diagnostic
+override restoration and exact profile deltas with real pthread RPC, then run
+the physical shader/secondary-stream fixtures before a matched scene measurement.
