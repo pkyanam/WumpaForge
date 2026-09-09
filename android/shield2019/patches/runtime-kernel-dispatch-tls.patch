@@ -1,0 +1,15 @@
+diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
+--- a/src/kernel/kernel_bridge.c
++++ b/src/kernel/kernel_bridge.c
+@@ -5261,5 +5261,9 @@
+ 
+-/* Current dispatching slot */
+-static int g_kernel_dispatch_slot = -1;
++/* Lookup and immediate invocation are a pair on the calling guest thread.
++ * A shared selector lets another thread redirect the bridge AND its stdcall
++ * stack cleanup between those operations. The dispatcher snapshots this TLS
++ * slot before calling a bridge, so nested callbacks preserve outer cleanup.
++ * The common thunk pointer must not be cached across another kernel lookup. */
++static RECOMP_TLS int g_kernel_dispatch_slot = -1;
+ 
+ static void kernel_thunk_dispatch(void)
