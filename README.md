@@ -9,7 +9,10 @@ or JIT fallback.
 The user has completed **Arctic Antics**, the first winter/penguin level. Bugs
 remain, and the rest of the game has not been validated. The target is 60 FPS;
 performance varies by scene and this is not a finished release. Development
-evidence and known issues are in [STATUS](docs/STATUS.md).
+evidence and known issues are in [STATUS](docs/STATUS.md). Intermittent story
+visual artifacts remain; the latest hub-return crash fix has passed GPU tests
+and awaits a full post-level return test. Physical Bluetooth controllers also
+need testing on the actual hardware.
 
 ## Setup
 
