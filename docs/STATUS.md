@@ -3,9 +3,14 @@
 The latest work is isolated under [android/shield2019](../android/shield2019/README.md).
 The real AOT game library cross-compiles for Android ARM64, and a signed TV
 development APK includes asset-free memory/graphics/input/audio diagnostics.
-No Shield access is available until the user supplies it; no Android launch or
-playability is claimed. Mac build 68 remains intact. The earlier Mac handoff below
-is retained as its validation record.
+The user authorized real network ADB access. The 2019 Pro/API30 passes sparse
+memory, desktop OpenGL4.1, full graphics component and PCM callback checks.
+All2267 asset files were transferred and remotely verified. The original game
+opening renders, but initial performance is severely slow (one measured segment
+16.18FPS) with user-confirmed audio/video desync. Android context bind/release
+cost dominates that segment. Performance and remote controls are being improved;
+no playable Shield milestone is claimed. Mac build68 remains intact. The earlier
+Mac handoff below is retained as its validation record.
 
 ## Midnight handoff
 

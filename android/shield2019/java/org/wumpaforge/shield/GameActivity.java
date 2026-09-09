@@ -25,6 +25,8 @@ public final class GameActivity extends SDLActivity implements android.hardware.
     public void onInputDeviceRemoved(int id) { remote.releaseAll(); }
     @Override protected String[] getLibraries() { return new String[]{"SDL2", "main"}; }
     private boolean isRemote(KeyEvent event) {
+        // ADB's explicit `input dpad` uses the virtual keyboard device ID.
+        if (event.getDeviceId() < 0 && event.isFromSource(InputDevice.SOURCE_DPAD)) return true;
         InputDevice device = event.getDevice();
         if (device == null) return true; // Explicit ADB key injection for diagnostics.
         if (device.getKeyboardType() == InputDevice.KEYBOARD_TYPE_ALPHABETIC) return false;

@@ -16,6 +16,22 @@ int wumpa_host_start(const char *log_name)
     const char *storage=SDL_AndroidGetExternalStoragePath();
     const char *state=SDL_AndroidGetInternalStoragePath();
     if(!storage||!state) return 0;
+    char profile[4096];
+    int profile_n=snprintf(profile,sizeof(profile),"%s/profile-context",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0){
+        SDL_setenv("WRATH_PROFILE","1",1);
+        SDL_setenv("WRATH_PROFILE_CONTEXT","1",1);
+        SDL_setenv("WRATH_TRACE_INPUT","1",1);
+    }
+    profile_n=snprintf(profile,sizeof(profile),"%s/no-release-flush",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
+        SDL_setenv("WRATH_EGL_NO_RELEASE_FLUSH","1",1);
+    profile_n=snprintf(profile,sizeof(profile),"%s/lazy-bind",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
+        SDL_setenv("WRATH_EGL_LAZY_BIND","1",1);
+    profile_n=snprintf(profile,sizeof(profile),"%s/defer-state",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
+        SDL_setenv("WRATH_EGL_DEFER_STATE","1",1);
     SDL_setenv("WRATH_STATE_ROOT",state,1);
     char mapping[4096];int mapping_n=snprintf(mapping,sizeof(mapping),"%s/gamecontrollerdb.txt",storage);
     if(mapping_n>0&&(size_t)mapping_n<sizeof(mapping)&&access(mapping,R_OK)==0)
@@ -29,6 +45,7 @@ int wumpa_host_start(const char *log_name)
 }
 
 extern int xbox_D3D8GLAcquire(void);
+extern int xbox_D3D8GLEnsureCurrent(void);
 extern void xbox_D3D8GLRelease(void);
 void wumpa_pump_input_events(void)
 {
@@ -39,6 +56,7 @@ void wumpa_pump_input_events(void)
     /* Android's pump may block through pause/resume. Keep loading workers from
        binding/swapping while SDL backs up or restores the window surface. */
     if(!xbox_D3D8GLAcquire())abort();
+    if(!xbox_D3D8GLEnsureCurrent())abort();
     SDL_PumpEvents();
     if(SDL_HasEvent(SDL_RENDER_DEVICE_RESET)){
         fprintf(stderr,"[shield] EGL context lost during input pump; resource restoration is not implemented.\n");

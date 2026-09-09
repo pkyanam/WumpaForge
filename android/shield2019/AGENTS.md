@@ -2,11 +2,12 @@
 
 User authorized a few hours of Android build work on September 9, starting
 08:24 UTC, in this separate folder. Target only the 2019 Pro (`mdarcy`), ARM64.
-Device access is unavailable until tomorrow; do not probe the network hostname.
+The user authorized network ADB to 192.168.1.46 on September 9; the device is
+verified NVIDIA mdarcy, Android 11/API30, ARM64. Use the explicit ADB serial.
 
 - Check account weekly usage before each substantial work chunk. Started at
-  65% used (35% remaining). Stop new work at 77% used and reserve the remaining
-  buffer for documenting/committing; never intentionally consume below 20% left.
+  65% used (35% remaining). The latest user limit is 25% weekly remaining: stop new work at 74% used
+  and reserve the buffer for documenting/committing; do not cross 75% used.
   Account usage is shared, so recheck during builds and before final actions.
 - Aim to wrap by 11:24 UTC or the usage threshold, whichever comes first.
 - Source/configuration lives here. Downloads, copied runtime, generated loaders,
@@ -23,6 +24,8 @@ Device access is unavailable until tomorrow; do not probe the network hostname.
 
 ## Handoff
 The user explicitly allowed stopping early rather than filling the time budget.
-The cross-build and local verification pass is complete; device access is the
-next meaningful gate. Do not start further background work or connect to SHIELD
-until the user provides access and resumes testing. Read README for exact evidence.
+Device testing has resumed with explicit authorization. Memory, desktop GL, full
+graphics components and PCM callback checks pass. Actual game opening renders,
+but initial performance was only about16FPS with severe audio/video desync.
+Do not describe it as playable. Root is measuring Android context overhead and
+adding a remote control scheme. Read README for the current evidence.

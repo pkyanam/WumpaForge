@@ -2,8 +2,10 @@
 
 This isolated Android work targets **NVIDIA SHIELD TV Pro 2019 (`mdarcy`)** only.
 The full original AOT game code and native runtime **cross-compile and link as
-Android ARM64**, and a signed development TV APK has been produced. No Shield
-is available for execution yet. This is **not a verified working/playable port**.
+Android ARM64**. The APK is installed on a real Shield and renders the original
+opening screen. Memory, graphics components and PCM callback checks pass.
+Initial performance is severely slow with audio/video desynchronization, so this
+is **not yet a verified playable port**.
 The Mac app and its original dependency checkout are preserved.
 
 ## Build on the current Mac
@@ -42,8 +44,8 @@ context**; no GLES version-string substitution, CPU interpreter or JIT is used.
 The public EGL driver must expose those desktop functions on the actual Shield.
 The launcher probe can report this gate and a pixel round trip without assets.
 The separate graphics Activity runs the same synthetic guest-ABI/rendering suite
-against the Android backend, with assertions enabled. It has been cross-compiled,
-not run on a device.
+against the Android backend, with assertions enabled. It passed on the actual
+Tegra driver after allowing one RGB quantization step in a float-color fixture.
 
 Game assets use app-specific external storage; saves/run state use persistent
 internal app storage. `native.log` is written beside the assets folder. Android
@@ -69,8 +71,16 @@ rumble or reconnect behavior is correct. Unmapped controllers need a mapping.
 - Memory diagnostic: actual AArch64 Android executable cross-build passes.
 - Full native game library: link passes with undefined symbols rejected.
 - TV launcher Java/DEX/resources and APK signature/alignment checks pass.
-- Device memory/GL pixels, surface lifecycle, audio, physical Bluetooth,
-  original title/story/gameplay, saves and performance remain **untested**.
+- Real mdarcy/API30 device: sparse memory aliases and OpenGL4.1/GLSL4.10
+  NVIDIA495.00 pixel probe pass; full graphics fixture returns0.
+- PCM callback consumes all96000 submitted frames with nonzero samples; this
+  does not establish speaker routing, game audio sync or glitch-free playback.
+- All2267 original asset files transferred and remotely SHA-256 verified.
+- Original game opening renders. Baseline profile measures16.18FPS in one
+  opening segment, bind14.87ms + detach35.38ms per frame; user confirms severe
+  loading slowness and audio/video desync. Other segments are slower.
+- Physical Bluetooth, story/gameplay completion, saves, lifecycle and sustained
+  performance remain unverified.
 
 The source pass also found 43 case mismatches among 108 matched original asset
 filename literals. The Shield-only path adapter resolves existing on-disk
@@ -79,7 +89,7 @@ Input event pumping shares the graphics lock through SDL's blocking pause. A
 reported EGL context reset ends the game process with a diagnostic because full
 resource restoration is not implemented. Normal pause/resume remains unverified.
 
-## Tomorrow's device session
+## Device session
 
 Enable debugging and authorize this Mac on the Shield, then select its **exact**
 ADB serial. These commands do not auto-discover or connect to a network address:
@@ -137,7 +147,7 @@ See [runtime adaptations](RUNTIME-NOTES.md), [folder instructions](AGENTS.md),
 [licensing inventory](../../docs/LICENSING.md). SDL's zlib notice and Khronos's MIT
 header notice remain in the pinned downloaded sources; they are not relabeled.
 
-## September 9 handoff
+## Earlier September 9 cross-build handoff
 
 The integrated private development APK includes all six ARM64 libraries (game,
 SDL, memory/EGL probe, graphics checks, controller checks and audio checks).
@@ -146,10 +156,8 @@ A second preparation produced 133 byte-identical source files. The APK passes
 ELF inventory/alignment checks, signature verification and package metadata checks.
 The previously playable Mac build 68 binary has the same SHA-256 as before.
 
-Development is paused pending Shield access, as requested. No device connection,
-installation, diagnostic execution or Android gameplay test was performed.
-The remaining blockers are observed device/driver behavior and real gameplay,
-not a claim that the cross-built APK is already known to launch successfully.
+That pre-device checkpoint is superseded by the device evidence above. The Mac
+build remains preserved; current Android work is isolated in this folder.
 
 ### Playing with the Shield remote
 
@@ -178,3 +186,19 @@ physical remote delivery and simultaneous-button support still need device tests
 The host Java fixture checks repeats, layer transitions, overlapping logical
 buttons, releases and preservation of system keys; it does not prove Bluetooth
 behavior or Android firmware key delivery.
+
+### September 9 performance investigation
+
+The driver does not expose `EGL_KHR_context_flush_control`; requesting release
+NONE therefore falls back to normal behavior and is not a speed fix here.
+Deferring context binding until a native GL operation, while retaining the device
+mutex, passed the full device graphics suite. In comparable opening windows it
+improved16–17FPS to34–35FPS. Heavier later windows still measured13–25FPS;
+this is not60FPS or an audio synchronization fix.
+
+Ignored device reports under `local/reports/shield2019` retain the baseline and
+lazy-binding traces, actual screenshots and complete graphics/PCM diagnostics.
+App-external marker files `profile-context`, `lazy-bind`, `no-release-flush` and
+`defer-state` select diagnostic/experimental paths on the next process launch.
+The profiling marker also enables bounded guest-input traces. Markers are
+local development controls; do not treat them as a finished settings UI.
