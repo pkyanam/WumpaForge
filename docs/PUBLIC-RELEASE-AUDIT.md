@@ -5,7 +5,36 @@ local Apple Silicon app from the user's supported USA Xbox ISO. This audit does
 not approve distributing the resulting game executable or assets. Repository
 visibility was not changed.
 
-## Content and history
+## Release preparation completed
+
+The findings below describe the earlier snapshot, not outstanding release gates.
+Preparation through `aade68d` resolved the actionable items:
+
+- The owner selected GPL-3.0; root `LICENSE` and README apply GPL-3.0-only to
+  project code while preserving component licenses and notices.
+- A fresh source checkout completed ISO verification, extraction, translation,
+  native compilation and standalone app packaging. A repeat setup reused verified
+  translation. The relocated app passed ARM64, dependency, bundled SDL3 loading,
+  asset and strict signature checks. A bounded 20-second native launch initialized
+  graphics and audio, then ended through the configured SIGALRM timeout.
+- Packaging copies runtime assets and dependencies, includes notices and records
+  library hashes and actual minimum macOS in a build manifest. No resulting app
+  or game material is published.
+- Public contributor instructions replace session authorizations. Current Shield
+  commands use device placeholders. Existing development history is retained;
+  historical local paths and Git author metadata remain visible.
+- The shared kernel-dispatch TLS fix passed forced-interleaving tests and the
+  fresh Mac binary contains the slot in Mach-O thread-local sections.
+- GitHub asset-free CI passed both Python versions at `aade68d`.
+- The repeated reachable-history scan found 870 unique blobs (13,550,769 bytes),
+  only the generated branding PNG as binary content, no matched secret signatures,
+  and no tracked ISO, XBE, generated payload, library, APK or game asset paths.
+
+The owner explicitly authorized public visibility after preparation. Public setup
+endpoint verification follows that visibility change. Known visual artifacts and
+incomplete whole-game validation remain documented in STATUS.md.
+
+## Original snapshot: content and history
 
 Inspected every unique blob reachable from all local Git refs, plus the tracked
 worktree. This extends [the earlier staging audit](REPOSITORY-AUDIT.md).
@@ -32,7 +61,7 @@ Game addresses, short disassembly discussions, synthetic test fixtures and
 compatibility code remain intentional source material. This content scan is not
 a certification of independent authorship of every line.
 
-## Release decisions and required preparation
+## Original snapshot: release decisions and required preparation
 
 1. **Select and document a source license before calling this open source.**
    There is currently no root license for newly authored unmarked files.
@@ -89,7 +118,7 @@ a certification of independent authorship of every line.
    internal scene detail. The Shield is experimental and outside this release's
    user-facing setup promise.
 
-## Final publish check
+## Original snapshot: final publish check
 
 After preparation, repeat the history/content scan and inspect staged paths.
 Run the documented clean setup against the supported ISO locally, record the

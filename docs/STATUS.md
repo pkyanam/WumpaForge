@@ -4,8 +4,8 @@
 
 WumpaForge recompiles the supported USA original Xbox game ahead of time to native
 ARM64. The user completed Arctic Antics with keyboard controls on an M3 MacBook
-Air with24GB memory. This is demonstrated playability of one level, not validation
-of the entire game. macOS26 is the physically tested host; other supported build
+Air with 24 GB memory. This is demonstrated playability of one level, not validation
+of the entire game. macOS 26 is the physically tested host; other supported build
 hosts have not received a gameplay pass.
 
 Public setup is focused on `setup.sh` (or the downloadable `install.sh` launcher):
@@ -18,12 +18,18 @@ The app includes assets and native libraries, including SDL3 loaded by SDL2-comp
 It no longer needs the checkout or Homebrew after packaging. A relocated app
 passed architecture, library-resolution, dynamic SDL loading, minimum-macOS,
 asset and strict code-signature checks. The currently built dependencies require
-macOS26; each personal build records its actual minimum supported OS.
+macOS 26; each personal build records its actual minimum supported OS.
 
 Bundled launches use `~/Library/Application Support/WumpaForge` for saves/run files.
 A compiled sanitizer fixture verifies paths, permissions, repeated creation,
 length bounds and collisions. Setup's save migration preserves existing files.
 No game content or built app is included in the public source repository.
+
+The final source build also includes the shared thread-local kernel-dispatch fix;
+Mach-O symbols confirm actual TLS storage. A relocated app launched natively for
+20 seconds, initialized graphics and audio and ended at its configured diagnostic
+SIGALRM timeout. This is a launch check, not a new full-level playthrough. GitHub
+asset-free CI passed on `aade68d` with Python 3.11 and 3.13.
 
 ## Known limits
 
@@ -31,8 +37,8 @@ No game content or built app is included in the public source repository.
 - Not every level, post-level hub return, or save/load route has been validated.
 - Wireless Xbox/PlayStation mappings exist through SDL; physical pairing and
   reconnection tests remain outstanding.
-- The60FPS target is not guaranteed in every scene. Upscaling sharpens the
-  original640×480 image; it does not add internal scene detail.
+- The 60 FPS target is not guaranteed in every scene. Upscaling sharpens the
+  original 640×480 image; it does not add internal scene detail.
 - Local ad hoc signing is provided; Apple notarization and prebuilt distribution
   are outside this source release.
 
