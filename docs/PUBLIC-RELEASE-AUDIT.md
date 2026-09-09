@@ -30,8 +30,10 @@ Preparation through `aade68d` resolved the actionable items:
   only the generated branding PNG as binary content, no matched secret signatures,
   and no tracked ISO, XBE, generated payload, library, APK or game asset paths.
 
-The owner explicitly authorized public visibility after preparation. Public setup
-endpoint verification follows that visibility change. Known visual artifacts and
+The owner explicitly authorized public visibility after preparation. The repository
+was made public on September 9, 2026. Unauthenticated installer download matched
+the checked-in script and passed shell syntax validation. The public source archive
+contained 382 entries with no game payload paths. Known visual artifacts and
 incomplete whole-game validation remain documented in STATUS.md.
 
 ## Original snapshot: content and history

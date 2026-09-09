@@ -55,8 +55,9 @@ checkpoints are in [the September8 history](history/2026-09-08-checkpoints.md).
 
 ## Release scope
 
-The owner selected GPL-3.0 for project source, preserving existing third-party
-terms, and authorized making the repository public after preparation. Only source,
+The repository is public at https://github.com/pkyanam/WumpaForge as of September 9,
+2026. The owner selected GPL-3.0 for project source, preserving existing third-party
+terms. Unauthenticated installer and source archive downloads were verified. Only source,
 project branding, documentation and tooling are published. See the
 [release audit](PUBLIC-RELEASE-AUDIT.md), [notices](../THIRD_PARTY_NOTICES.md) and
 [licensing record](LICENSING.md). Generated code, ISO/assets, personal saves,
