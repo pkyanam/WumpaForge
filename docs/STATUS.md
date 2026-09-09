@@ -41,7 +41,14 @@
 - Normal run at frame24300:322 hub profile windows after frame5000 had median
  60FPS, no explicit stream/shader failure markers; this is a hub observation,
   not a new snow benchmark or proof of post-level return. User manual return test
-  remains pending. mac_runtime is auditing existing hologram/morph evidence.
+  remains pending. mac_runtime found five nonfatal offscreen SetRenderTarget
+  rejections, so the lack of fatal markers does not prove complete rendering.
+- Targeted read-only LLDB attach/detach captured play-24-depth-resources.json:
+  five256x256 format6 surfaces of texture0x118D010, sharing640x480 format0x2A
+  depth0xB600A0. Game resumed. mac_runtime owns a faithful top-left depth-region
+  coherence fix in graphics.c and a synthetic GPU regression; no causal link
+  to Cortex distortion is established. Root will build64 after component tests.
+  Do not package over live build63. Pending manual hub-return test remains open.
 - Agent waves: controller hub fix, mac DMA audit, repository audit, onboarding,
   license inventory, portability and regression audit. Root owns full builds, packaging and live UI;
   at most two compiler jobs total. Keep the goal active during outstanding work.
