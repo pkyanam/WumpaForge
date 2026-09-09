@@ -65,6 +65,26 @@ preparation passes after cleaning disposable title copies before patch replay.
 No playable Shield milestone or60FPS/audio-sync guarantee is claimed. Mac build68 remains intact. The earlier
 Mac handoff below is retained as its validation record.
 
+## Kernel dispatch race found during continued device work
+
+Live run14444 reached New Game, story and hub; remote jumping/movement worked.
+Later frame profiling stopped at5781. LLDB hub-stop-symbols.txt catches main in
+KeDelayExecutionThread reached from3A7F0's RtlEnterCriticalSection lookup. Source
+kernel_bridge.c shares g_kernel_dispatch_slot across threads between lookup and
+execution of a common thunk. Another thread can redirect service/argument cleanup.
+This is a concrete race; a TLS fix and deterministic regression are underway.
+The failed keyhold navigation occurred after this freeze, so it does not establish
+an input-tool defect. Held-key tool now provides proper key-down/up plus optional
+keyboard comparison. The attempted live target-cache A/B also occurred after
+freeze; cache-before/cache-after are NOT valid performance comparisons.
+
+Persistent raw-GL-owner RPC prototype bcb53b8 is opt-in (gl-rpc marker) and passes
+host ASan/UBSan typed-pointer/ordering/lifecycle fixtures. Physical GPU/lifecycle
+and speed checks remain. Target-return-cache8aa9e08 passes physical GPU fixture,
+but remains opt-in and its game performance is unmeasured. Heavy hub measured
+about4FPS before freezing. User requests sustained60 everywhere and reliable
+all-level loading, allowing validation on1–2levels first. These remain open.
+
 ## Active loading investigation (supersedes earlier balanced-only evidence)
 
 Source9880401 render-target Morton encoding also passes the full Shield GPU suite.
