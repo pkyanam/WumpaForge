@@ -487,3 +487,38 @@ mixer submission/SDL callback energy counters. Callback instrumentation only
 accumulates counts under the existing device lock; it performs no logging or
 allocation. Nonzero callback samples establish that PCM reached the native output
 callback, not that a user heard it or that timing/quality is correct.
+
+## Story18 hub music and overlap/lifetime coverage
+
+`local/reports/story-18-audio.json` captured the main thread in the original GPU
+fence path. Wrapper1's active sound170 object `02D7F5F0` matches the native stream
+registry, contains the correct16B70C vtable and GetStatus1363D6 method, and has
+three pending packets. Wrapper0's old story guest allocation remains registered
+for reuse with its native pointer zero; that is the bridge's intended released
+state, not evidence of a live dangling sound object. No probe fields failed.
+
+The log's real output callback continues to receive nonzero samples through the
+rendering stall. At the last output report, submitted16267520/callback16266496
+frames leave1024 queued frames, with zero overflows. There are40 cumulative
+underrun callbacks; increases occurred at several earlier points, with the last
+at submitted time274.736s. The count remains40 through338.907s. These counters
+show occasional sink starvation during this long diagnostic run; they do not
+identify its cause or establish an audio deadlock at the GPU fence. Peak32768
+alone cannot distinguish loud source audio from additive clipping. There is no
+new evidence justifying a runtime audio change.
+
+The existing stream test covered one stream at a time. A new bounded synthetic
+case in `tools/test_audio_stream.c` now uses two simultaneous packet streams and
+a separate one-shot buffer through the actual guest bridge/native mixer. It
+checks exact stereo sums, the SFX ending while music continues, release of one
+stream while another remains pending, cancellation of its old packet, reuse of
+its guest stream slot with the correct vtable, replacement-source samples with
+no old tail, and final silence/inactive voices after all releases. A real APU
+lock/condition is initialized for buffer Play, while the producer is absent and
+only explicit mixer calls advance time. This isolates sample/lifetime behavior;
+it does not replace the existing asynchronous producer test or claim a completed
+in-game story-to-hub-to-level transition.
+
+The documented clang command above passed under UndefinedBehaviorSanitizer with
+one compiler job. Result: `local/reports/audio-transition-test.log`. It emits no
+audio and uses no game assets. No implementation source changed.

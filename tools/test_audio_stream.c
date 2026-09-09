@@ -23,6 +23,53 @@ static uint32_t submit(uint32_t s, uint32_t data, uint32_t bytes, unsigned index
  uint32_t args[]={s,0x12400,0};return call(0x136427,args,3);
 }
 static void render(int16_t out[][2], unsigned n) {memset(out,0,n*4);mixer_render(out,n);}
+/* Music remains alive across story -> hub -> level stream changes while a
+ * separate portal SFX buffer is mixed. Synthetic exact samples make stale
+ * voices, channel errors, global flushes and completion lifetime bugs visible. */
+static void transition_overlap(void)
+{
+ /* Buffer Play requires a real initialized APU lock/condition. Keep its
+  * producer absent so only the deterministic render() calls advance time. */
+ assert(!g_state);g_state=calloc(1,sizeof(*g_state));assert(g_state);
+ qemu_mutex_init(&g_state->lock);qemu_cond_init(&g_state->cond);
+ uint8_t mono[20]={1,0,1,0,0x80,0xBB,0,0,0,0x77,1,0,2,0,16,0,0,0,0,0};
+ uint8_t stereo[20]={1,0,2,0,0x80,0xBB,0,0,0,0xEE,2,0,4,0,16,0,0,0,0,0};
+ uint32_t sd[]={0,3,0x12100,0,0,0},create[]={0x12200,0x12000};
+ memcpy(ptr(0x12200),sd,24);memcpy(ptr(0x12100),stereo,20);
+ assert(call(0x137AA4,create,2)==0);uint32_t music=read32(0x12000);
+ int16_t music_pcm[12][2];for(unsigned i=0;i<12;++i){music_pcm[i][0]=600;music_pcm[i][1]=-200;}
+ memcpy(ptr(0x14000),music_pcm,sizeof(music_pcm));assert(submit(music,0x14000,sizeof(music_pcm),0)==0);
+ memcpy(ptr(0x12100),mono,20);assert(call(0x137AA4,create,2)==0);uint32_t story=read32(0x12000);
+ assert(story!=music);int16_t story_pcm[8];for(unsigned i=0;i<8;++i)story_pcm[i]=100;
+ memcpy(ptr(0x14100),story_pcm,sizeof(story_pcm));assert(submit(story,0x14100,sizeof(story_pcm),1)==0);
+ uint32_t bd[]={24,0,0,0x12100,0,0};memcpy(ptr(0x12200),bd,24);
+ assert(call(0x137A4D,create,2)==0);uint32_t sfx=read32(0x12000);
+ int16_t sfx_pcm[]={1500,1500,1500,1500};memcpy(ptr(0x14200),sfx_pcm,sizeof(sfx_pcm));
+ uint32_t data[]={sfx,0x14200,sizeof(sfx_pcm)},play[]={sfx,0,0,0};
+ assert(call(0x13755A,data,3)==0 && call(0x136664,play,4)==0);
+ int16_t out[2][2];render(out,2);
+ for(unsigned i=0;i<2;++i)assert(out[i][0]==2200 && out[i][1]==1400);
+ uint32_t one[]={story};assert(call(0x136287,one,1)==0);
+ assert(read32(0x1250C)==0x80004004 && read32(0x12508)==0); /* old packet cancelled */
+ assert(!read32(story)); /* final Release zeroes guest object before reuse */
+ assert(read32(0x12504)==0x8000000A); /* music's packet survives */
+ memcpy(ptr(0x12200),sd,24);assert(call(0x137AA4,create,2)==0);uint32_t level=read32(0x12000);
+ assert(level==story && read32(level)==0x16B70C); /* actual bridge slot reuse */
+ int16_t level_pcm[8];for(unsigned i=0;i<8;++i)level_pcm[i]=300;
+ memcpy(ptr(0x14300),level_pcm,sizeof(level_pcm));assert(submit(level,0x14300,sizeof(level_pcm),2)==0);
+ render(out,2);for(unsigned i=0;i<2;++i)assert(out[i][0]==2400 && out[i][1]==1600);
+ render(out,2);for(unsigned i=0;i<2;++i)assert(out[i][0]==900 && out[i][1]==100);
+ assert(read32(0x1250C)==0x80004004); /* recreate cannot complete old status */
+ one[0]=sfx;assert(call(0x135BFE,one,1)==0);
+ one[0]=level;assert(call(0x136287,one,1)==0 && read32(0x12514)==0x80004004);
+ render(out,2);for(unsigned i=0;i<2;++i)assert(out[i][0]==600 && out[i][1]==-200);
+ assert(read32(0x12504)==0x8000000A);
+ one[0]=music;assert(call(0x136287,one,1)==0 && read32(0x12504)==0x80004004);
+ render(out,2);for(unsigned i=0;i<2;++i)assert(!out[i][0] && !out[i][1]);
+ for(unsigned i=0;i<64;++i)assert(!apu_mixer_get_voice(i)->active);
+ qemu_cond_destroy(&g_state->cond);qemu_mutex_destroy(&g_state->lock);
+ free(g_state);g_state=NULL;
+}
 int main(void)
 {
  /* Reserve address space only: the unused 2 GiB gap remains inaccessible and
@@ -75,5 +122,6 @@ int main(void)
  render(out,50);uint64_t inc=((uint64_t)22050<<16)/48000;
  for(unsigned f=0;f<50;++f){unsigned source=(unsigned)((f*inc)>>16);assert(out[f][0]==(source<21?(int)(100+source):0));}
  assert(read32(0x12514)==0);assert(call(0x136287,one,1)==0);
- wrath_audio_shutdown();assert(munmap(mem,span)==0);puts("PASS: stream guest ABI, continuous packet PCM/ADPCM output, pending/completion sizes, bounds, pause/resume, starvation, discontinuity, flush, ref lifetime");
+ transition_overlap();
+ wrath_audio_shutdown();assert(munmap(mem,span)==0);puts("PASS: stream guest ABI, continuous packet PCM/ADPCM output, pending/completion sizes, bounds, pause/resume, starvation, discontinuity, flush, ref lifetime, simultaneous stream/buffer mixing and transition reuse");
 }
