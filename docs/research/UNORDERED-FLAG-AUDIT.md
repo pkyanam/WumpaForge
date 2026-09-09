@@ -1,7 +1,7 @@
 # Unordered floating-point flags: bounded source audit
 
-2026-09-08, after build67. No production change or gameplay test. Original
-instructions, generated C, and one temporary emitted-C fixture were inspected.
+2026-09-08, after build67. The original bounded audit below motivated the
+coupled SAHF/FPREM repair recorded at the end. No gameplay test was performed.
 
 ## Established scope
 
@@ -91,3 +91,49 @@ Original inventory/contexts are recorded in
 `local/reports/unordered-original-contexts.txt`. Generated references are in
 `local/reports/unordered-generated-sites.json`. No game assets, generated code,
 or known-failing default test was committed.
+
+
+## Coupled repair and passing CPU verification
+
+SAHF now captures AH bits7,6,4,2,0 when executed. Unsigned, equality, parity
+and raw-sign conditions read the snapshot, including after EAX is overwritten.
+Tracked carry consumers receive its CF. OF remains the previous OF: it is
+captured when the prior state proves it (width-aware CMP, TEST, or a supported
+one-bit logical shift/rotate), and remains unknown when that provenance is
+absent. A mixed known/unknown SAHF CFG join retains AH flags and drops the OF
+capability. This does not add a complete EFLAGS model, fix generic unknown-flag
+fallbacks, or imply that unrelated arithmetic now supplies OF.
+
+FPREM/FPREM1 use the existing binary64 x87 stack model. A finite exponent
+separation of64 or more performs a partial reduction with Intel-permitted N=32
+and sets C2. Final reduction clears C2 and maps quotient-magnitude bits
+Q2/Q1/Q0 into C0/C3/C1. Other status bits are preserved. `remquo` supplies the
+low nearest-even quotient bits on absolute operands; a negative nearest
+remainder decrements them for FPREM's truncation. The numeric result uses
+`fmod`/`remainder`, with the dividend's zero sign preserved explicitly. The
+host downward-rounding fixture exposed `remainder(3,3)` returning negative zero;
+the explicit sign rule corrects this case.
+
+The quotient magnitude convention agrees with the primary
+[QEMU softfloat implementation](https://github.com/qemu/qemu/blob/445810ec915687d37b8ae0ef8d7340ab4a153efa/fpu/softfloat.c#L5319),
+while the partial-step and status contract follows Intel's instruction manual
+linked above. QEMU was used as a source reference, not an execution dependency.
+
+NaN operands, infinite dividends and zero divisors enter an explicit unsupported
+instruction boundary because x87 exceptional-result/status/delivery semantics
+remain unmodeled. Finite dividends with infinite divisors and signed zero are
+supported. This is deliberately not a claim of80-bit precision, complete
+exception compatibility, denormal exception equivalence, or native gameplay
+coverage. FCOMI and SSE unordered-predicate gaps remain unchanged; no genuine
+original sites were found in this audit.
+
+`tools/test_sahf_remainder.py` passes under UBSan and includes all256 AH values,
+805376 width/shift/OF checks, NaN comparison→FNSTSW→SAHF predicates, tracked
+carry consumption, unknown-OF capability checks, and15040 signed/rounding
+FPREM/FPREM1 cases. Quotient expectations use independent exact Python integer
+ratios, including ties, subnormal values, huge exponent gaps and every host
+rounding mode. With the user's XBE present it translates and executes the actual
+F4344 helper, starting with C2 set, verifies termination, numeric result, quotient
+bits and stack pop. No original bytes or generated C are committed. Exceptional
+input tests verify the explicit boundary. The local report is
+`local/reports/sahf-remainder-cpu.log`.
