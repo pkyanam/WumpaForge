@@ -1,0 +1,66 @@
+--- a/src/platform/win32_compat.c
++++ b/src/platform/win32_compat.c
+@@ -836,6 +836,14 @@
+ {
+     w32_object *o = (w32_object *)h;
+     if (!o || o->kind != K_THREAD) return FALSE;
++#if defined(__ANDROID__)
++    /* Bionic has no thread cancellation. No current guest/runtime caller uses
++     * this API; fail honestly without changing a still-running thread's state.
++     * Guest self-termination remains implemented through ExitThread. */
++    (void)exitCode;
++    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
++    return FALSE;
++#else
+     pthread_cancel(o->thread);
+     pthread_mutex_lock(&o->lock);
+     o->exit_code = exitCode;
+@@ -844,6 +852,7 @@
+     pthread_cond_broadcast(&o->cond);
+     pthread_mutex_unlock(&o->lock);
+     return TRUE;
++#endif
+ }
+ 
+ BOOL SetThreadPriority(HANDLE h, int priority)
+@@ -1234,7 +1243,12 @@
+ 
+ VOID SecureZeroMemory(PVOID ptr, SIZE_T cnt)
+ {
+-#if defined(__APPLE__)
++#if defined(__ANDROID__)
++    /* API 30 has no public explicit_bzero/memset_explicit contract. Volatile
++     * stores retain the required clearing even when the buffer is dead. */
++    volatile unsigned char *bytes = (volatile unsigned char *)ptr;
++    while (cnt--) *bytes++ = 0;
++#elif defined(__APPLE__)
+     // TODO: Darwin explicit_bzero equivalent is memset_s.
+ #else
+     explicit_bzero(ptr, cnt);
+--- a/src/kernel/xbox_memory_layout.c
++++ b/src/kernel/xbox_memory_layout.c
+@@ -1056,10 +1056,11 @@
+      * Windows 11 where low addresses are often reserved), try page-aligned
+      * addresses upward until we find a free region.
+      */
+-#if defined(__APPLE__)
+-    /* macOS reserves low 4 GB for __PAGEZERO. Ask the OS for one free 4 GB
+-     * span, then place RAM, mirrors and device apertures inside that owned
+-     * span. Sparse PROT_NONE pages do not allocate 4 GB of physical memory. */
++#if defined(__APPLE__) || defined(__ANDROID__)
++    /* Own one free 4 GB span before placing RAM, mirrors and device apertures.
++     * macOS reserves low addresses; Android app layouts must also avoid
++     * scattered fixed-address collisions. Sparse PROT_NONE pages do not
++     * allocate 4 GB of physical memory. */
+     void *guest_space = w32_reserve_guest_address_space((size_t)1 << 32);
+     if (guest_space)
+         g_memory_base = MapViewOfFileEx(g_mapping_handle, FILE_MAP_ALL_ACCESS,
+@@ -1931,7 +1932,7 @@
+         CloseHandle(g_mapping_handle);
+         g_mapping_handle = NULL;
+     }
+-#if defined(__APPLE__)
++#if defined(__APPLE__) || defined(__ANDROID__)
+     /* Also releases sparse apertures and their backing pages. */
+     if (g_tiled_view) {
+         UnmapViewOfFile(g_tiled_view);
