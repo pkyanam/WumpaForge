@@ -1,0 +1,185 @@
+--- a/vertex_fetch.inc
++++ b/vertex_fetch.inc
+@@ -5,6 +5,7 @@
+     uint32_t first;
+     const uint8_t *indices; /* Optional literal little-endian Xbox uint16 indices. */
+     int quads;
++    uint32_t indexed_vertices; /* Android opt-in: contiguous stream0 count; indices remain literal. */
+ };
+ static uint64_t vertex_fetch_index(const struct VertexFetch *fetch, uint32_t output)
+ {
+--- a/index_bridge.inc
++++ b/index_bridge.inc
+@@ -9,6 +9,7 @@
+ static uint32_t s_index_handle;
+ #include "index_resource_bounds.inc"
+ #include "index_scratch.inc"
++#include "indexed_shader_select.inc"
+ 
+ static int index_range(uint32_t address, uint64_t bytes)
+ {
+@@ -68,9 +69,16 @@
+     const uint8_t *in=guest_ptr(indices);
+     /* Validate all fetches before allocation or drawing. 64-bit arithmetic
+      * rejects base/index/stride overflow instead of wrapping into guest RAM. */
++    uint32_t maximum=0;
+     for (uint32_t i=0;i<count;++i) {
+         uint32_t index=in[i*2]|((uint32_t)in[i*2+1]<<8);
+         if ((uint64_t)offset+((uint64_t)base+index+1)*stride>vb->bytes) return D3DERR_INVALIDCALL;
++        if(index>maximum)maximum=index;
++    }
++    if(indexed_shader_eligible(type,count,stride,maximum)) {
++        struct VertexFetch fetch={.first=base,.indices=in,.indexed_vertices=maximum+1};
++        const uint8_t *original=(const uint8_t *)guest_ptr(vb->data)+offset+(size_t)base*stride;
++        return draw_vertices_data_fetch(type,count,original,stride,&fetch);
+     }
+     struct IndexScratchLease scratch=index_scratch_acquire((size_t)count*stride);
+     uint8_t *expanded=scratch.data;
+--- a/shader_bridge.inc
++++ b/shader_bridge.inc
+@@ -7,6 +7,8 @@
+ extern GLuint xbox_D3D8GLTextureName(IDirect3DTexture8 *texture);
+ extern void xbox_D3D8GLApplyRenderStates(void);
+ static uint32_t s_vertex_handle, s_pixel_handle;
++static GLuint s_shader_ibo;
++static uint64_t s_indexed_shader_hits;
+ static Nv2aVertexObject s_vertex_object;
+ static Nv2aPixelDef s_pixel_definition;
+ static float s_vertex_constants[192][4];
+@@ -315,7 +317,8 @@
+     if (secondary_bytes>64u*1024u*1024u) return D3DERR_INVALIDCALL;
+     if (!s_shader_vao) { glGenVertexArrays(1,&s_shader_vao); glGenBuffers(1,&s_shader_vbo); glGenSamplers(4,s_shader_samplers); }
+     glBindVertexArray(s_shader_vao); glBindBuffer(GL_ARRAY_BUFFER,s_shader_vbo);
+-    glBufferData(GL_ARRAY_BUFFER,(size_t)count*stride,vertices,GL_STREAM_DRAW);
++    uint32_t vertex_count=fetch&&fetch->indexed_vertices?fetch->indexed_vertices:count;
++    glBufferData(GL_ARRAY_BUFFER,(size_t)vertex_count*stride,vertices,GL_STREAM_DRAW);
+     int transitive_proof_ready=0;
+     uint16_t transitive_dead=0;
+     for (unsigned i=0;i<16;++i) {
+@@ -486,7 +489,22 @@
+     extern uint64_t xbox_D3D8GLProfileDrawBegin(void);
+     extern void xbox_D3D8GLProfileDrawEnd(uint64_t);
+     uint64_t profile_draw=xbox_D3D8GLProfileDrawBegin();
+-    glDrawArrays(primitive,0,count);
++    if(fetch&&fetch->indexed_vertices) {
++        /* This path is restricted to triangle lists and stream0. Never let
++         * ambient restart state turn the ordinary Xbox index 65535 into a cut. */
++        GLboolean restart=glIsEnabled(GL_PRIMITIVE_RESTART);
++        GLboolean fixed_restart=glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++        glDisable(GL_PRIMITIVE_RESTART);glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++        GLint old_ibo;glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING,&old_ibo);
++        if(!s_shader_ibo)glGenBuffers(1,&s_shader_ibo);
++        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,s_shader_ibo);
++        glBufferData(GL_ELEMENT_ARRAY_BUFFER,(size_t)count*2,fetch->indices,GL_STREAM_DRAW);
++        glDrawElements(primitive,count,GL_UNSIGNED_SHORT,0);
++        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,(GLuint)old_ibo);
++        if(restart)glEnable(GL_PRIMITIVE_RESTART);
++        if(fixed_restart)glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++        ++s_indexed_shader_hits;
++    } else glDrawArrays(primitive,0,count);
+     xbox_D3D8GLProfileDrawEnd(profile_draw);
+     for (unsigned i=0;i<4;++i) glBindSampler(i,previous_samplers[i]);
+     GLenum error=glGetError(); if(error) { char msg[40];snprintf(msg,sizeof(msg),"GL error0x%X",error);shader_error("draw",msg); }
+--- /dev/null
++++ b/indexed_shader_select.inc
+@@ -0,0 +1,15 @@
++/* Called only after the original full index and stream0 bounds checks.
++ * Keep every uncertain layout on the established expansion path. */
++static int indexed_shader_eligible(uint32_t type,uint32_t count,uint32_t stride,uint32_t maximum)
++{
++    const char *mode=getenv("WRATH_INDEXED_SHADER");
++    if(!mode || strcmp(mode,"1") || type!=5 || count%3 || !s_vertex_handle)
++        return 0;
++    for(unsigned i=0;i<16;++i) {
++        const Nv2aVertexSlot *slot=&s_vertex_object.slots[i];
++        if(slot->kind!=NV2A_VERTEX_NONE && (slot->stream || slot->tessellation_type))return 0;
++    }
++    /* Raw indices avoid remapping work; sparse draws retain expansion rather
++     * than uploading a larger contiguous region. Arithmetic stays 64-bit. */
++    return ((uint64_t)maximum+1)*stride+(uint64_t)count*2<=(uint64_t)count*stride;
++}
+--- a/graphics.c
++++ b/graphics.c
+@@ -2583,6 +2583,7 @@
+     call(0x1019C0,draw,4);assert(s_shader_age==age+1);
+     unsigned programs=0;for(unsigned i=0;i<SHADER_CACHE_LIMIT;++i)programs+=s_shader_programs[i].program!=0;
+     assert(programs==1); /* Uniform changes reuse compiled programs. */
++#include "test_indexed_shader.inc"
+     test_inactive_sampler(draw,setps,&definition,texture);
+     /* The same texture on two stages must retain independent repeat/clamp
+      * samplers. At u=1.25 stage0 reads red and stage1 reads green; sum is yellow. */
+--- /dev/null
++++ b/test_indexed_shader.inc
+@@ -0,0 +1,72 @@
++    { /* Exact production shader path: baseline pixels versus real indexed GPU. */
++        const char *previous_mode=getenv("WRATH_INDEXED_SHADER");
++        char *saved_mode=previous_mode?strdup(previous_mode):NULL;
++        uint32_t saved_stream=s_stream_handle,saved_stride=s_stream_stride;
++        uint32_t saved_offset=read32(0x10F284),saved_base=read32(GUEST_DEVICE+0x1c);
++        uint32_t saved_index=s_index_handle;
++        uint32_t make[]={sizeof(vertices)+2*sizeof(vertices[0]),0,0,0,0x17000};
++        call(0x100D70,make,5);assert(g_eax==0);
++        uint32_t indexed_vb=read32(0x17000),vertex_data=read32(indexed_vb+4);
++        memset(guest_ptr(vertex_data),0,make[0]);
++        memcpy(guest_ptr(vertex_data+2*sizeof(vertices[0])),vertices,sizeof(vertices));
++        uint32_t bind_stream[]={0,indexed_vb,sizeof(vertices[0])};call(0x102580,bind_stream,3);
++        write32(0x10F284,sizeof(vertices[0]));
++        write32(0x10EC10,read32(0x10EC10)|0x40);
++        uint32_t make_ib[]={14,0,0,0,0x17004};call(0x100D00,make_ib,5);assert(g_eax==0);
++        uint32_t indexed_ib=read32(0x17004),index_data=read32(indexed_ib+4);
++        uint16_t original_indices[]={0xffff,0,1,2,0,2,3};
++        memcpy(guest_ptr(index_data),original_indices,sizeof(original_indices));
++        uint32_t bind_index[]={indexed_ib,1};call(0xFFEA0,bind_index,2);
++        uint32_t indexed_draw[]={5,6,index_data+2};
++        uint8_t baseline[60*60*4],optimized[sizeof(baseline)],first[sizeof(baseline)];
++        GLboolean old_restart=glIsEnabled(GL_PRIMITIVE_RESTART);
++        GLboolean old_fixed=glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++        glEnable(GL_PRIMITIVE_RESTART);glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++        for(unsigned mutation=0;mutation<3;++mutation) {
++            if(mutation==1) { /* Retained guest pointer changes position without Unlock. */
++                for(unsigned i=0;i<4;++i) {
++                    float x=vertices[i].x+10;
++                    memcpy(guest_ptr(vertex_data+(i+2)*sizeof(vertices[0])),&x,sizeof(x));
++                }
++            }
++            if(mutation==2) { /* Alias into the live IB changes the second triangle. */
++                uint16_t degenerate[]={0,0,0};memcpy(guest_ptr(index_data+8),degenerate,sizeof(degenerate));
++            }
++            setenv("WRATH_INDEXED_SHADER","0",1);
++            call(0x100EA0,clear,6);call(0x101BC0,indexed_draw,3);assert(g_eax==0);
++            glReadPixels(35,240-90,60,60,GL_RGBA,GL_UNSIGNED_BYTE,baseline);
++            uint64_t before=s_indexed_shader_hits;
++            setenv("WRATH_INDEXED_SHADER","1",1);
++            call(0x100EA0,clear,6);call(0x101BC0,indexed_draw,3);assert(g_eax==0);
++            assert(s_indexed_shader_hits==before+1); /* Explicit eligible hit. */
++            glReadPixels(35,240-90,60,60,GL_RGBA,GL_UNSIGNED_BYTE,optimized);
++            assert(!memcmp(baseline,optimized,sizeof(baseline)));
++            assert(glIsEnabled(GL_PRIMITIVE_RESTART) && glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX));
++            if(!mutation) {
++                memcpy(first,baseline,sizeof(first));
++                unsigned lit=0;for(unsigned i=0;i<sizeof(first);i+=4)lit+=first[i]||first[i+1]||first[i+2];
++                assert(lit>100); /* Comparing two blank outputs cannot pass. */
++            } else assert(memcmp(first,baseline,sizeof(first)));
++        }
++        /* A subsequent ordinary shader draw must ignore the temporary EBO. */
++        call(0x100EA0,clear,6);call(0x1019C0,draw,4);assert(g_eax==0);
++        glReadPixels(35,240-90,60,60,GL_RGBA,GL_UNSIGNED_BYTE,optimized);
++        assert(!memcmp(first,optimized,sizeof(first)));
++        uint64_t before=s_indexed_shader_hits;
++        indexed_draw[2]=index_data+4;call(0x101BC0,indexed_draw,3);
++        assert(g_eax==(uint32_t)D3DERR_INVALIDCALL && s_indexed_shader_hits==before);
++        bind_index[1]=UINT32_MAX;call(0xFFEA0,bind_index,2);
++        indexed_draw[2]=index_data+2;call(0x101BC0,indexed_draw,3);
++        assert(g_eax==(uint32_t)D3DERR_INVALIDCALL && s_indexed_shader_hits==before);
++        if(!old_restart)glDisable(GL_PRIMITIVE_RESTART);
++        if(!old_fixed)glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++        bind_index[0]=saved_index;bind_index[1]=saved_base;call(0xFFEA0,bind_index,2);
++        bind_stream[1]=saved_stream;bind_stream[2]=saved_stride;call(0x102580,bind_stream,3);
++        write32(0x10F284,saved_offset);write32(0x10EC10,read32(0x10EC10)|0x40);
++        uint32_t drop[]={indexed_vb};call(0x103AD0,drop,1);assert(!resource(indexed_vb));
++        drop[0]=indexed_ib;call(0x103AD0,drop,1);assert(!resource(indexed_ib));
++        if(saved_mode){setenv("WRATH_INDEXED_SHADER",saved_mode,1);free(saved_mode);}
++        else unsetenv("WRATH_INDEXED_SHADER");
++        assert(glGetError()==GL_NO_ERROR);
++        puts("PASS: indexed shader eligible hits, exact baseline pixels, base/offset, guest alias mutations, restart/VAO state, bounds and lifetime");
++    }
