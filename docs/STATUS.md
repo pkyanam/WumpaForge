@@ -29,8 +29,13 @@
   signatures in reachable history. Ignore rules now cover misplaced outputs
   and environment files. Licenses must preserve upstream GPL/LGPL notices;
   future commercial restrictive distribution needs a separate review.
+- Setup/README committed e172c40, license inventory98a773f, portability34b40fe.
+  Clean replay of all five dependency patches matched35 local changed/new files.
+  Setup help/dry-run and supplied executable hash were verified without a duplicate
+  build. Independent review found no new code defect; strengthening two GPU
+  integration assertions for retained-stream draws and post-toggle presentation.
 - Agent waves: controller hub fix, mac DMA audit, repository audit, onboarding,
-  license inventory, portability. Root owns full builds, packaging and live UI;
+  license inventory, portability and regression audit. Root owns full builds, packaging and live UI;
   at most two compiler jobs total. Keep the goal active during outstanding work.
 
 ## Earlier: build55/story15 reflection passes; Xbox address5 is next hub setting

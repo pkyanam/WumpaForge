@@ -98,5 +98,8 @@ operating system, graphics or packaging compatible. See the
 
 Game content, extracted executables, translated game sources, binaries, build
 outputs, and dependency checkouts must stay out of commits. Upstream provenance
-and license notes are in [UPSTREAM](docs/UPSTREAM.md). Private source access does
-not grant rights to redistribute the original game or its derived build products.
+is recorded in [UPSTREAM](docs/UPSTREAM.md); see [third-party notices](THIRD_PARTY_NOTICES.md)
+and the [licensing inventory](docs/LICENSING.md) before planning distribution.
+The current implementation includes GPL/LGPL-covered components and is not offered
+under a blanket proprietary license. Private source access does not grant rights
+to redistribute the original game or its derived build products.
