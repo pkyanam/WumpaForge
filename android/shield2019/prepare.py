@@ -51,6 +51,11 @@ def main():
             (sdl/relative).write_bytes(member.read())
     for sdl_patch in sorted((HERE/'patches').glob('sdl-*.patch')):
         apply_patch(sdl, sdl_patch)
+    # Kernel dispatch correctness is shared with Mac; Android no longer carries
+    # a duplicate patch. Reject a stale base rather than reintroduce the race.
+    kernel = (ROOT/'third_party/xboxrecomp/src/kernel/kernel_bridge.c').read_text()
+    if kernel.count('static RECOMP_TLS int g_kernel_dispatch_slot = -1;') != 1:
+        raise RuntimeError('Shared kernel TLS fix missing; run python3 tools/bootstrap.py first')
     # Source copies are disposable build inputs; the original Mac checkout stays intact.
     for disposable in (OUT/'runtime/src',OUT/'title'):
         if disposable.is_symlink():raise RuntimeError('Unexpected source copy symlink')

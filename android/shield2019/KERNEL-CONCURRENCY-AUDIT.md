@@ -17,8 +17,12 @@ its stdcall argument cleanup, not merely a diagnostic counter.
 The actual-source fixture `tests/test_kernel_dispatch_tls.py` deterministically
 interleaves lookups for ordinals 277 and 99. The original implementation invokes
 99 for both, moving the first simulated stack to `0x1010` instead of `0x1008`.
-Android TLS passes the thread/stack checks and a nested-callback cleanup check.
-`runtime-kernel-dispatch-tls.patch` implements the correction (commit `0364047`).
+TLS passes the thread/stack checks and a nested-callback cleanup check.
+The correction originated as Android commit `0364047` and now lives in the shared
+`patches/xboxrecomp-zz-kernel-dispatch-tls.patch`, covering Mac as well. The actual
+fixture is `tools/test_kernel_dispatch_tls.py` at repository root; the Android
+entry point delegates to it. Android preparation requires the already-patched
+shared runtime and does not apply a duplicate TLS patch.
 
 A subsequent device run did **not** contain that correction: Git-format patch
 headers were silently skipped when `git apply` ran inside a nested repository
