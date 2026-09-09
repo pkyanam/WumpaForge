@@ -1,0 +1,15 @@
+--- a/src/kernel/kernel_bridge.c
++++ b/src/kernel/kernel_bridge.c
+@@ -2954,6 +2954,12 @@
+     /* What a read actually delivered. A decoder that rejects its input cannot
+      * say whether the bytes were wrong or the read was, and the two look
+      * identical from inside the title -- the first bytes settle it. */
++#ifdef WRATH_ANDROID_TV
++    /* stderr is an unbuffered external-storage file on Android. Preserve
++     * failed/short reads, but bound successful byte dumps by the existing
++     * kernel trace budget instead of writing a log record per asset chunk. */
++    if (KERNEL_LOG_ON() || ios.Status != STATUS_SUCCESS || ios.Information != length)
++#endif
+     {
+         const uint8_t *p = (const uint8_t *)XBOX_TO_NATIVE(buffer_va);
+         uint32_t got = (uint32_t)ios.Information;

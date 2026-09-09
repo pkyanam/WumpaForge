@@ -96,3 +96,35 @@ preserve getter/readback/deletion ordering and guest resource lifetimes, handle
 SDL lifecycle/context loss and propagate failures. It is a substantial change,
 not an approved shortcut to remove locking. Separately trace the original heap
 free-list corruption beforeEndStateBlock allocation; retain fullstate semantics.
+
+## Loading I/O follow-up
+
+The path-case adapter resolves components when translating a path for open or
+metadata operations. It does not resolve the path on every read. Exact Android
+component matches use `fstatat`; missing exact spelling scans only the current
+parent's siblings, then opens the next directory. There is no full-tree scan.
+Repeated opens can repeat those scans, but the available reports do not establish
+that as the loading bottleneck. No immutable-asset cache was added speculatively.
+
+A concrete avoidable operation exists in `bridge_NtReadFile`: every successful
+read emitted a byte-prefix diagnostic with `fprintf` and `fflush`. Android sends
+unbuffered stderr to `native.log` on app external storage. The existing
+`hub-transition.log` contains22423 read records for326394318 delivered bytes,
+including13900 requests of8192bytes and7152 requests of4096bytes. There are288
+short reads and120 nonzero statuses. These counts span the retained trace, not a
+measured single level-load interval.
+
+`runtime-read-log-budget.patch` applies the existing kernel trace budget to
+successful full-read dumps on Android. Short reads and nonzero statuses retain
+their diagnostic records. Read calls, offsets, returned bytes/status, guest
+IO_STATUS_BLOCK writes, event/APC completion, and asset contents are unchanged.
+The existing POSIX implementation issues one `read` and an optional `lseek` per
+request. The change removes routine external-storage log writes after the trace
+budget, but its device latency benefit is not measured and it does not establish
+that endless loading is fixed. The previously captured heap crash is separate.
+
+`python3 android/shield2019/tests/test_read_log_budget.py` passes a host UBSan
+fixture that extracts the actual patched bridge and POSIX read function. It reads
+real temporary-file bytes, checks guest byte counts/status and completion calls,
+and verifies budgeted successful logging plus retained short/EOF/invalid-handle
+records. No Android build or device run was performed by this audit task.
