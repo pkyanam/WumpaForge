@@ -30,6 +30,13 @@ class CMakeContract(unittest.TestCase):
                 result = self.check(**change)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
 
+    def test_ndk_legacy_toolchain_effective_api(self):
+        self.assertEqual(self.check(CMAKE_SYSTEM_VERSION="1",
+                                    ANDROID_PLATFORM_LEVEL="30").returncode, 0)
+        for api in ("29", "", "android-30"):
+            self.assertNotEqual(self.check(CMAKE_SYSTEM_VERSION="30",
+                                           ANDROID_PLATFORM_LEVEL=api).returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
