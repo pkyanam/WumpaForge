@@ -12,6 +12,7 @@
 extern int xbox_D3D8GLAcquire(void);
 extern void xbox_D3D8GLRelease(void);
 extern void xbox_D3D8GLPumpEvents(void);
+extern GLuint xbox_D3D8GLBackBuffer(unsigned index);
 static IDirect3DDevice8 *device;
 static GLuint texture;
 static atomic_uint inside, passes;
@@ -26,13 +27,13 @@ static void render(unsigned worker, unsigned iteration)
     xbox_D3D8GLRelease();
     assert(CGLGetCurrentContext());
     assert(glIsTexture(texture));
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, xbox_D3D8GLBackBuffer(0));
     glDisable(GL_SCISSOR_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClearColor(worker ? 1.f : 0.f, worker ? 0.f : 1.f, iteration / 255.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     unsigned char pixel[4] = {0};
-    glReadBuffer(GL_BACK);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
     glReadPixels(8, 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
     assert(pixel[0] == (worker ? 255 : 0));
     assert(pixel[1] == (worker ? 0 : 255));
