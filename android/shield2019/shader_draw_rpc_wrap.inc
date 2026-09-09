@@ -1,3 +1,5 @@
+extern int xbox_D3D8GLBeginStateCall(void);
+extern void xbox_D3D8GLEndCall(int outer);
 /* Caller keeps guest graphics/resource ownership while the owner runs the
  * audited host-only body. Never add SDK callbacks or event pumping here. */
 struct WumpaShaderDrawRequest {
