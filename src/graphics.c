@@ -730,12 +730,33 @@ static const uint8_t *texture_snapshot_capture(struct Resource *r)
     return r->encoded_snapshot;
 }
 
+/* Pages never move or disappear. A cached pointer is only a hint: release
+ * clears its handle, and reuse must match the current requested handle exactly.
+ * Misses (including unknown handles) always use the authoritative page scan. */
+#define RESOURCE_LOOKUP_SLOTS 512u
+static struct Resource *s_resource_lookup[RESOURCE_LOOKUP_SLOTS];
+#ifdef WRATH_GRAPHICS_SMOKE_TEST
+static uint64_t s_resource_lookup_hits,s_resource_lookup_scans;
+#endif
+static unsigned resource_lookup_slot(uint32_t handle)
+{ return ((handle>>4)^(handle>>13))&(RESOURCE_LOOKUP_SLOTS-1); }
 static struct Resource *resource(uint32_t handle)
 {
     if (!handle) return NULL;
+    unsigned slot=resource_lookup_slot(handle);
+    struct Resource *cached=s_resource_lookup[slot];
+    if (cached && cached->handle==handle) {
+#ifdef WRATH_GRAPHICS_SMOKE_TEST
+        ++s_resource_lookup_hits;
+#endif
+        return cached;
+    }
+#ifdef WRATH_GRAPHICS_SMOKE_TEST
+    ++s_resource_lookup_scans;
+#endif
     for (unsigned i = 0; i < resource_capacity(); ++i) {
         struct Resource *r = resource_at(i);
-        if (r->handle == handle) return r;
+        if (r->handle == handle) { s_resource_lookup[slot]=r; return r; }
     }
     return NULL;
 }

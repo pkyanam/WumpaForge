@@ -50,3 +50,13 @@ build/input/test_resource_pages
 For debugger snapshots use `s_resource_page_count`, `s_resource_pages[page]`,
 and256 entries per page. `resource_capacity()` and `resource_at(index)` provide
 the same traversal to code without assuming contiguous pages.
+
+## Exact hot-handle lookup cache
+
+Story23 snow profiling identified repeated linear page scans in original array
+address commits. The512-entry pointer cache validates each cached pointer's live
+handle, otherwise using the unchanged page scan. Pages remain address-stable;
+release/reuse semantics and the separate retained-vertex generation validation
+are preserved. Allocation is4KiB static on ARM64, without production timers or
+counters. Full resource/GPU tests pass collisions, release/reuse and10000 warmed
+hits with no scans. See [snow measurements and evidence](research/SNOW-RENDER-PERFORMANCE.md).
