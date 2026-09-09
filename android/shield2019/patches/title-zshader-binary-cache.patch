@@ -1,0 +1,188 @@
+--- a/shader_bridge.inc
++++ b/shader_bridge.inc
+@@ -3,6 +3,7 @@
+ #include "nv2a_vertex.h"
+ #include "nv2a_vertex_input.h"
+ #include "nv2a_pixel.h"
++#include "shader_binary_cache.inc"
+ extern GLuint xbox_D3D8GLTextureName(IDirect3DTexture8 *texture);
+ extern void xbox_D3D8GLApplyRenderStates(void);
+ static uint32_t s_vertex_handle, s_pixel_handle;
+@@ -213,14 +214,23 @@
+         shader_error("vertex translation",error);
+     if (!nv2a_pixel_generate(pixel,&key.options,pixel_source,sizeof(pixel_source),&pi,error,sizeof(error)))
+         shader_error("pixel translation",error);
+-    GLuint vs=shader_compile(GL_VERTEX_SHADER,vertex_source), ps=shader_compile(GL_FRAGMENT_SHADER,pixel_source);
+-    GLuint program=glCreateProgram(); glAttachShader(program,vs); glAttachShader(program,ps);
+-    glLinkProgram(program); glDeleteShader(vs); glDeleteShader(ps);
+-    GLint success; glGetProgramiv(program,GL_LINK_STATUS,&success);
+-    if (!success) {
+-        char info[2048]; glGetProgramInfoLog(program,sizeof(info),NULL,info);
+-        glDeleteProgram(program); shader_error("native program link",info);
+-    }
++    struct ShaderBinaryKey binary_key=shader_binary_key(vertex_source,pixel_source);
++    GLuint program=glCreateProgram();
++    if (!shader_binary_load(&binary_key,program)) {
++        /* Rejected binaries leave a disposable program; source linking is authoritative. */
++        glDeleteProgram(program);program=glCreateProgram();
++        if(binary_key.directory>=0)glProgramParameteri(program,GL_PROGRAM_BINARY_RETRIEVABLE_HINT,GL_TRUE);
++        GLuint vs=shader_compile(GL_VERTEX_SHADER,vertex_source), ps=shader_compile(GL_FRAGMENT_SHADER,pixel_source);
++        glAttachShader(program,vs);glAttachShader(program,ps);
++        glLinkProgram(program);glDeleteShader(vs);glDeleteShader(ps);
++        GLint success;glGetProgramiv(program,GL_LINK_STATUS,&success);
++        if(!success) {
++            char info[2048];glGetProgramInfoLog(program,sizeof(info),NULL,info);
++            glDeleteProgram(program);shader_error("native program link",info);
++        }
++        shader_binary_save(&binary_key,program);
++    }
++    if(binary_key.directory>=0)close(binary_key.directory);
+     if (slot->program) glDeleteProgram(slot->program);
+     slot->key=key; slot->program=program; slot->vertex=vi; slot->pixel=pi; slot->age=++s_shader_age;
+     slot->u_vconstants_location=glGetUniformLocation(program,"u_vconstants");
+--- /dev/null
++++ b/shader_binary_cache.inc
+@@ -0,0 +1,143 @@
++/* Android-only optional driver program cache. Original GLSL remains the authority. */
++#include <fcntl.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#include <errno.h>
++#include <dirent.h>
++#include <sys/file.h>
++
++#define SHADER_BINARY_LIMIT (16u * 1024u * 1024u)
++struct ShaderBinaryKey {
++    const char *part[5];
++    uint32_t size[5];
++    char name[40];
++    int directory;
++};
++struct ShaderBinaryHeader {
++    uint32_t magic, version, size[5], format, binary_size;
++    uint64_t checksum;
++};
++static uint64_t shader_binary_hash(uint64_t hash, const void *bytes, size_t size)
++{
++    const unsigned char *p=bytes;
++    while (size--) { hash^=*p++; hash*=1099511628211ull; }
++    return hash;
++}
++static int shader_binary_io(int fd, void *data, size_t length, int writing)
++{
++    unsigned char *p=data;
++    while (length) {
++        ssize_t n=writing?write(fd,p,length):read(fd,p,length);
++        if(n<0&&errno==EINTR)continue;
++        if(n<=0)return 0;
++        p+=n; length-=(size_t)n;
++    }
++    return 1;
++}
++static struct ShaderBinaryKey shader_binary_key(const char *vertex,const char *pixel)
++{
++    struct ShaderBinaryKey key={.directory=-1};
++    const char *root=getenv("WRATH_SHADER_CACHE_ROOT");
++    if(!root||root[0]!='/')return key;
++    GLint formats=0;glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS,&formats);
++    if(formats<=0)return key;
++    key.part[0]=(const char*)glGetString(GL_VENDOR);
++    key.part[1]=(const char*)glGetString(GL_RENDERER);
++    key.part[2]=(const char*)glGetString(GL_VERSION);
++    key.part[3]=vertex;key.part[4]=pixel;
++    uint64_t hash=14695981039346656037ull;
++    for(unsigned i=0;i<5;++i) {
++        if(!key.part[i])return key;
++        size_t n=strlen(key.part[i]);
++        if(n>(i<3?4096u:65535u))return key;
++        key.size[i]=(uint32_t)n;
++        hash=shader_binary_hash(hash,&key.size[i],sizeof(key.size[i]));
++        hash=shader_binary_hash(hash,key.part[i],n);
++    }
++    if(mkdir(root,0700)&&errno!=EEXIST)return key;
++    key.directory=open(root,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
++    snprintf(key.name,sizeof(key.name),"%016llx.wspb",(unsigned long long)hash);
++    return key;
++}
++static int shader_binary_load(const struct ShaderBinaryKey *key,GLuint program)
++{
++    if(key->directory<0)return 0;
++    int fd=openat(key->directory,key->name,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
++    if(fd<0)return 0;
++    struct ShaderBinaryHeader h;struct stat st;int ok=0;void *binary=NULL;
++    if(fstat(fd,&st)||!S_ISREG(st.st_mode)||!shader_binary_io(fd,&h,sizeof(h),0))goto done;
++    if(h.magic!=0x57465342||h.version!=1||!h.binary_size||h.binary_size>SHADER_BINARY_LIMIT)goto done;
++    uint64_t total=sizeof(h)+h.binary_size;
++    for(unsigned i=0;i<5;++i){if(h.size[i]!=key->size[i])goto done;total+=h.size[i];}
++    if((uint64_t)st.st_size!=total)goto done;
++    /* A filename hash is only an index: verify all driver and GLSL bytes. */
++    for(unsigned i=0;i<5;++i) {
++        char bytes[1024];size_t offset=0;
++        while(offset<h.size[i]) {
++            size_t n=h.size[i]-offset;if(n>sizeof(bytes))n=sizeof(bytes);
++            if(!shader_binary_io(fd,bytes,n,0)||memcmp(bytes,key->part[i]+offset,n))goto done;
++            offset+=n;
++        }
++    }
++    binary=malloc(h.binary_size);if(!binary)goto done;
++    if(!shader_binary_io(fd,binary,h.binary_size,0)||
++       shader_binary_hash(14695981039346656037ull,binary,h.binary_size)!=h.checksum)goto done;
++    GLint format_count=0;glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS,&format_count);
++    if(format_count<=0||format_count>256)goto done;
++    GLint formats[256];glGetIntegerv(GL_PROGRAM_BINARY_FORMATS,formats);
++    int supported=0;for(int i=0;i<format_count;++i)supported|=(GLenum)formats[i]==h.format;
++    if(!supported)goto done;
++    glProgramBinary(program,h.format,binary,(GLsizei)h.binary_size);
++    GLint linked=0;glGetProgramiv(program,GL_LINK_STATUS,&linked);
++    if(!linked) { for(int i=0;i<16&&glGetError()!=GL_NO_ERROR;++i){} goto done; }
++    ok=1;fprintf(stderr,"[wrath shader cache] hit %s\n",key->name);
++ done:
++    free(binary);close(fd);return ok;
++}
++/* Only the optional private cache is inspected, once per cache miss. No eviction. */
++static int shader_binary_room(int directory, uint64_t added)
++{
++    int copy=dup(directory);if(copy<0)return 0;
++    DIR *dir=fdopendir(copy);if(!dir){close(copy);return 0;}
++    rewinddir(dir);
++    uint64_t total=0;unsigned count=0;int ok=1;struct dirent *entry;
++    errno=0;
++    while((entry=readdir(dir))) {
++        if(!strcmp(entry->d_name,".")||!strcmp(entry->d_name,".."))continue;
++        struct stat st;
++        if(fstatat(directory,entry->d_name,&st,AT_SYMLINK_NOFOLLOW)){ok=0;break;}
++        if(S_ISREG(st.st_mode)){total+=(uint64_t)st.st_size;++count;}
++        if(total+added>64u*1024u*1024u||count>=256){ok=0;break;}
++        errno=0;
++    }
++    if(errno)ok=0;
++    closedir(dir);return ok&&total+added<=64u*1024u*1024u&&count<256;
++}
++static void shader_binary_save(const struct ShaderBinaryKey *key,GLuint program)
++{
++    if(key->directory<0)return;
++    GLint size=0;glGetProgramiv(program,GL_PROGRAM_BINARY_LENGTH,&size);
++    if(size<=0||(unsigned)size>SHADER_BINARY_LIMIT)return;
++    void *binary=malloc((size_t)size);if(!binary)return;
++    GLsizei written=0;GLenum format=0;glGetProgramBinary(program,size,&written,&format,binary);
++    if(written<=0||written>size){free(binary);return;}
++    struct ShaderBinaryHeader h={0};h.magic=0x57465342;h.version=1;
++    memcpy(h.size,key->size,sizeof(h.size));h.format=format;h.binary_size=(uint32_t)written;
++    h.checksum=shader_binary_hash(14695981039346656037ull,binary,h.binary_size);
++    uint64_t file_size=sizeof(h)+h.binary_size;
++    for(unsigned i=0;i<5;++i)file_size+=h.size[i];
++    if(flock(key->directory,LOCK_EX|LOCK_NB)){free(binary);return;}
++    if(!shader_binary_room(key->directory,file_size)){flock(key->directory,LOCK_UN);free(binary);return;}
++    static unsigned sequence;char temporary[80];
++    snprintf(temporary,sizeof(temporary),".%s.%ld.%u.tmp",key->name,(long)getpid(),++sequence);
++    int fd=openat(key->directory,temporary,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600);
++    if(fd<0){flock(key->directory,LOCK_UN);free(binary);return;}
++    int ok=shader_binary_io(fd,&h,sizeof(h),1);
++    for(unsigned i=0;i<5&&ok;++i)ok=shader_binary_io(fd,(void*)key->part[i],key->size[i],1);
++    if(ok)ok=shader_binary_io(fd,binary,h.binary_size,1);
++    if(close(fd))ok=0;
++    if(ok&&renameat(key->directory,temporary,key->directory,key->name)==0)
++        fprintf(stderr,"[wrath shader cache] saved %s (%u bytes)\n",key->name,h.binary_size);
++    else unlinkat(key->directory,temporary,0);
++    flock(key->directory,LOCK_UN);free(binary);
++}
