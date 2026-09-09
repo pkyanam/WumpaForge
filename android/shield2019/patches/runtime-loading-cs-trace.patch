@@ -1,0 +1,82 @@
+--- a/src/kernel/kernel_rtl.c
++++ b/src/kernel/kernel_rtl.c
+@@ -16,6 +16,8 @@
+ #include <stdarg.h>
+ #include <string.h>
+ #include <ctype.h>
++#include <stdatomic.h>
++#include <unistd.h>
+ 
+ /* ============================================================================
+  * String Initialization
+@@ -449,6 +451,31 @@
+ 
+ extern RECOMP_TLS uint32_t g_xbox_kernel_caller;
+ 
++/* Opt-in, bounded diagnostics armed only when the loading worker begins.
++ * No lock behavior changes, forced releases, or guest-memory writes. */
++extern int wumpa_cs_last_unlock_result(void);
++static int wumpa_cs_trace_enabled(void)
++{
++    static _Atomic int cached=-1;
++    int enabled=atomic_load_explicit(&cached,memory_order_relaxed);
++    if(enabled>=0)return enabled;
++    const char *v=getenv("WRATH_TRACE_LOADING_CS");enabled=v && !strcmp(v,"1");
++    atomic_store_explicit(&cached,enabled,memory_order_relaxed);return enabled;
++}
++static void wumpa_cs_trace(const char *event, PRTL_CRITICAL_SECTION guest,
++                           long depth, int result)
++{
++    static _Atomic unsigned armed,records;
++    if((uint32_t)((uintptr_t)guest-(uintptr_t)g_xbox_mem_offset)!=0x4EA440u ||
++       !wumpa_cs_trace_enabled())return;
++    if(g_xbox_kernel_caller==0x2BF67u)atomic_store_explicit(&armed,1,memory_order_relaxed);
++    if(!atomic_load_explicit(&armed,memory_order_relaxed))return;
++    unsigned record=atomic_fetch_add_explicit(&records,1,memory_order_relaxed);
++    if(record>=3000)return;
++    fprintf(stderr,"[shield cs] n=%u %s guest_tid=%u native_tid=%d site=0x%08X depth=%ld result=%d\n",
++            record,event,GetCurrentThreadId(),(int)gettid(),g_xbox_kernel_caller,depth,result);
++}
++
+ static void xbox_cs_note_owner(CRITICAL_SECTION* cs)
+ {
+     XBOX_CS_SLOT* slot = xbox_cs_slot_of(cs);
+@@ -457,6 +484,7 @@
+     slot->owner_site = g_xbox_kernel_caller;
+     slot->owner_tid  = GetCurrentThreadId();
+     slot->depth++;
++    wumpa_cs_trace("enter",(PRTL_CRITICAL_SECTION)slot->key,slot->depth,0);
+ }
+ 
+ static void xbox_cs_clear_owner(CRITICAL_SECTION* cs)
+@@ -527,8 +555,12 @@
+     if (cs) {
+         InterlockedIncrement(&g_cs_leaves);
+         crt_lock_trace("drop", CriticalSection);
++        XBOX_CS_SLOT *slot=xbox_cs_slot_of(cs);
++        long depth=slot?slot->depth:0;
++        wumpa_cs_trace("leave",CriticalSection,depth,0);
+         xbox_cs_clear_owner(cs);
+         LeaveCriticalSection(cs);
++        wumpa_cs_trace("unlock",CriticalSection,depth-1,wumpa_cs_last_unlock_result());
+     }
+ }
+ 
+--- a/src/platform/win32_compat.c
++++ b/src/platform/win32_compat.c
+@@ -119,11 +119,14 @@
+     cs->RecursionCount++;
+ }
+ 
++static __thread int wumpa_cs_unlock_result;
++int wumpa_cs_last_unlock_result(void) { return wumpa_cs_unlock_result; }
++
+ VOID LeaveCriticalSection(LPCRITICAL_SECTION cs)
+ {
+     if (!cs->LockSemaphore) return;
+     cs->RecursionCount--;
+-    pthread_mutex_unlock((pthread_mutex_t *)cs->LockSemaphore);
++    wumpa_cs_unlock_result=pthread_mutex_unlock((pthread_mutex_t *)cs->LockSemaphore);
+ }
+ 
+ BOOL TryEnterCriticalSection(LPCRITICAL_SECTION cs)
