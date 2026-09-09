@@ -44,7 +44,7 @@ def main():
         for file in sorted(classes.rglob('*.class')): archive.write(file,file.relative_to(classes))
     run([tools/'d8','--min-api','30','--lib',android_jar,'--output',dex,jar],env=env)
     unsigned=package/'unsigned.apk'; shutil.copy2(package/'resources.apk',unsigned)
-    libraries={'libmain.so':WORK/'native/libmain.so','libSDL2.so':WORK/'native/sdl2/libSDL2.so','libshield_probe.so':WORK/'native/libshield_probe.so'}
+    libraries={'libmain.so':WORK/'native/libmain.so','libSDL2.so':WORK/'native/sdl2/libSDL2.so','libshield_probe.so':WORK/'native/libshield_probe.so','libgraphics_check.so':WORK/'native/libgraphics_check.so','libcontroller_check.so':WORK/'native/libcontroller_check.so'}
     strip=ndk/'toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip'
     readelf=strip.with_name('llvm-readelf')
     library_report={}
@@ -66,6 +66,9 @@ def main():
     run([tools/'apksigner','sign','--ks',keystore,'--ks-pass','pass:android','--key-pass','pass:android','--out',apk,aligned],env=env)
     run([tools/'apksigner','verify','--verbose',apk],env=env)
     run([tools/'zipalign','-c','-P','16','4',apk])
+    from artifact_check import inspect_apk
+    audit=inspect_apk(apk)
+    (WORK/'apk-elf-audit.json').write_text(json.dumps(audit,indent=2)+'\n')
     report={'artifact':str(apk),'sha256':hashlib.sha256(apk.read_bytes()).hexdigest(),'bytes':apk.stat().st_size,'abi':'arm64-v8a','minimum_api':30,'ndk':(ndk/'source.properties').read_text(),'libraries':library_report,'includes_game_assets':False,'device_tested':False,'playability_verified':False}
     (WORK/'apk-manifest.json').write_text(json.dumps(report,indent=2)+'\n')
     print(apk)

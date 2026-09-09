@@ -16,7 +16,7 @@ JNIEXPORT jstring JNICALL Java_org_wumpaforge_shield_LauncherActivity_nativeDiag
     EGLContext context=EGL_NO_CONTEXT; EGLSurface surface=EGL_NO_SURFACE;
     EGLint major=0,minor=0; const char *failure="eglInitialize";
     if(display==EGL_NO_DISPLAY || !eglInitialize(display,&major,&minor)) goto done;
-    used+=(size_t)snprintf(result+used,sizeof(result)-used,"EGL: %d.%d, client APIs: %s\n",major,minor,eglQueryString(display,EGL_CLIENT_APIS));
+    used+=(size_t)snprintf(result+used,sizeof(result)-used,"EGL: %d.%d, client APIs: %.200s\n",major,minor,eglQueryString(display,EGL_CLIENT_APIS));
     failure="desktop OpenGL API unavailable";
     if(!eglBindAPI(EGL_OPENGL_API)) goto done;
     const EGLint configAttrs[]={EGL_SURFACE_TYPE,EGL_PBUFFER_BIT,EGL_RENDERABLE_TYPE,EGL_OPENGL_BIT,EGL_RED_SIZE,8,EGL_GREEN_SIZE,8,EGL_BLUE_SIZE,8,EGL_ALPHA_SIZE,8,EGL_DEPTH_SIZE,24,EGL_STENCIL_SIZE,8,EGL_NONE};

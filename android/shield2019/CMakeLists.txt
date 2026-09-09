@@ -39,7 +39,7 @@ if(NOT GENERATED)
     message(FATAL_ERROR "Generate the original AOT game sources with the host pipeline first.")
 endif()
 file(GLOB TITLE "${WUMPA_WORK}/title/*.c")
-add_library(main SHARED entry.c ${TITLE} ${GENERATED})
+add_library(main SHARED entry.c host.c ${TITLE} ${GENERATED})
 target_include_directories(main PRIVATE "${WUMPA_ROOT}/local/generated")
 target_link_libraries(main PRIVATE shield_runtime)
 target_link_options(main PRIVATE "-Wl,--no-undefined")
@@ -53,3 +53,17 @@ set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/../probe/memory_probe.c 
 target_include_directories(shield_probe PRIVATE ${WUMPA_WORK}/gl)
 target_link_libraries(shield_probe PRIVATE EGL log android)
 target_link_options(shield_probe PRIVATE "-Wl,--no-undefined")
+
+add_library(graphics_check SHARED graphics_check_entry.c host.c
+    ${WUMPA_WORK}/checks/graphics_check.c
+    ${WUMPA_WORK}/title/nv2a_vertex.c ${WUMPA_WORK}/title/nv2a_vertex_input.c ${WUMPA_WORK}/title/nv2a_pixel.c)
+target_compile_definitions(graphics_check PRIVATE WRATH_GRAPHICS_SMOKE_TEST)
+target_compile_options(graphics_check PRIVATE -UNDEBUG -O1)
+target_include_directories(graphics_check PRIVATE ${WUMPA_WORK}/title)
+target_link_libraries(graphics_check PRIVATE shield_runtime)
+target_link_options(graphics_check PRIVATE "-Wl,--no-undefined")
+
+add_library(controller_check SHARED controller_check.c host.c)
+target_compile_options(controller_check PRIVATE -UNDEBUG)
+target_link_libraries(controller_check PRIVATE shield_runtime)
+target_link_options(controller_check PRIVATE "-Wl,--no-undefined")

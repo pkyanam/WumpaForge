@@ -11,6 +11,8 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import java.io.File;
+import java.io.FileInputStream;
+import java.security.MessageDigest;
 import java.util.Arrays;
 
 public final class LauncherActivity extends Activity {
@@ -24,7 +26,9 @@ public final class LauncherActivity extends Activity {
         TextView title=new TextView(this); title.setText("WumpaForge — SHIELD Pro 2019 development"); title.setTextSize(24); body.addView(title);
         TextView help=new TextView(this); help.setText("Bring your own USA Xbox assets. This build has not been tested on a Shield.\nUse the remote D-pad or a paired gamepad to select an action."); body.addView(help);
         Button diagnostics=new Button(this); diagnostics.setText("Run memory and graphics diagnostics"); body.addView(diagnostics);
+        Button graphics=new Button(this); graphics.setText("Run full graphics component checks (no assets)"); body.addView(graphics);
         Button controllers=new Button(this); controllers.setText("List connected controllers"); body.addView(controllers);
+        Button controllerTest=new Button(this);controllerTest.setText("Test live gamepad buttons, sticks and rumble");body.addView(controllerTest);
         Button play=new Button(this); play.setText("Start game"); body.addView(play);
         report=new TextView(this); report.setTextIsSelectable(true); report.setTextSize(16);
         ScrollView scroll=new ScrollView(this); scroll.addView(report); body.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
@@ -42,6 +46,12 @@ public final class LauncherActivity extends Activity {
                 runOnUiThread(()->{busy=false;report.setText(deviceSummary()+"\n"+text);});
             },"ShieldDiagnostics").start();
         });
+        graphics.setOnClickListener(v->{
+            String gate=deviceGate();if(gate!=null){report.setText(gate);return;}
+            report.setText("Graphics checks run in a separate process. Read graphics-check.log afterward; an assertion failure terminates only that test process.");
+            startActivity(new Intent(this,GraphicsCheckActivity.class));
+        });
+        controllerTest.setOnClickListener(v->{String gate=deviceGate();if(gate!=null){report.setText(gate);return;}startActivity(new Intent(this,ControllerCheckActivity.class));});
         controllers.setOnClickListener(v->report.setText(controllerSummary()));
         play.setOnClickListener(v->{
             String gate=deviceGate(); if(gate!=null){report.setText(gate);return;}
@@ -49,7 +59,24 @@ public final class LauncherActivity extends Activity {
             if(external==null || !new File(external,"assets/default.xbe").isFile()) {
                 report.setText("Game assets are missing. Use the documented host-side verify/import command before starting.\nApp storage: "+external);return;
             }
-            startActivity(new Intent(this,GameActivity.class));
+            if(busy)return;
+            busy=true;report.setText("Checking the original executable before launch…");
+            new Thread(()->{
+                String failure=null;
+                try {
+                    File xbe=new File(external,"assets/default.xbe");
+                    if(xbe.length()!=1777664L)throw new Exception("Unexpected executable size");
+                    MessageDigest digest=MessageDigest.getInstance("SHA-256");
+                    try(FileInputStream input=new FileInputStream(xbe)){
+                        byte[] block=new byte[65536];int count;
+                        while((count=input.read(block))!=-1)digest.update(block,0,count);
+                    }
+                    StringBuilder hex=new StringBuilder();for(byte b:digest.digest())hex.append(String.format("%02x",b&255));
+                    if(!hex.toString().equals("e8d7cbf225d899eb88227c11d1f40434c34e27c1b23ed946fb2c3471168d2f4d"))throw new Exception("Executable does not match the supported USA Xbox disc");
+                }catch(Exception problem){failure=problem.toString();}
+                final String error=failure;
+                runOnUiThread(()->{busy=false;if(error!=null)report.setText(error);else startActivity(new Intent(this,GameActivity.class));});
+            },"VerifyExecutable").start();
         });
     }
     private String deviceGate(){

@@ -46,6 +46,12 @@ def main():
             '    SDL_GL_MakeCurrent(g.window, g.glctx);\n    if (!wumpa_gl_load()) return D3DERR_INVALIDCALL;\n#ifdef __APPLE__')
     replace(backend,'void xbox_D3D8GLPumpEvents(void)\n{',
             'void xbox_D3D8GLPumpEvents(void)\n{\n    if (!wumpa_is_game_thread()) return;')
+    replace(backend,'            output_event(&ev);',
+            '            if (ev.type == SDL_RENDER_DEVICE_RESET) {\n'
+            '                fprintf(stderr, "[shield] EGL context lost; resource restoration is not implemented. Ending this game process.\\n");\n'
+            '                exit(EXIT_FAILURE);\n'
+            '            }\n'
+            '            output_event(&ev);')
     replace(backend,'    if (!pp || !pPP) return D3DERR_INVALIDCALL;',
             '    if (!pp || !pPP || !wumpa_is_game_thread()) return D3DERR_INVALIDCALL;')
     title=OUT/'title/graphics.c'
@@ -59,6 +65,15 @@ def main():
             'snprintf(save_path, sizeof(save_path), "%s/saves", getenv("WRATH_STATE_ROOT"));')
     replace(main_source,'snprintf(run_path, sizeof(run_path), "%s/../run", resolved);',
             'snprintf(run_path, sizeof(run_path), "%s/run", getenv("WRATH_STATE_ROOT"));')
+    checks=OUT/'checks';checks.mkdir(exist_ok=True)
+    fixture=(OUT/'title/graphics.c').read_text()
+    assert fixture.count('int main(void)')==1
+    (checks/'graphics_check.c').write_text(fixture.replace('int main(void)','int wumpa_graphics_checks(void)'))
+    tools_link=OUT/'tools'
+    if tools_link.is_symlink():
+        if tools_link.resolve()!=ROOT/'tools':raise RuntimeError('Unexpected tools link')
+    elif tools_link.exists():raise RuntimeError('Preserving unexpected tools directory')
+    else:tools_link.symlink_to(ROOT/'tools',target_is_directory=True)
     generate_loader(deps/'glcorearb.h')
     manifest={'sdl_revision':SDL_REV,'gl_registry_revision':GL_REV,'dependencies':DEPS,
               'base_source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
@@ -69,6 +84,7 @@ def generate_loader(registry):
     dest=OUT/'gl'; (dest/'epoxy').mkdir(parents=True,exist_ok=True)
     (dest/'GL').mkdir(exist_ok=True); shutil.copy2(registry,dest/'GL/glcorearb.h')
     paths=list((OUT/'title').glob('*'))+[OUT/'runtime/src/d3d/d3d8_gl.c']+list((OUT/'runtime/src/d3d').glob('*.inc'))
+    paths+=list((ROOT/'tools').glob('*.inc'))
     source='\n'.join(p.read_text() for p in paths if p.suffix in ('.c','.h','.inc'))
     names=sorted(set(re.findall(r'\b(gl[A-Z]\w*)\s*\(',source)) | {'glGetStringi','glGetIntegerv','glGetString'})
     registry_text=registry.read_text()
