@@ -1,26 +1,26 @@
 # Status — 2026-09-08
 
-## Current: build58/story20 loads Arctic Antics Level7/Demo0; fixed fog next
-- Actual user-assisted movement reached portal1; native fence fix passed and
-  original warp played. Snow assets loaded; stopped currentLevel7/Demo0,
-  filenamelevels/a/snow_m/snow, fade102/rate−8. First playable snowframe pending.
-- New explicit boundary: fixed FVF fog. Captured enable1/tableLINEAR3/start1/end35,
-  range0 and c57=(0,0,1,0). mac_runtime implements original planar/radial/specalpha
-  fog generation in native fixed shader, with actualGPU tests. Build59 next.
-- Story20 PID56082/session41490 ended at deliberate shaderbreak. No game running.
-  Appstillbuild58. Shaderprobe nowreadsFVF/world/view/projection and boot reloads
-  it atstop (1bd29d0), so addedretainedaddressfields apply to alreadyrunningboots.
-- Story19 reflection queuedoverride/retainedbounds issue remains unresolved,
-  did not recur story20. Probe/logenhancements2e86eb6 nextbinary. Do not weaken
-  bounds or substitute missing tangents. Hologram/story visual artifacts remain.
-- Usernewscope: fullscreen/maximizable/resizable and optionalsharpened upscale
-  HD/FHD/QHD afterplayability. Controller stages isolatedinternal-FBO/presentation
-  changes withoutdelayingfogbuild59; native_audio owns isolatedupscalershader/test.
-  Preserve640x480rendering and4:3aspect; benchmarkcost, nozero-lossclaim.
-- CombinedGPU tests passed build58 fences/retention/BGRA. Simplerhub60FPS,
-  screenupload0.18msvs2ms. Rootownsallfullbuild/package/launch, max2compilerjobs.
-- Next frozenfogfix→build59→NewGame/skip/userorSkywalking→verifyactualsnow
-  movement/jump/spin/pause, thenintegratefullscreen/upscale andremainingvisuals.
+## Current: build59/story21 reaches next snow fog path; combined build60 pending
+- 91f3ed5 fixed XYZ fog passes fullGPU tests and build59/package. Actualstory21
+  reachesLevel7/Demo0 andcrossespreviousXYZguard, thenstopsXYZRHWfog FVF0x144.
+  Story21PID4981/session40898ended atshaderbreak; nogamerunning, appbuild59.
+- Mac decodedoriginal102850 three microprograms: tableNONE→specularalpha;
+  tableenabled +deviceflag2→originalZ; otherwise1/originalRHW. Rootverified
+  Projection setterFEA20 flag2 iffprojectivecolumn(0,0,0,1). Story21perspective.
+  All3implementedwithpreservedoriginaldistance staging; sourcesfrozenpendingGPU.
+- Controllerintegratedinternal640x480color/depth back/frontFBOs, resizablewindow,
+  aspectletterboxing, F11fullscreen/F10sharpen toggle. IsolatedresizeGPUtestpassed.
+  Native_audio's isolatedspatialfilter0fbf5ad passes720/1080/1440GPU/CPUcomparison.
+  Combinedpresentation+bothfogpaths smoke nowcontroller-owned(onecompiler).
+  Rootwillbuild60 onlyafterpass+cumulativepatchrefreshedincludingCMakeOpenGL.
+- Actualupscaler/fullscreen gameandlatency tests explicitlyrequestedbyuser,
+  nextlivebuild. Defaultbilinearuntilmeasured, optionalstrength0.25 sharperpass.
+  No extraframequeue, internalresolutionunchanged; donotclaimnativeHDdetail/zerooverhead.
+- Earlier story19queuedreflectionoverride/retainedboundsfaultstillunresolved;
+  no recurrenceonstory20/21. On-stopprobe includescachedaddresses andgenerations
+  plusFVF/matrices; bootreloadsPythonatstop(1bd29d0). Hologramdistortionstillopen.
+- Nextbuild60→NewGame→originalskip/userwalking→actualsnowcontrolverification,
+  fullscreen/sharpenA/B. Goalremainsactive; neverclaimgameplayfromloadalone.
 
 ## Earlier: build55/story15 reflection passes; Xbox address5 is next hub setting
 - b951812 implements actual[PROJECT2D,DOT,DOT,DOT_RFLCT_SPEC] shader chain, signed
