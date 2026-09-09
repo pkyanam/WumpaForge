@@ -50,6 +50,9 @@ def main():
     for patch in sorted((HERE/'patches').glob('runtime-*.patch')):
         subprocess.run(['git','apply','--check',str(patch)],cwd=OUT/'runtime',check=True)
         subprocess.run(['git','apply',str(patch)],cwd=OUT/'runtime',check=True)
+    for patch in sorted((HERE/'patches').glob('title-*.patch')):
+        subprocess.run(['git','apply','--check',str(patch)],cwd=OUT/'title',check=True)
+        subprocess.run(['git','apply',str(patch)],cwd=OUT/'title',check=True)
     backend=OUT/'runtime/src/d3d/d3d8_gl.c'
     replace(backend,'#include <epoxy/gl.h>','#include <epoxy/gl.h>\n#include <stdatomic.h>\n#include "shield_host.h"')
     replace(backend,'SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);\n    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);',
