@@ -20,7 +20,7 @@ static void *payload;
 static int ready,success,done,stopping;
 static unsigned long long calls;
 /* Extra clocks and name lookup are opt-in; normal RPC takes neither path. */
-static int profiling;
+static int profiling,draw_dispatch;
 static uint64_t execution_wall,execution_cpu;
 struct RPCProfile {
     char name[48];
@@ -85,6 +85,7 @@ static void rpc_wait(void) {if(pthread_cond_wait(&changed,&queue))abort();}
 static void wake(void) {if(pthread_cond_broadcast(&changed))abort();}
 int wumpa_gl_rpc_active(void) {return atomic_load_explicit(&active,memory_order_acquire);}
 int wumpa_gl_rpc_owner(void) {return owner;}
+int wumpa_gl_rpc_draw_enabled(void) {return wumpa_gl_rpc_active() && draw_dispatch;}
 static void *run(void *unused)
 {
     (void)unused;owner=1;
@@ -151,6 +152,7 @@ int wumpa_gl_rpc_start(SDL_Window *window,SDL_GLContext context)
     if(wumpa_gl_rpc_active()) {unlock(&submit);return 0;}
     rpc_window=window;rpc_context=context;ready=success=done=stopping=0;pending=NULL;calls=0;
     const char *profile=getenv("WRATH_GL_RPC_PROFILE");profiling=profile && !strcmp(profile,"1");
+    const char *draw=getenv("WRATH_GL_RPC_DRAW");draw_dispatch=draw && !strcmp(draw,"1");
     memset(profiles,0,sizeof(profiles));profile_frames=0;profile_untracked=0;
     if(SDL_GL_MakeCurrent(window,NULL)<0) {unlock(&submit);return -1;}
     int created=pthread_create(&worker,NULL,run,NULL)==0;

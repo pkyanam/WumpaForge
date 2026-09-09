@@ -1,0 +1,88 @@
+--- a/src/d3d/d3d8_gl.c
++++ b/src/d3d/d3d8_gl.c
+@@ -1044,7 +1044,7 @@
+     glUniform1i(g.u_use_xform, d3d8_fvf_transformed(fvf) ? 0 : 1);
+ }
+ 
+-static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETYPE pt,
++static HRESULT __stdcall dev_DrawPrimitiveUP_impl(IDirect3DDevice8 *s, D3DPRIMITIVETYPE pt,
+                                               UINT prim_count, const void *verts, UINT stride)
+ {
+     (void)s;
+@@ -1070,7 +1070,7 @@
+     return D3D_OK;
+ }
+ 
+-static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETYPE pt,
++static HRESULT __stdcall dev_DrawIndexedPrimitiveUP_impl(IDirect3DDevice8 *s, D3DPRIMITIVETYPE pt,
+         UINT min_vi, UINT nv, UINT prim_count, const void *idx, D3DFORMAT idx_fmt,
+         const void *verts, UINT stride)
+ {
+@@ -1097,6 +1097,67 @@
+     glDrawElements(mode, (GLsizei)icount, itype, 0);
+     xbox_D3D8GLProfileDrawEnd(profile_draw);
+     return D3D_OK;
++}
++
++/* Only these two host backend bodies may execute on the persistent GL owner.
++ * Caller retains SDK/guest TLS and graphics mutex; all pointers are borrowed
++ * until the synchronous request completes. No guest callback or SDL pump. */
++struct WumpaUPDraw {
++    IDirect3DDevice8 *device;
++    D3DPRIMITIVETYPE primitive;
++    UINT minimum,vertices,primitives,stride;
++    const void *indices,*data;
++    D3DFORMAT index_format;
++    int indexed;
++    HRESULT result;
++    uint64_t draws,draw_time;
++};
++static void wumpa_execute_up_draw(void *opaque)
++{
++    struct WumpaUPDraw *request=opaque;
++    uint64_t before_draws=g_profile_calls.draws,before_time=g_profile_calls.draw_time;
++    request->result=request->indexed ?
++        dev_DrawIndexedPrimitiveUP_impl(request->device,request->primitive,request->minimum,
++            request->vertices,request->primitives,request->indices,request->index_format,
++            request->data,request->stride) :
++        dev_DrawPrimitiveUP_impl(request->device,request->primitive,request->primitives,
++            request->data,request->stride);
++    request->draws=g_profile_calls.draws-before_draws;
++    request->draw_time=g_profile_calls.draw_time-before_time;
++    /* Presentation reports the original caller's TLS counters. Transfer only
++     * this call's draw delta; leave any earlier owner accounting intact. */
++    g_profile_calls.draws=before_draws;g_profile_calls.draw_time=before_time;
++}
++static HRESULT wumpa_submit_up_draw(struct WumpaUPDraw *request)
++{
++    int outer=xbox_D3D8GLBeginStateCall();
++    /* Preserve all earlier caller scalar state before entering the body. */
++    wumpa_gl_flush_state();
++    wumpa_gl_rpc_call_named(request->indexed?"DrawIndexedPrimitiveUP":"DrawPrimitiveUP",
++                           wumpa_execute_up_draw,request);
++    g_profile_calls.draws+=request->draws;
++    g_profile_calls.draw_time+=request->draw_time;
++    xbox_D3D8GLEndCall(outer);
++    return request->result;
++}
++static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s,D3DPRIMITIVETYPE pt,
++                                             UINT prim_count,const void *verts,UINT stride)
++{
++    if(!wumpa_gl_rpc_draw_enabled() || wumpa_gl_rpc_owner())
++        return dev_DrawPrimitiveUP_impl(s,pt,prim_count,verts,stride);
++    struct WumpaUPDraw request={.device=s,.primitive=pt,.primitives=prim_count,
++                               .data=verts,.stride=stride};
++    return wumpa_submit_up_draw(&request);
++}
++static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s,D3DPRIMITIVETYPE pt,
++        UINT min_vi,UINT nv,UINT prim_count,const void *idx,D3DFORMAT idx_fmt,
++        const void *verts,UINT stride)
++{
++    if(!wumpa_gl_rpc_draw_enabled() || wumpa_gl_rpc_owner())
++        return dev_DrawIndexedPrimitiveUP_impl(s,pt,min_vi,nv,prim_count,idx,idx_fmt,verts,stride);
++    struct WumpaUPDraw request={.device=s,.primitive=pt,.minimum=min_vi,.vertices=nv,
++        .primitives=prim_count,.indices=idx,.index_format=idx_fmt,.data=verts,.stride=stride,.indexed=1};
++    return wumpa_submit_up_draw(&request);
+ }
+ 
+ static HRESULT __stdcall dev_DrawPrimitive(IDirect3DDevice8 *s, D3DPRIMITIVETYPE pt,

@@ -1,10 +1,11 @@
 #pragma once
 #include <SDL.h>
 /* Callers retain guest TLS and the native graphics mutex. Executor callbacks
- * invoke raw driver functions only, never guest code or the graphics mutex. */
+ * invoke audited host graphics operations, never guest code or the graphics mutex. */
 int wumpa_gl_rpc_start(SDL_Window *window,SDL_GLContext context);
 int wumpa_gl_rpc_active(void);
 int wumpa_gl_rpc_owner(void);
+int wumpa_gl_rpc_draw_enabled(void);
 void wumpa_gl_rpc_call(void (*function)(void *),void *argument);
 void wumpa_gl_rpc_call_named(const char *name,void (*function)(void *),void *argument);
 int wumpa_gl_rpc_swap(SDL_Window *window);

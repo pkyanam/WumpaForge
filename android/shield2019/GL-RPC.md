@@ -6,8 +6,8 @@ builds, installation and device tests; host fixtures do not establish Tegra driv
 correctness or a performance improvement.
 
 The original SDK caller retains guest registers/TLS, native graphics mutex,
-resource lifetime and guest-lock ownership. Only raw GL entry points move to a
-persistent pthread. The typed loader generates synchronous borrowed-argument
+resource lifetime and guest-lock ownership. With only `gl-rpc`, raw GL entry
+points move to a persistent pthread. The typed loader generates synchronous borrowed-argument
 requests for all used GL signatures. A scalar-state batch and its next immediate
 pointer/getter operation execute in one submission, preserving order. Caller stack
 buffers, shader string arrays and getter output pointers remain alive until the
@@ -81,3 +81,30 @@ reporting against the actual pthread and generated-wrapper fixture, named counts
 caller/renderer timing fields, and bounded output. Independent getter fixtures
 check four-element outputs/canaries, query order, retained error state, and zero
 count behavior. Device profiling is still needed to identify dominant submissions.
+
+## Whole backend UP draw experiment
+
+The additional `gl-rpc-draw` marker sets `WRATH_GL_RPC_DRAW=1`. It only takes effect
+when `gl-rpc` also enables the persistent owner. The two backend implementations
+`dev_DrawPrimitiveUP_impl` and `dev_DrawIndexedPrimitiveUP_impl` then execute as
+single synchronous requests. Their original bodies, arguments, empty-input
+behavior and HRESULTs are retained. Pending scalar state is flushed before the
+request; vertices/indices stay borrowed until completion. The caller keeps the
+native graphics mutex, so backend matrices, render state, buffer objects and
+resource lifetimes cannot change concurrently through another SDK call.
+Direct native-vtable callers acquire the same serialization token around the
+request; SDK callers already holding it do not reacquire it.
+
+Owner-aware GL guards bypass re-acquiring that caller's mutex. The owner validates
+its actual current context when a queued flush requires it. These callbacks are
+restricted to the two audited backend bodies and their host-state helpers: they
+must not grow guest callbacks, SDK-entry calls, event pumping or guest TLS reads.
+This does not move the title's programmable `shader_draw` path.
+
+The callback transfers its exact draw-count/time delta back to the original
+caller's profiling counters and restores the owner's previous counters. Presentation
+therefore retains caller attribution; the optional RPC profile records whole-body
+wall/CPU cost under `DrawPrimitiveUP` or `DrawIndexedPrimitiveUP`. The original
+per-draw timer still brackets the actual draw submission, now executed inline on
+the owner rather than crossing another RPC boundary. Device correctness and
+performance remain gates before retaining this option for game sessions.
