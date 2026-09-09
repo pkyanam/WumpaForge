@@ -77,7 +77,9 @@ int main(void) {
             directory = Path(temporary);file = directory/'division.c';file.write_text(source)
             binary = directory/'division'
             subprocess.run(['clang', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
+                            # CFG analysis can conservatively capture a flag no branch consumes.
                             '-Wno-parentheses-equality', '-Wno-unused-variable', '-Wno-unused-label',
+                            '-Wno-unused-but-set-variable',
                             '-fsanitize=undefined', '-I'+str(UPSTREAM/'templates/runtime'),
                             str(file), '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True, env={**os.environ, 'UBSAN_OPTIONS': 'halt_on_error=1'})
