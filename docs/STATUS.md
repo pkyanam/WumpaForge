@@ -23,7 +23,8 @@
   SDL/input ABI tests pass. Story can play or be skipped through original logic.
 - User authorized private GitHub staging as pkyanam/WumpaForge, BYO supported
   Xbox ISO, clear setup/agent docs and future ARM64 platform foundations. Repo
-  created private; root owns audit, push and visibility verification. No public
+  created and pushed private; remote main matched ade383e after GPU regressions.
+  Authenticated fresh clone plus setup dry-run passed. No public
   release or prebuilt distribution is authorized by this request.
 - repo_audit found no ISO/assets/generated game code/binaries/common secret
   signatures in reachable history. Ignore rules now cover misplaced outputs
@@ -32,8 +33,15 @@
 - Setup/README committed e172c40, license inventory98a773f, portability34b40fe.
   Clean replay of all five dependency patches matched35 local changed/new files.
   Setup help/dry-run and supplied executable hash were verified without a duplicate
-  build. Independent review found no new code defect; strengthening two GPU
-  integration assertions for retained-stream draws and post-toggle presentation.
+  build. Independent review found no new code defect. ade383e adds passing GPU
+  integration assertions for actual indexed retained NULL-stream draws (adjacent
+  bytes change rendered pixels) and displayed front pixels after resize/fullscreen/
+  F10 transitions. Root ran both fixtures; reports retained-dma-integration.log
+  and presentation-transition-integration.log. No runtime change or rebuild needed.
+- Normal run at frame24300:322 hub profile windows after frame5000 had median
+ 60FPS, no explicit stream/shader failure markers; this is a hub observation,
+  not a new snow benchmark or proof of post-level return. User manual return test
+  remains pending. mac_runtime is auditing existing hologram/morph evidence.
 - Agent waves: controller hub fix, mac DMA audit, repository audit, onboarding,
   license inventory, portability and regression audit. Root owns full builds, packaging and live UI;
   at most two compiler jobs total. Keep the goal active during outstanding work.
