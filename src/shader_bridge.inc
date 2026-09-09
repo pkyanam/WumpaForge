@@ -357,6 +357,17 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
                         nv2a_vertex_input_is_dead(&s_vertex_object.words[0][0],s_vertex_object.instruction_count,i,s_vertex_constants),
                         s_vertex_constants[122][0],s_vertex_constants[122][1],s_vertex_constants[122][2],s_vertex_constants[122][3],
                         read32(g_esp),read32(GUEST_SWAP_COUNT));
+                    if (!handle) {
+                        const struct VertexArrayAddress *a=&s_vertex_arrays[i];
+                        struct Resource *owner=resource(a->handle);
+                        uint64_t indexed_base=fetch&&fetch->indices?fetch->first:0;
+                        uint64_t end=a->offset+(high-indexed_base)*a->stride+slot->byte_count;
+                        fprintf(stderr,"[wrath streams] retained attribute%u handle0x%X data0x%X bytes%u offset%llu stride%u format0x%X generation%llu owner_type%u owner_data0x%X owner_bytes%u owner_generation%llu raw_index_range=%llu..%llu required_end=%llu\n",
+                            i,a->handle,a->data,a->bytes,(unsigned long long)a->offset,a->stride,a->format,
+                            (unsigned long long)a->generation,owner?owner->type:0,owner?owner->data:0,owner?owner->bytes:0,
+                            (unsigned long long)(owner?owner->vertex_generation:0),
+                            (unsigned long long)(low-indexed_base),(unsigned long long)(high-indexed_base),(unsigned long long)end);
+                    }
                     if(++rejections==16)fprintf(stderr,"[wrath streams] further secondary-fetch rejection logs suppressed\n");
                 }
                 if(stop)shader_error("secondary vertex fetch","WRATH_BREAK_STREAM_ERROR requested stop at rejected real buffer range");

@@ -61,6 +61,14 @@ def dump(debugger, destination):
                        "next_cut_movie": words(9391540, 1)[0],
                        "cutworldix": words(9391612, 1)[0]},
     }
+    arrays=target.FindFirstGlobalVariable("s_vertex_arrays")
+    if arrays.IsValid():
+        out["retained_vertex_arrays"]=[
+            {field.GetName():integers(field) for field in arrays.GetChildAtIndex(i)}
+            for i in range(min(arrays.GetNumChildren(),16))]
+        for name in ("s_vertex_arrays_ready","s_vertex_array_base","s_vertex_generation"):
+            item=target.FindFirstGlobalVariable(name)
+            if item.IsValid():out[name]=integers(item)
     def floats(address, count):
         return [struct.unpack("<f", word.to_bytes(4, "little"))[0]
                 for word in words(address, count)]
@@ -136,6 +144,7 @@ def dump(debugger, destination):
                    "live": 0, "by_type": {}, "guest_bytes": 0, "bound_records": []}
         bound_handles = set(out["texture_handles"]) | {
             stream["handle"] for stream in out["stream_records"]}
+        bound_handles.update(record["handle"] for record in out.get("retained_vertex_arrays",[]))
         bound_handles.discard(0)
         if count <= pages.GetNumChildren():
             for i in range(count):
@@ -158,6 +167,9 @@ def dump(debugger, destination):
                     fields = {k: int.from_bytes(data[slot*size+offsets[k]:
                                                       slot*size+offsets[k]+4], "little")
                               for k in required}
+                    if "vertex_generation" in offsets:
+                        start=slot*size+offsets["vertex_generation"]
+                        fields["vertex_generation"]=int.from_bytes(data[start:start+8],"little")
                     if fields["handle"]:
                         if fields["handle"] in bound_handles:
                             summary["bound_records"].append(fields)

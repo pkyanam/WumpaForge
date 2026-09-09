@@ -144,3 +144,27 @@ build58 and visual gameplay validation are parent-owned and pending.
 The user also observed intermittent Cortex hologram distortion/random artifacts
 in the hub. Their cause remains unverified; no causal claim about this retention
 change or the earlier exact-dead-input proof is made without a visual comparison.
+
+## Story19 queued material and remaining address evidence
+
+Build58 still rejected the reflection draw's retained v4 fetch (573 indices,
+logical range230..555). `story-19-buffers.json` now proves shader1B was intentionally
+selected: the saved draw job's word+2A is27 and its matching reflection queue entry
+holds override material29708048 with byte3E=0x5C. The current global overrides were
+already cleared. The original geometry material and tangent-free pool therefore
+do not establish an incorrect shader choice. The active pool holds2048 ordinary
+36-byte vertices; this mesh has326 vertices with base230. Its actual raw indices
+span0..325. Both v4/v5 remain observable in the31-instruction reflection shader.
+
+The next diagnostic captures all16 cached attribute records, cache base/readiness,
+allocation generation counter, and the current resource records owning retained
+addresses. The bounded rejection log also reports cached offset/stride/type,
+owner generation and the required end using literal indices and the old baked
+base. These are diagnostics only; allocation checks and rendering stay unchanged.
+`python3 -m py_compile tools/shader_probe.py` passes. A debugger session that imported
+the module before this edit must reload it before dumping the next stop.
+
+Story20 reached actual Arctic Antics (Level7, Demo0) without this reflection fault,
+then stopped at the separate fixed-function fog boundary. It does not validate the
+failing retained address. Its probe module had been imported before the update, so
+cache fields remain unavailable; the exact rejection cause is still unresolved.
