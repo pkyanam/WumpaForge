@@ -49,6 +49,7 @@ static UINT s_width, s_height, s_target_width, s_target_height;
 static int s_depth_available;
 static HRESULT initialize_depth_surface(uint32_t format);
 static void initialize_render_defaults(void);
+static void initialize_gpu_fences(void);
 static void update_viewport_constants(void);
 static D3DVIEWPORT8 s_viewport;
 
@@ -192,6 +193,7 @@ void sub_000FD6E0(void)
         fprintf(stderr,"[wrath graphics] failed native depth surface initialization\n"); abort();
     }
     initialize_render_defaults();
+    initialize_gpu_fences();
     write32(output, GUEST_DEVICE);
     wrath_vblank_set_refresh(in.refresh_hz);
     fprintf(stderr, "[wrath graphics] native device %ux%u, guest handle 0x%08X\n",
@@ -660,6 +662,7 @@ struct Resource {
     uint32_t handle, data, bytes, width, height, levels, format, pitch, owner;
     uint32_t offsets[13], pitches[13], sizes[13];
     unsigned type, references, bindings;
+    uint64_t vertex_generation; /* Assigned at first array-address commit; reset on release. */
     GLenum framebuffer;
     GLuint target_fbo, target_texture;
     GLuint cube_gl;
@@ -1396,6 +1399,7 @@ void sub_00102940(void) /* SetVertexShader: even FVF codes vs odd program handle
         finish(4, (uint32_t)D3DERR_INVALIDCALL); return;
     }
     s_fvf = fvf;
+    write32(0x10EC10,read32(0x10EC10)|0x70); /* Retail102975 declaration/address dirtiness. */
     finish(4, (uint32_t)s_device->lpVtbl->SetVertexShader(s_device, fvf));
 }
 static void apply_fixed_transforms(void)
@@ -1432,6 +1436,17 @@ static HRESULT draw_vertices_data_fetch(uint32_t type, uint32_t count, const voi
     case 7: if (count < 3) return D3DERR_INVALIDCALL; native = D3DPT_TRIANGLEFAN; primitives = count - 2; break;
     case 8: if (count % 4) return D3DERR_INVALIDCALL; native = D3DPT_TRIANGLELIST; primitives = count / 2; quads = 1; break;
     default: return D3DERR_INVALIDCALL;
+    }
+    /* Retail108F40 commits array addresses before rendering. UP/immediate calls
+     * have no source_fetch and emit inline data, leaving array addresses alone. */
+    if (source_fetch) {
+        Nv2aVertexSlot fixed_slots[16];
+        const Nv2aVertexSlot *slots=s_vertex_object.slots;
+        if (!s_vertex_handle) {
+            if (!vertex_array_fvf_slots(s_fvf,fixed_slots)) return D3DERR_INVALIDCALL;
+            slots=fixed_slots;
+        }
+        vertex_array_commit(slots,source_fetch);
     }
     for (unsigned i = 0; i < 4; ++i) {
         struct Resource *r = resource(s_texture_handles[i]);
@@ -1861,6 +1876,7 @@ void sub_000FF580(void) /* CopyRects(source,rectangles,count,destination,points)
     finish(20, (uint32_t)result);
 }
 
+#include "gpu_fence_bridge.inc"
 #include "index_bridge.inc"
 #include "immediate_bridge.inc"
 
@@ -1868,6 +1884,10 @@ recomp_func_t wrath_graphics_lookup(uint32_t address)
 {
     switch (address) {
     case 0x000FD6E0: return sub_000FD6E0;
+    case 0x000FED90: return sub_000FED90;
+    case 0x001034D0: return sub_001034D0;
+    case 0x001037A0: return sub_001037A0;
+    case 0x00103B20: return sub_00103B20;
     case 0x000FD830: return sub_000FD830;
     case 0x000FDA80: return sub_000FDA80;
     case 0x000FDAD0: return sub_000FDAD0;
@@ -2183,11 +2203,13 @@ static void test_shader_bridge(void)
 #include "../tools/test_mixed_shader_bridge.inc"
 #include "../tools/test_viewport_constants.inc"
 #include "../tools/test_multistream.inc"
+#include "../tools/test_vertex_retention.inc"
 #include "../tools/test_shader_constant_mode.inc"
 #include "../tools/test_native_fog.inc"
 #include "../tools/test_dot_reflection.inc"
 #include "../tools/test_mirror_once.inc"
 #include "../tools/test_linear_bgra.inc"
+#include "../tools/test_gpu_fences.inc"
 #include "../tools/test_context_profile_bench.inc"
 #include "../tools/test_texture_snapshot.inc"
 
@@ -2522,11 +2544,13 @@ int main(void)
     test_mixed_shader_bridge();
     test_viewport_constants();
     test_multistream();
+    test_vertex_retention();
     test_shader_constant_mode();
     test_native_fog();
     test_dot_reflection();
     test_mirror_once();
     test_linear_bgra();
+    test_gpu_fences();
     test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();
