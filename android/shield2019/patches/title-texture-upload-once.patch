@@ -1,0 +1,15 @@
+--- a/shader_bridge.inc
++++ b/shader_bridge.inc
+@@ -410,8 +410,10 @@
+         GLenum target=r->type==RESOURCE_CUBE_TEXTURE?GL_TEXTURE_CUBE_MAP:GL_TEXTURE_2D;
+         if (p->pixel.sampler_dimension[i]==3 || ((p->pixel.sampler_dimension[i]==4)!=(target==GL_TEXTURE_CUBE_MAP)))
+             shader_error("texture","sampler dimension mismatch");
+-        HRESULT upload=r->type==RESOURCE_CUBE_TEXTURE?upload_cube_texture(r):upload_texture_stage(r,i);
+-        if (upload<0) shader_error("texture","native upload failed");
++        /* The sole caller, draw_vertices_data_fetch, already uploaded every
++         * bound stage under this same graphics mutex. No guest callback runs
++         * between that validation and this draw. Keep one exact-byte snapshot
++         * check per stage per draw; repeating it here rereads whole textures. */
+         glActiveTexture(GL_TEXTURE0+i);
+         glBindTexture(target,r->type==RESOURCE_CUBE_TEXTURE?r->cube_gl:texture_gl_name(r,i));
+         uint32_t state=0x10EC18+i*128;
