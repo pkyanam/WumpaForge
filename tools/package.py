@@ -5,6 +5,7 @@ import argparse
 import plistlib
 import shutil
 import subprocess
+import tempfile
 
 
 def build_icon():
@@ -33,6 +34,17 @@ def build_icon():
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def replace_executable(source, destination):
+    """Leave an already mapped executable inode intact when packaging a rerun."""
+    with tempfile.NamedTemporaryFile(prefix='.wrath-', dir=destination.parent,
+                                     delete=False) as temporary:
+        staged = Path(temporary.name)
+    try:
+        shutil.copy2(source, staged)
+        staged.replace(destination)
+    finally:
+        staged.unlink(missing_ok=True)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=ROOT / 'build/Wrath Native.app',
@@ -47,7 +59,7 @@ def main():
     resources = contents / 'Resources'
     executable.parent.mkdir(parents=True, exist_ok=True)
     resources.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(binary, executable)
+    replace_executable(binary, executable)
     shutil.copy2(build_icon(), resources / "WumpaForge.icns")
     assets = resources / 'assets'
     if not assets.is_symlink() and assets.exists():
