@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare isolated, pinned Android dependencies and a copy of the Mac runtime."""
 from pathlib import Path
-import hashlib, json, re, shutil, subprocess, tarfile, urllib.request
+import hashlib, json, os, re, shutil, subprocess, tarfile, urllib.request
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 OUT = ROOT / 'build/shield2019'
@@ -16,6 +16,17 @@ def replace(path, old, new):
     if value.count(old) != 1:
         raise RuntimeError(f'Source anchor changed: {path}: {old[:65]}')
     path.write_text(value.replace(old,new))
+def apply_patch(target, patch):
+    # Dependency copies live inside an ignored directory of the parent Git repo.
+    # Prevent git apply from discovering that repo and silently skipping paths.
+    env = os.environ.copy()
+    for key in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'):
+        env.pop(key, None)
+    env['GIT_CEILING_DIRECTORIES'] = str(OUT)
+    for flags in (['--check'], [], ['--reverse', '--check']):
+        subprocess.run(['git', 'apply', *flags, str(patch)], cwd=target,
+                       env=env, check=True)
+
 def main():
     deps=OUT/'deps'; deps.mkdir(parents=True,exist_ok=True)
     for name,(url,digest) in DEPS.items():
@@ -39,8 +50,7 @@ def main():
             if member is None:raise RuntimeError(f'Pinned SDL source missing: {relative}')
             (sdl/relative).write_bytes(member.read())
     for sdl_patch in sorted((HERE/'patches').glob('sdl-*.patch')):
-        subprocess.run(['git','apply','--check',str(sdl_patch)],cwd=sdl,check=True)
-        subprocess.run(['git','apply',str(sdl_patch)],cwd=sdl,check=True)
+        apply_patch(sdl, sdl_patch)
     # Source copies are disposable build inputs; the original Mac checkout stays intact.
     for disposable in (OUT/'runtime/src',OUT/'title'):
         if disposable.is_symlink():raise RuntimeError('Unexpected source copy symlink')
@@ -48,11 +58,9 @@ def main():
     for source,dest in [(ROOT/'third_party/xboxrecomp/src',OUT/'runtime/src'),(ROOT/'src',OUT/'title')]:
         shutil.copytree(source,dest,dirs_exist_ok=True)
     for patch in sorted((HERE/'patches').glob('runtime-*.patch')):
-        subprocess.run(['git','apply','--check',str(patch)],cwd=OUT/'runtime',check=True)
-        subprocess.run(['git','apply',str(patch)],cwd=OUT/'runtime',check=True)
+        apply_patch(OUT/'runtime', patch)
     for patch in sorted((HERE/'patches').glob('title-*.patch')):
-        subprocess.run(['git','apply','--check',str(patch)],cwd=OUT/'title',check=True)
-        subprocess.run(['git','apply',str(patch)],cwd=OUT/'title',check=True)
+        apply_patch(OUT/'title', patch)
     backend=OUT/'runtime/src/d3d/d3d8_gl.c'
     replace(backend,'#include <epoxy/gl.h>','#include <epoxy/gl.h>\n#include <stdatomic.h>\n#include "shield_host.h"\n#include "gl_rpc.h"')
     replace(backend,'SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);\n    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);',
