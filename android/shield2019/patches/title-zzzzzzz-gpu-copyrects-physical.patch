@@ -1,0 +1,112 @@
+--- a/graphics.c
++++ b/graphics.c
+@@ -2166,6 +2166,9 @@
+ }
+ /* Android GPU CopyRects: only live GPU authority qualifies. Inactive target
+  * objects can have newer guest bytes and must retain the CPU fallback. */
++#ifdef WRATH_GRAPHICS_SMOKE_TEST
++static uint64_t s_shield_gpu_copy_hits;
++#endif
+ struct ShieldGpuCopy {
+     GLuint source, destination;
+     GLint old_read, old_draw, source_buffer, destination_buffer;
+@@ -2214,6 +2217,9 @@
+     }
+     glReadBuffer(GL_COLOR_ATTACHMENT0);glDrawBuffer(GL_COLOR_ATTACHMENT0);
+     glDisable(GL_SCISSOR_TEST);
++#ifdef WRATH_GRAPHICS_SMOKE_TEST
++    ++s_shield_gpu_copy_hits;
++#endif
+     return 1;
+ }
+ static void shield_gpu_copy_rect(const struct Resource *source,const struct Resource *destination,
+@@ -2634,6 +2640,81 @@
+ #include "../tools/test_texture_snapshot.inc"
+ #include "test_dxt_upload.inc"
+ #include "test_target_return_cache.inc"
++
++/* Actual SDK path, not just the helper: opt-in device pixel validation. */
++static uint32_t shield_copy_pattern(unsigned x,unsigned y)
++{ return ((0x40u+y*13)<<24)|((x*29u)<<16)|((y*31u)<<8)|(x+y*8u); }
++static void test_shield_gpu_copyrects(void)
++{
++    const char *mode=getenv("WRATH_GPU_COPYRECTS");
++    if(!mode || strcmp(mode,"1")) { puts("SKIP: opt-in GPU CopyRects physical fixture");return; }
++    assert(glGetError()==0);
++    uint32_t texture,surface=texture_depth_surface(8,8,0x12,&texture);
++    struct Resource *parent=resource(texture),*src=resource(surface),*back=resource(s_backbuffer_handle);
++    assert(back && back->width>=8 && back->height>=8);
++    for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x)
++        write32(parent->data+y*parent->pitch+x*4,shield_copy_pattern(x,y));
++    uint32_t target[]={surface,0};call(0xFEF20,target,2);assert(g_eax==0);
++    uint32_t get[]={texture,0,0x1E040};call(0x103C30,get,3);assert(g_eax==0);
++    uint32_t alias=read32(0x1E040);assert(alias!=surface);
++    /* Active GPU pixels must win over stale guest bytes, through the alias. */
++    memset(guest_ptr(parent->data),0xA5,parent->bytes);
++    GLuint back_fbo=xbox_D3D8GLBackBuffer(0);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,back_fbo);glDrawBuffer(GL_COLOR_ATTACHMENT0);
++    glDisable(GL_SCISSOR_TEST);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
++    glClearColor(0,0,0,0);glClear(GL_COLOR_BUFFER_BIT);
++    glBindFramebuffer(GL_READ_FRAMEBUFFER,src->target_fbo);glReadBuffer(GL_NONE);
++    glDrawBuffer(GL_NONE);
++    glBindFramebuffer(GL_READ_FRAMEBUFFER,back_fbo);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,src->target_fbo);
++    glEnable(GL_SCISSOR_TEST);glScissor(0,0,1,1);
++    D3DRECT rects[]={{0,0,4,3},{2,3,6,6},{0,0,9,1}};
++    int32_t points[][2]={{1,1},{2,2},{0,0}};
++    memcpy(guest_ptr(0x1E100),rects,sizeof(rects));memcpy(guest_ptr(0x1E180),points,sizeof(points));
++    uint32_t copy[]={alias,0x1E100,3,s_backbuffer_handle,0x1E180};
++    uint64_t before=s_shield_gpu_copy_hits;
++    glEnable(0xFFFFFFFFu); /* Existing error must not be consumed by the copy. */
++    call(0xFF580,copy,5);assert(g_eax==(uint32_t)D3DERR_INVALIDCALL);
++    assert(s_shield_gpu_copy_hits==before+1 && glGetError()==GL_INVALID_ENUM && glGetError()==0);
++    GLint state;glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&state);assert((GLuint)state==back_fbo);
++    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&state);assert((GLuint)state==src->target_fbo);
++    assert(glIsEnabled(GL_SCISSOR_TEST));
++    glBindFramebuffer(GL_READ_FRAMEBUFFER,src->target_fbo);glGetIntegerv(GL_READ_BUFFER,&state);assert(state==GL_NONE);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,back_fbo);glGetIntegerv(GL_DRAW_BUFFER,&state);assert(state==GL_NONE);
++    glReadBuffer(GL_COLOR_ATTACHMENT0);glDrawBuffer(GL_COLOR_ATTACHMENT0);glDisable(GL_SCISSOR_TEST);
++    for(unsigned i=0;i<parent->bytes;++i)assert(((uint8_t*)guest_ptr(parent->data))[i]==0xA5);
++    uint32_t expected[64]={0};
++    for(unsigned n=0;n<2;++n)for(int y=rects[n].y1;y<rects[n].y2;++y)
++        for(int x=rects[n].x1;x<rects[n].x2;++x)
++            expected[(points[n][1]+y-rects[n].y1)*8+points[n][0]+x-rects[n].x1]=shield_copy_pattern(x,y);
++    uint32_t *pixels=malloc((size_t)back->width*back->height*4);assert(pixels);
++    assert(surface_pixels(back,pixels)==0);
++    for(unsigned y=0;y<back->height;++y)for(unsigned x=0;x<back->width;++x)
++        assert(pixels[(size_t)y*back->width+x]==(x<8&&y<8?expected[y*8+x]:0));
++    /* Backbuffer -> active texture is another eligible direction. Full 8x8
++     * source region replaces the active texture, then resolves to guest rows. */
++    rects[0]=(D3DRECT){0,0,8,8};points[0][0]=points[0][1]=0;
++    memcpy(guest_ptr(0x1E100),rects,sizeof(rects[0]));memcpy(guest_ptr(0x1E180),points,sizeof(points[0]));
++    copy[0]=s_backbuffer_handle;copy[2]=1;copy[3]=alias;
++    call(0xFF580,copy,5);assert(g_eax==0 && s_shield_gpu_copy_hits==before+2);
++    target[0]=s_backbuffer_handle;call(0xFEF20,target,2);assert(g_eax==0);
++    for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x)
++        assert(read32(parent->data+y*parent->pitch+x*4)==expected[y*8+x]);
++    /* An inactive target must observe the CPU fallback, not its old GPU copy. */
++    memset(guest_ptr(parent->data),0xCC,parent->bytes);
++    call(0xFF580,copy,5);assert(g_eax==0 && s_shield_gpu_copy_hits==before+2);
++    for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x)
++        assert(read32(parent->data+y*parent->pitch+x*4)==expected[y*8+x]);
++    /* Physical self-alias must preserve the old snapshot implementation. */
++    copy[3]=s_backbuffer_handle;call(0xFF580,copy,5);
++    assert(g_eax==0 && s_shield_gpu_copy_hits==before+2);
++    free(pixels);
++    uint32_t release[]={alias};call(0x103AD0,release,1);
++    release[0]=surface;call(0x103AD0,release,1);release[0]=texture;call(0x103AD0,release,1);
++    glBindFramebuffer(GL_FRAMEBUFFER,back_fbo);glDrawBuffer(GL_COLOR_ATTACHMENT0);glReadBuffer(GL_COLOR_ATTACHMENT0);
++    assert(glGetError()==0);
++    puts("PASS: GPU CopyRects actual SDK hits, alias authority, exact RGBA orientation, ordered overlap/invalid suffix, guest resolve/fallback and GL state/errors");
++}
+ 
+ int main(void)
+ {
+@@ -2982,6 +3063,7 @@
+     test_gpu_fences();
+     test_texture_depth();
+     test_surface_alias();
++    test_shield_gpu_copyrects();
+     test_texture_target_lock();
+     test_resource_pages();
+     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
