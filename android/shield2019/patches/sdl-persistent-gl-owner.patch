@@ -1,0 +1,50 @@
+--- a/src/video/android/SDL_androidevents.c
++++ b/src/video/android/SDL_androidevents.c
+@@ -70,11 +70,32 @@
+ }
+ 
+ #ifdef SDL_VIDEO_OPENGL_EGL
++/* Private WumpaForge hook. Pump owns Android_ActivityMutex; callbacks only
++ * detach/rebind the existing context on its persistent owner, never swap,
++ * create a context, pump events, or reacquire this SDL activity mutex. */
++static int (*wumpa_context_backup)(void *);
++static int (*wumpa_context_restore)(void *);
++static void *wumpa_context_argument;
++DECLSPEC void SDLCALL SDL_WumpaSetGLContextCallbacks(int (*backup)(void *),
++                                                  int (*restore)(void *),void *argument)
++{
++    wumpa_context_backup=backup;
++    wumpa_context_restore=restore;
++    wumpa_context_argument=argument;
++}
+ static void android_egl_context_restore(SDL_Window *window)
+ {
+     if (window) {
+         SDL_Event event;
+         SDL_WindowData *data = (SDL_WindowData *)window->driverdata;
++        if (wumpa_context_restore) {
++            if (wumpa_context_restore(wumpa_context_argument) < 0) {
++                event.type = SDL_RENDER_DEVICE_RESET;
++                SDL_PushEvent(&event);
++            }
++            data->backup_done = 0;
++            return;
++        }
+         SDL_GL_MakeCurrent(window, NULL);
+         if (SDL_GL_MakeCurrent(window, (SDL_GLContext)data->egl_context) < 0) {
+             /* The context is no longer valid, create a new one */
+@@ -92,6 +113,14 @@
+     if (window) {
+         /* Keep a copy of the EGL Context so we can try to restore it when we resume */
+         SDL_WindowData *data = (SDL_WindowData *)window->driverdata;
++        if (wumpa_context_backup) {
++            if (wumpa_context_backup(wumpa_context_argument) < 0) {
++                SDL_Log("WumpaForge GL context detach failed");
++                return;
++            }
++            data->backup_done = 1;
++            return;
++        }
+         data->egl_context = SDL_GL_GetCurrentContext();
+         /* We need to do this so the EGLSurface can be freed */
+         SDL_GL_MakeCurrent(window, NULL);

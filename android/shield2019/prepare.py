@@ -32,12 +32,12 @@ def main():
     if not sdl.exists():
         with tarfile.open(deps/'sdl2.tar.gz') as archive:
             archive.extractall(deps,filter='data')
-    # Reset the one patched SDL file from the verified archive before replay;
-    # this dependency checkout is isolated to the Android build tree.
+    # Reset patched SDL files from the verified archive before replay.
     with tarfile.open(deps/'sdl2.tar.gz') as archive:
-        member=archive.extractfile(f'SDL-{SDL_REV}/src/video/SDL_egl.c')
-        if member is None:raise RuntimeError('Pinned SDL EGL source missing')
-        (sdl/'src/video/SDL_egl.c').write_bytes(member.read())
+        for relative in ('src/video/SDL_egl.c','src/video/android/SDL_androidevents.c'):
+            member=archive.extractfile(f'SDL-{SDL_REV}/{relative}')
+            if member is None:raise RuntimeError(f'Pinned SDL source missing: {relative}')
+            (sdl/relative).write_bytes(member.read())
     for sdl_patch in sorted((HERE/'patches').glob('sdl-*.patch')):
         subprocess.run(['git','apply','--check',str(sdl_patch)],cwd=sdl,check=True)
         subprocess.run(['git','apply',str(sdl_patch)],cwd=sdl,check=True)
@@ -54,7 +54,7 @@ def main():
         subprocess.run(['git','apply','--check',str(patch)],cwd=OUT/'title',check=True)
         subprocess.run(['git','apply',str(patch)],cwd=OUT/'title',check=True)
     backend=OUT/'runtime/src/d3d/d3d8_gl.c'
-    replace(backend,'#include <epoxy/gl.h>','#include <epoxy/gl.h>\n#include <stdatomic.h>\n#include "shield_host.h"')
+    replace(backend,'#include <epoxy/gl.h>','#include <epoxy/gl.h>\n#include <stdatomic.h>\n#include "shield_host.h"\n#include "gl_rpc.h"')
     replace(backend,'SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);\n    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);',
             'SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);\n    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);')
     # SDL2 defaults to RGB 3/3/2, which permits a reduced-precision EGL config.
@@ -82,11 +82,12 @@ def main():
             '    int enabled=atomic_load_explicit(&cached,memory_order_relaxed);\n'
             '    if(enabled>=0)return enabled;\n'
             '    /* Host sets immutable process flags before starting game threads. */\n'
-            '    const char *v=getenv("WRATH_EGL_LAZY_BIND"), *d=getenv("WRATH_EGL_DEFER_STATE");\n'
-            '    enabled=(v && !strcmp(v,"1")) || (d && !strcmp(d,"1"));\n'
+            '    const char *v=getenv("WRATH_EGL_LAZY_BIND"), *d=getenv("WRATH_EGL_DEFER_STATE"), *r=getenv("WRATH_GL_RPC");\n'
+            '    enabled=(v && !strcmp(v,"1")) || (d && !strcmp(d,"1")) || (r && !strcmp(r,"1"));\n'
             '    atomic_store_explicit(&cached,enabled,memory_order_relaxed);return enabled;\n'
             '}\n'
             'int xbox_D3D8GLEnsureCurrent(void) {\n'
+            '    if(wumpa_gl_rpc_active())return g_context_depth>0;\n'
             '    if (!g.glctx || SDL_GL_GetCurrentContext()==g.glctx) return 1;\n'
             '    if (!g_context_depth) return 0;\n'
             '    uint64_t begin=profile_context_enabled()?monotonic_ns():0;\n'
@@ -110,7 +111,7 @@ def main():
     replace(backend,'    if (g.glctx && SDL_GL_MakeCurrent(g.window, g.glctx) < 0) goto fail;',
             '    if (!lazy_context_bind() && g.glctx && SDL_GL_MakeCurrent(g.window, g.glctx) < 0) goto fail;')
     replace(backend,'        if (g.glctx && SDL_GL_MakeCurrent(g.window, NULL) < 0) abort();',
-            '        if (g.glctx && (!lazy_context_bind() || SDL_GL_GetCurrentContext()==g.glctx) &&\n'
+            '        if (!wumpa_gl_rpc_active() && g.glctx && (!lazy_context_bind() || SDL_GL_GetCurrentContext()==g.glctx) &&\n'
             '            SDL_GL_MakeCurrent(g.window, NULL) < 0) abort();')
     replace(backend,'    if (g.window) {\n        last_pump_ns = now;',
             '    if (g.window) {\n'
@@ -125,8 +126,15 @@ def main():
             '            output_event(&ev);')
     replace(backend,'    if (!pp || !pPP) return D3DERR_INVALIDCALL;',
             '    if (!pp || !pPP || !wumpa_is_game_thread()) return D3DERR_INVALIDCALL;')
+    replace(OUT/'runtime/src/d3d/d3d8_present.inc','SDL_GL_GetSwapInterval()',
+            'wumpa_gl_rpc_swap_interval()')
+    replace(backend,'        SDL_GL_SwapWindow(g.window);',
+            '        wumpa_gl_rpc_swap(g.window);')
+    replace(backend,'#else\n    SDL_GL_SetSwapInterval(1);\n#endif',
+            '#else\n    SDL_GL_SetSwapInterval(1);\n'
+            '    if(wumpa_gl_rpc_start(g.window,g.glctx)<0)return D3DERR_INVALIDCALL;\n#endif')
     title=OUT/'title/graphics.c'
-    replace(title,'#include <epoxy/gl.h>','#include <epoxy/gl.h>\n#include "shield_host.h"')
+    replace(title,'#include <epoxy/gl.h>','#include <epoxy/gl.h>\n#include "shield_host.h"\n#include "gl_rpc.h"')
     replace(title,'#else\n    return 1;\n#endif\n}', '#else\n    return wumpa_is_game_thread();\n#endif\n}')
     input_runtime=OUT/'runtime/src/input/xinput_device.c'
     replace(input_runtime,'#include <SDL.h>','#include <SDL.h>\n#include "shield_host.h"')
@@ -143,6 +151,7 @@ def main():
     fixture=(OUT/'title/graphics.c').read_text()
     assert fixture.count('int main(void)')==1
     fixture=fixture.replace('int main(void)','int wumpa_graphics_checks(void)')
+    fixture=fixture.replace('    SDL_Quit();','    wumpa_gl_rpc_stop();\n    SDL_Quit();')
     queue_anchor='    assert(!glIsEnabled(GL_DITHER));'
     assert fixture.count(queue_anchor)==1
     fixture=fixture.replace(queue_anchor,queue_anchor+'\n'
@@ -211,9 +220,10 @@ def generate_loader(registry):
     registry_text=registry.read_text()
     header=['/* Generated from pinned Khronos declarations; do not edit. */','#pragma once','#include <GL/glcorearb.h>','#define GL_FLAT 0x1D00 /* Guest shade-mode token; no legacy GL call. */','#define GL_SMOOTH 0x1D01','int wumpa_gl_load(void);','int epoxy_gl_version(void);','int epoxy_has_gl_extension(const char *name);']
     header += ['void wumpa_gl_flush_state(void); /* Caller holds context mutex. */']
-    body=['#include <SDL.h>','#include <stdio.h>','#include <stdlib.h>','#include <stdatomic.h>','#include <string.h>','#include "epoxy/gl.h"',
+    body=['#include <SDL.h>','#include <stdio.h>','#include <stdlib.h>','#include <stdatomic.h>','#include <string.h>','#include "epoxy/gl.h"','#include "gl_rpc.h"',
           'extern int xbox_D3D8GLBeginCall(void);','extern int xbox_D3D8GLBeginStateCall(void);',
-          'extern int xbox_D3D8GLEnsureCurrent(void);','extern void xbox_D3D8GLEndCall(int outer);']
+          'extern int xbox_D3D8GLEnsureCurrent(void);','extern void xbox_D3D8GLEndCall(int outer);',
+          'static void wumpa_execute_state(void *unused);']
     deferred=set('glEnable glDisable glDepthMask glDepthFunc glColorMask glBlendFunc glBlendFuncSeparate glBlendEquation glBlendEquationSeparate glStencilFunc glStencilFuncSeparate glStencilOp glStencilOpSeparate glStencilMask glStencilMaskSeparate glCullFace glFrontFace glPolygonMode glViewport glDepthRange glActiveTexture glBindTexture glTexParameteri glUseProgram glBindBuffer glBindFramebuffer glBindRenderbuffer glBindVertexArray glEnableVertexAttribArray glDisableVertexAttribArray glVertexAttrib4f'.split())
     wrappers=[];queue_members=[];queue_cases=[]
     for name in names:
@@ -230,6 +240,15 @@ def generate_loader(registry):
                 arguments.append(arg.group(1))
         header += [f'{result} wumpa_call_{name}({parameters});',f'#define {name} wumpa_call_{name}']
         body += [f'static {typedef} wumpa_{name};']
+        fields=parameters.replace(',', ';') if arguments else 'int unused'
+        # Parameters may carry top-level const qualifiers (e.g. shader strings);
+        # aggregate initialization below preserves them without assignment.
+        body += [f'typedef struct {{ {fields}; '+(f'{result} result;' if result!='void' else '')+f' }} WumpaRPC_{name};',
+                 f'static void wumpa_execute_{name}(void *opaque) {{',
+                 f'    WumpaRPC_{name} *request=opaque;',
+                 '    wumpa_execute_state(NULL);']
+        raw=f'wumpa_{name}('+', '.join(f'request->{arg}' for arg in arguments)+')'
+        body += [f'    request->result={raw};' if result!='void' else f'    {raw};', '}']
         wrappers += [f'{result} wumpa_call_{name}({parameters}) {{']
         if name in deferred:
             assert result=='void' and '*' not in parameters and '[' not in parameters
@@ -251,11 +270,12 @@ def generate_loader(registry):
                          f'        command->kind={index};']
             wrappers += [f'        command->args.{name}.{arg}={arg};' for arg in arguments]
             wrappers += ['        xbox_D3D8GLEndCall(wumpa_outer); return;', '    }']
-        wrappers += ['    int wumpa_outer=xbox_D3D8GLBeginCall();', '    wumpa_gl_flush_state();']
-        invocation=f'wumpa_{name}({", ".join(arguments)})'
-        wrappers += [f'    {invocation};' if result=='void' else f'    {result} wumpa_result={invocation};',
-                 '    xbox_D3D8GLEndCall(wumpa_outer);']
-        if result!='void':wrappers += ['    return wumpa_result;']
+        wrappers += ['    int wumpa_outer=xbox_D3D8GLBeginCall();']
+        initializer=', '.join(f'.{arg}={arg}' for arg in arguments) if arguments else '.unused=0'
+        wrappers += [f'    WumpaRPC_{name} request={{ {initializer} }};',
+                     f'    wumpa_gl_rpc_call(wumpa_execute_{name},&request);',
+                     '    xbox_D3D8GLEndCall(wumpa_outer);']
+        if result!='void':wrappers += ['    return request.result;']
         wrappers += ['}']
     body += ['/* Exact ordered scalar calls only: no pointer lifetime or state-cache assumptions. */',
              '#define WUMPA_STATE_CAPACITY 256', 'typedef struct { unsigned kind; union {']+queue_members+[
@@ -269,13 +289,17 @@ def generate_loader(registry):
              '    /* Startup-only environment, immutable after host initialization. */',
              '    const char *v=getenv("WRATH_EGL_DEFER_STATE");enabled=v && !strcmp(v,"1");',
              '    atomic_store_explicit(&cached,enabled,memory_order_relaxed);return enabled;', '}',
-             'void wumpa_gl_flush_state(void) {',
-             '    if(!wumpa_state_count)return;',
-             '    if(!xbox_D3D8GLEnsureCurrent())abort();',
+             'static void wumpa_execute_state(void *unused) {',
+             '    (void)unused;',
              '    for(unsigned i=0;i<wumpa_state_count;++i) {',
              '        WumpaStateCommand *command=&wumpa_state_queue[i];',
              '        switch(command->kind) {']+queue_cases+[
-             '        default: abort();', '        }', '    }', '    wumpa_state_count=0;', '}']
+             '        default: abort();', '        }', '    }', '    wumpa_state_count=0;', '}',
+             'void wumpa_gl_flush_state(void) {',
+             '    if(!wumpa_state_count)return;',
+             '    if(!xbox_D3D8GLEnsureCurrent())abort();',
+             '    wumpa_gl_rpc_call(wumpa_execute_state,NULL);',
+             '    wumpa_state_count=0;', '}']
     body += wrappers
     body += ['int wumpa_gl_load(void) { int missing=0; wumpa_state_count=0;']
     for name in names:
