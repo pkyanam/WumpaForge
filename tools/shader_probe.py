@@ -72,7 +72,8 @@ def dump(debugger, destination):
     presentation = target.FindFirstGlobalVariable("g_output")
     if presentation.IsValid():
         out["native_presentation"] = {
-            field.GetName(): integers(field) for field in presentation
+            field.GetName(): (float(field.GetValue()) if field.GetName() == "sharpness"
+                              else integers(field)) for field in presentation
             if field.GetName() != "filter_source"
         }
     def floats(address, count):
