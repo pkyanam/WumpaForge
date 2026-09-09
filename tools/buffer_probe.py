@@ -87,6 +87,9 @@ def dump(debugger, destination):
     options.SetAllowJIT(False)
     stack_value = process.GetSelectedThread().GetSelectedFrame().EvaluateExpression(
         'g_esp', options)
+    frames = [frame.GetFunctionName() or '' for frame in process.GetSelectedThread()]
+    is_array_draw = any('shader_draw' in name for name in frames) and any(
+        'draw_indexed_vertices' in name for name in frames)
     stack = (words(stack_value.GetValueAsUnsigned(), 32)
              if stack_value.IsValid() and stack_value.GetError().Success() else None)
     queued_materials = []
@@ -96,7 +99,7 @@ def dump(debugger, destination):
         row = words(queue_address, 3)
         if not row:
             break
-        if stack and row[1] == stack[4]:
+        if is_array_draw and stack and row[1] == stack[4]:
             queued_materials.append({'entry': queue_address, 'words': row,
                                      'material': words(row[2], 32)})
         queue_address = row[0]
@@ -108,7 +111,8 @@ def dump(debugger, destination):
            'override_material': words(overrides[0], 32) if overrides else None,
            'shader_manager_current': words(0x426CB8, 4),
            'guest_stack': stack,
-           'candidate_draw_job': words(stack[4], 16) if stack else None,
+           'frames': frames,
+           'candidate_draw_job': words(stack[4], 16) if is_array_draw and stack else None,
            'reflection_queue_count': queue_count,
            'matching_queue_materials': queued_materials,
            'reflection_manager_record': words(0x426CB8 + 27 * 20 + 16, 5)}

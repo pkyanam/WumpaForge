@@ -112,3 +112,35 @@ resource permits real retained-byte reads. Missing history, expired ownership or
 an out-of-allocation fetch remains explicit until independently established.
 Overlapping physical allocations or recycled handles need allocation-generation
 identity, not handle equality alone. No zero/default attributes are implied.
+
+## Native implementation and validation
+
+`vertex_fetch.inc` now records all16 decoded declaration slots at original array
+draw boundaries. Both mapping tables were verified to contain0..15 in the supplied
+XBE (file1A1D68 and1A1D78). Dirty40/base controls entry to the entire array block;
+dirty10 alone does not enter it, matching108F74..108F81. Fixed FVF selection now
+mirrors original70 dirtiness. The supported XYZ/XYZRHW FVF array layouts seed
+physical slots0(position),2(normal),3(diffuse),4(specular),9 onward(UVs), as built
+by original101F40. Inline UP/immediate draws do not seed array addresses.
+
+NULL secondary attributes gather actual bytes from the last committed address,
+using the newly committed format/stride and correct indexed/non-indexed numbering.
+The resource receives a monotonically increasing generation at its first address
+commit. Normal release clears it; an allocation reusing the same guest handle and
+data cannot match the old generation. Cache entries do not hold extra guest refs.
+Never-initialized, freed, recycled and out-of-range addresses still reject. Existing
+NULL primary-stream rejection remains explicit: primary CPU expansion currently
+requires its actual bound resource. This change covers the reached secondary path.
+
+`tools/test_vertex_retention.inc` is an asset-free native GPU regression covering
+address updates for an unused declared attribute, later live NULL input, changed
+stride/type/declaration offset, old indexed base versus current non-indexed start,
+release and exact same-address allocation reuse, fixed-array physical slot mapping,
+and inline-data preservation. Combined native GPU smoke passed on the first run:
+`local/reports/gpu-fences-build.log` and `gpu-fences-smoke.log`, also covering
+existing morph, multistream, palette, shader and framebuffer fixtures. Production
+build58 and visual gameplay validation are parent-owned and pending.
+
+The user also observed intermittent Cortex hologram distortion/random artifacts
+in the hub. Their cause remains unverified; no causal claim about this retention
+change or the earlier exact-dead-input proof is made without a visual comparison.

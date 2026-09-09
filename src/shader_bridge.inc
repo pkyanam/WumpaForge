@@ -307,8 +307,7 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
             continue;
         }
         if (slot->stream>=16 || (!slot->stream &&
-            (slot->offset>stride || slot->byte_count>stride-slot->offset)) || slot->tessellation_type ||
-            (slot->stream && !read32(0x10F288+12*slot->stream))) {
+            (slot->offset>stride || slot->byte_count>stride-slot->offset)) || slot->tessellation_type) {
             if (getenv("WRATH_TRACE_STREAMS")) {
                 fprintf(stderr,"[wrath streams] error slot%u stream%u offset%u format0x%X bytes%u stride%u primary0x%X inputmask0x%X c122=(%.9g,%.9g,%.9g,%.9g) c114=(%.9g,%.9g,%.9g,%.9g)\n",
                         i,slot->stream,slot->offset,slot->format,slot->byte_count,stride,s_stream_handle,p->vertex.input_mask,
@@ -334,7 +333,9 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
         uint32_t attribute_stride = stride, attribute_offset = slot->offset;
         if (slot->stream) {
             uint8_t *gathered = NULL;
-            HRESULT result = gather_vertex_attribute(slot->stream,slot->offset,slot->byte_count,count,fetch,&gathered);
+            HRESULT result = read32(0x10F288+12*slot->stream) ?
+                gather_vertex_attribute(slot->stream,slot->offset,slot->byte_count,count,fetch,&gathered) :
+                gather_retained_vertex_attribute(i,slot,count,fetch,&gathered);
             if (result < 0) {
                 static unsigned rejections;
                 int stop = getenv("WRATH_BREAK_STREAM_ERROR") != NULL;
