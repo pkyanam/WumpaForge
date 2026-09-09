@@ -1,0 +1,104 @@
+--- a/graphics.c
++++ b/graphics.c
+@@ -2162,6 +2162,69 @@
+     glDeleteFramebuffers(1, &framebuffer); glDeleteTextures(1, &texture);
+     return result;
+ }
++/* Android GPU CopyRects: only live GPU authority qualifies. Inactive target
++ * objects can have newer guest bytes and must retain the CPU fallback. */
++struct ShieldGpuCopy {
++    GLuint source, destination;
++    GLint old_read, old_draw, source_buffer, destination_buffer;
++    GLboolean scissor;
++};
++static void shield_gpu_copy_end(const struct ShieldGpuCopy *copy)
++{
++    glBindFramebuffer(GL_READ_FRAMEBUFFER,copy->source);
++    glReadBuffer(copy->source_buffer);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,copy->destination);
++    glDrawBuffer(copy->destination_buffer);
++    glBindFramebuffer(GL_READ_FRAMEBUFFER,copy->old_read);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,copy->old_draw);
++    if(copy->scissor)glEnable(GL_SCISSOR_TEST);
++}
++static int shield_gpu_copy_begin(struct Resource *source,struct Resource *destination,
++                                 struct ShieldGpuCopy *copy)
++{
++    static int enabled=-1;
++    if(enabled<0) { const char *mode=getenv("WRATH_GPU_COPYRECTS");enabled=mode && !strcmp(mode,"1"); }
++    if(!enabled)return 0;
++    struct Resource *src=surface_gpu_storage(source),*dst=surface_gpu_storage(destination);
++    if(!src || !dst || src==dst || source->format!=destination->format ||
++       (source->format!=0x06 && source->format!=0x12) ||
++       !source->width || !source->height || !destination->width || !destination->height ||
++       source->width>INT32_MAX || source->height>INT32_MAX ||
++       destination->width>INT32_MAX || destination->height>INT32_MAX ||
++       (source->owner && source->owner==destination->owner) ||
++       ((uint64_t)source->data+source->bytes>destination->data &&
++        (uint64_t)destination->data+destination->bytes>source->data) ||
++       (src->target_texture && src->target_texture==dst->target_texture))return 0;
++    copy->source=src->framebuffer?xbox_D3D8GLBackBuffer(src->framebuffer==GL_FRONT):src->target_fbo;
++    copy->destination=dst->framebuffer?xbox_D3D8GLBackBuffer(dst->framebuffer==GL_FRONT):dst->target_fbo;
++    if(!copy->source || !copy->destination || copy->source==copy->destination)return 0;
++    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&copy->old_read);
++    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&copy->old_draw);
++    copy->scissor=glIsEnabled(GL_SCISSOR_TEST);
++    glBindFramebuffer(GL_READ_FRAMEBUFFER,copy->source);
++    glGetIntegerv(GL_READ_BUFFER,&copy->source_buffer);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,copy->destination);
++    glGetIntegerv(GL_DRAW_BUFFER,&copy->destination_buffer);
++    /* Check before the first write so an incomplete FBO takes the old path. */
++    if(glCheckFramebufferStatus(GL_READ_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE ||
++       glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE) {
++        shield_gpu_copy_end(copy);return 0;
++    }
++    glReadBuffer(GL_COLOR_ATTACHMENT0);glDrawBuffer(GL_COLOR_ATTACHMENT0);
++    glDisable(GL_SCISSOR_TEST);
++    return 1;
++}
++static void shield_gpu_copy_rect(const struct Resource *source,const struct Resource *destination,
++                                 const D3DRECT *rect,const int32_t point[2])
++{
++    int width=rect->x2-rect->x1,height=rect->y2-rect->y1;
++    /* Both existing surfaces use GL bottom-first storage. The CPU fallback
++     * reverses at readback and staging upload; direct copies reverse neither. */
++    glBlitFramebuffer(rect->x1,source->height-rect->y2,rect->x2,source->height-rect->y1,
++                      point[0],destination->height-point[1]-height,
++                      point[0]+width,destination->height-point[1],GL_COLOR_BUFFER_BIT,GL_NEAREST);
++}
++
+ void sub_000FF580(void) /* CopyRects(source,rectangles,count,destination,points), ret20 */
+ {
+     struct Resource *source = resource(arg(0)), *destination = resource(arg(3));
+@@ -2174,10 +2237,12 @@
+         finish(20, (uint32_t)D3DERR_INVALIDCALL); return;
+     }
+     if (!count) count = 1;
+-    uint32_t *pixels = malloc((size_t)source->width * source->height * 4);
+-    if (!pixels) { finish(20, 0x8007000E); return; }
+     uint64_t profile_start=wrath_profile_begin();
+-    HRESULT result = surface_pixels(source, pixels);
++    struct ShieldGpuCopy copy;
++    int direct=shield_gpu_copy_begin(source,destination,&copy);
++    uint32_t *pixels = direct ? NULL : malloc((size_t)source->width * source->height * 4);
++    if (!direct && !pixels) { finish(20, 0x8007000E); return; }
++    HRESULT result = direct ? D3D_OK : surface_pixels(source, pixels);
+     for (unsigned i = 0; result >= 0 && i < count; ++i) {
+         D3DRECT rect = {0,0,(LONG)source->width,(LONG)source->height};
+         int32_t point[2];
+@@ -2191,6 +2256,7 @@
+             result = D3DERR_INVALIDCALL; break;
+         }
+         if (!width || !height) continue;
++        if(direct) { shield_gpu_copy_rect(source,destination,&rect,point);continue; }
+         struct Resource *gpu=surface_gpu_storage(destination);
+         if (gpu) {
+             uint32_t *region = malloc((size_t)width * height * 4);
+@@ -2217,6 +2283,7 @@
+             if (parent) parent->dirty = 1;
+         }
+     }
++    if(direct)shield_gpu_copy_end(&copy);
+     free(pixels);
+     wrath_profile_surface(WRATH_PROFILE_COPYRECTS,profile_start,(uint64_t)source->width*source->height*4);
+     finish(20, (uint32_t)result);
