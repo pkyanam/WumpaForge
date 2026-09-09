@@ -6,6 +6,7 @@
 #include <SDL.h>
 #include <epoxy/gl.h>
 extern GLuint xbox_D3D8GLBackBuffer(unsigned index);
+extern GLuint xbox_D3D8GLDepthBuffer(void);
 extern int xbox_D3D8GLSetPresentationFilter(const char *source, float strength);
 #include <stddef.h>
 #include <stdint.h>
@@ -679,7 +680,7 @@ struct Resource {
     unsigned type, references, bindings;
     uint64_t vertex_generation; /* Assigned at first array-address commit; reset on release. */
     GLenum framebuffer;
-    GLuint target_fbo, target_texture;
+    GLuint target_fbo, target_texture, target_depth;
     GLuint cube_gl;
     GLuint palette_gl[3]; /* P8 stage0 uses the native texture; other stages vary. */
     uint64_t palette_revision, p8_revision;
@@ -806,6 +807,7 @@ static void release_resource(struct Resource *r)
     if (r->encoded_snapshot) { s_texture_snapshot_bytes-=r->bytes; free(r->encoded_snapshot); }
     if (r->target_fbo) glDeleteFramebuffers(1, &r->target_fbo);
     if (r->target_texture) glDeleteTextures(1, &r->target_texture);
+    if (r->target_depth) glDeleteRenderbuffers(1, &r->target_depth);
     if (r->cube_gl) glDeleteTextures(1, &r->cube_gl);
     glDeleteTextures(3, r->palette_gl);
     if (r->texture) r->texture->lpVtbl->Release(r->texture);
@@ -1607,7 +1609,7 @@ static HRESULT initialize_depth_surface(uint32_t format)
         if (r->handle) xbox_HeapFree(r->handle); if (r->data) xbox_HeapFree(r->data);
         memset(r,0,sizeof(*r)); return (HRESULT)0x8007000E;
     }
-    r->type=RESOURCE_DEPTH_SURFACE; r->levels=1; r->bindings=1;
+    r->type=RESOURCE_DEPTH_SURFACE; r->levels=1; r->bindings=2; /* Presentation owner + current target, like backbuffer. */
     r->sizes[0]=r->bytes; r->pitches[0]=r->pitch;
     update_common(r); write32(r->handle+4,r->data); write32(r->handle+8,0);
     write32(r->handle+12,0x10021|(format<<8));
@@ -1627,6 +1629,71 @@ void sub_000FF830(void) /* GetDepthStencilSurface(out), ret4. */
 }
 static HRESULT prepare_texture_target(struct Resource *r);
 static HRESULT resolve_texture_target(struct Resource *r);
+/* Canonical original depth remains the presentation D24S8 allocation. Smaller
+ * color targets need a top-left view: their GL bottom-left origin differs from
+ * the full-height depth image. Copy both planes on transitions, never clear or
+ * invent depth. Equal-size targets attach the canonical allocation directly. */
+static GLuint s_depth_canonical_fbo;
+static HRESULT depth_canonical_ready(void)
+{
+    if (s_depth_canonical_fbo) return 0;
+    GLuint depth=xbox_D3D8GLDepthBuffer(); if (!depth) return D3DERR_INVALIDCALL;
+    GLint rd,wr; glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&rd);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&wr);
+    glGenFramebuffers(1,&s_depth_canonical_fbo);glBindFramebuffer(GL_FRAMEBUFFER,s_depth_canonical_fbo);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,GL_RENDERBUFFER,depth);
+    glReadBuffer(GL_NONE);glDrawBuffer(GL_NONE);
+    int valid=glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE && glGetError()==GL_NO_ERROR;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,rd);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,wr);
+    if (!valid) {glDeleteFramebuffers(1,&s_depth_canonical_fbo);s_depth_canonical_fbo=0;return D3DERR_INVALIDCALL;}
+    return 0;
+}
+static HRESULT transfer_target_depth(struct Resource *r,int to_canonical)
+{
+    if (!r || !r->target_depth) return 0;
+    struct Resource *z=resource(s_depthbuffer_handle);if(!z || depth_canonical_ready()<0)return D3DERR_INVALIDCALL;
+    GLint rd,wr;glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&rd);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&wr);
+    GLboolean scissor=glIsEnabled(GL_SCISSOR_TEST);glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,to_canonical?r->target_fbo:s_depth_canonical_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,to_canonical?s_depth_canonical_fbo:r->target_fbo);
+    int top=z->height-r->height;
+    if(to_canonical)glBlitFramebuffer(0,0,r->width,r->height,0,top,r->width,z->height,GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT,GL_NEAREST);
+    else glBlitFramebuffer(0,top,r->width,z->height,0,0,r->width,r->height,GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT,GL_NEAREST);
+    HRESULT result=glGetError()==GL_NO_ERROR?0:D3DERR_INVALIDCALL;
+    if(scissor)glEnable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,rd);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,wr);
+    return result;
+}
+static HRESULT attach_target_depth(struct Resource *r,struct Resource *z)
+{
+    GLint rd,wr,rb,old_depth,old_stencil;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&rd);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&wr);glGetIntegerv(GL_RENDERBUFFER_BINDING,&rb);
+    GLuint fbo=r->framebuffer==GL_BACK?xbox_D3D8GLBackBuffer(0):r->target_fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER,fbo);
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,&old_depth);
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER,GL_STENCIL_ATTACHMENT,GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,&old_stencil);
+    GLuint attachment=0,new_depth=0;
+    if(z) {
+        attachment=xbox_D3D8GLDepthBuffer();
+        if(r->width!=z->width || r->height!=z->height) {
+            if(!r->target_depth) {
+                glGenRenderbuffers(1,&r->target_depth);new_depth=r->target_depth;glBindRenderbuffer(GL_RENDERBUFFER,r->target_depth);
+                glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,r->width,r->height);
+            }
+            attachment=r->target_depth;
+        }
+    }
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,GL_RENDERBUFFER,attachment);
+    GLenum status=glCheckFramebufferStatus(GL_FRAMEBUFFER),error=glGetError();
+    HRESULT result=status==GL_FRAMEBUFFER_COMPLETE && error==GL_NO_ERROR?0:D3DERR_INVALIDCALL;
+    if(result>=0 && z && r->target_depth) result=transfer_target_depth(r,0);
+    if(result<0) {
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_RENDERBUFFER,old_depth);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_STENCIL_ATTACHMENT,GL_RENDERBUFFER,old_stencil);
+        if(new_depth){glDeleteRenderbuffers(1,&new_depth);r->target_depth=0;}
+    }
+    glBindRenderbuffer(GL_RENDERBUFFER,rb);glBindFramebuffer(GL_READ_FRAMEBUFFER,rd);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,wr);
+    return result;
+}
 void sub_000FEF20(void) /* SetRenderTarget(color,depth), ret8. NULL color keeps current. */
 {
     uint32_t color=arg(0),depth=arg(1);
@@ -1638,25 +1705,34 @@ void sub_000FEF20(void) /* SetRenderTarget(color,depth), ret8. NULL color keeps 
     int linear, bpp = r ? format_info(r->format, &linear) : -1;
     if (!s_device || !graphics_thread() || !r || r->type!=RESOURCE_SURFACE ||
         (!window && (!texture || bpp <= 0)) ||
-        (depth && (!window || !z || z->type!=RESOURCE_DEPTH_SURFACE || depth!=s_depthbuffer_handle))) {
-        fprintf(stderr,"[wrath graphics] unsupported SetRenderTarget color0x%X depth0x%X\n",color,depth);
+        (depth && (!z || z->type!=RESOURCE_DEPTH_SURFACE || depth!=s_depthbuffer_handle ||
+                   z->format!=0x2A || r->width>z->width || r->height>z->height))) {
+        static unsigned rejected;
+        if(rejected++<16)fprintf(stderr,"[wrath graphics] unsupported SetRenderTarget caller0x%X color0x%X(type%u %ux%u fmt%X owner%X) depth0x%X(type%u %ux%u fmt%X) current%X/%X frame%u level%u demo%u\n",
+            read32(g_esp),color,r?r->type:0,r?r->width:0,r?r->height:0,r?r->format:0,r?r->owner:0,
+            depth,z?z->type:0,z?z->width:0,z?z->height:0,z?z->format:0,
+            read32(GUEST_DEVICE+0x2070),read32(GUEST_DEVICE+0x2074),read32(GUEST_SWAP_COUNT),read32(0x19C068),read32(0x23B750));
         finish(8,(uint32_t)D3DERR_INVALIDCALL); return;
     }
-    uint32_t old_color = read32(GUEST_DEVICE+0x2070);
-    struct Resource *old = resource(old_color);
-    if (old_color != color) {
-        HRESULT result = old && old->target_fbo ? resolve_texture_target(old) : 0;
-        if (result >= 0 && texture) result = prepare_texture_target(r);
-        if (result < 0) { finish(8,(uint32_t)result); return; }
-        ++r->bindings; update_common(r);
-        if (old && old->bindings) { --old->bindings; release_resource(old); }
-    } else if (texture && !r->target_fbo) {
-        HRESULT result = prepare_texture_target(r);
-        if (result < 0) { finish(8,(uint32_t)result); return; }
+    uint32_t old_color=read32(GUEST_DEVICE+0x2070),old_depth=read32(GUEST_DEVICE+0x2074);
+    struct Resource *old=resource(old_color);
+    HRESULT result=depth_canonical_ready();
+    if(result>=0 && old_depth && (old_color!=color || old_depth!=depth))result=transfer_target_depth(old,1);
+    if(result>=0 && old_color!=color && old && old->target_fbo)result=resolve_texture_target(old);
+    if(result>=0 && texture && (old_color!=color || !r->target_fbo))result=prepare_texture_target(r);
+    if(result>=0 && (old_color!=color || old_depth!=depth))result=attach_target_depth(r,z);
+    if(result<0) {finish(8,(uint32_t)result);return;}
+    if(old_color!=color) {
+        ++r->bindings;update_common(r);
+        if(old && old->bindings){--old->bindings;release_resource(old);}
+    }
+    if(old_depth!=depth) {
+        if(z){++z->bindings;update_common(z);}
+        struct Resource *previous=resource(old_depth);
+        if(previous && previous->bindings){--previous->bindings;release_resource(previous);}
     }
     glBindFramebuffer(GL_FRAMEBUFFER,window ? xbox_D3D8GLBackBuffer(0) : r->target_fbo);
-    glDrawBuffer(GL_COLOR_ATTACHMENT0);
-    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);glReadBuffer(GL_COLOR_ATTACHMENT0);
     s_target_width=r->width; s_target_height=r->height;
     write32(GUEST_DEVICE+0x2070,color); write32(GUEST_DEVICE+0x2074,depth);
     s_depth_available=depth!=0;
@@ -2272,6 +2348,7 @@ static void test_shader_bridge(void)
 #include "../tools/test_mirror_once.inc"
 #include "../tools/test_linear_bgra.inc"
 #include "../tools/test_gpu_fences.inc"
+#include "../tools/test_texture_depth.inc"
 #include "../tools/test_context_profile_bench.inc"
 #include "../tools/test_texture_snapshot.inc"
 
@@ -2618,6 +2695,7 @@ int main(void)
     test_mirror_once();
     test_linear_bgra();
     test_gpu_fences();
+    test_texture_depth();
     test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();

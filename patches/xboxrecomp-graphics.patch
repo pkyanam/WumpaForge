@@ -581,10 +581,10 @@ index 7888785..a63b5b7 100644
      g.rs[D3DRS_CULLMODE]           = D3DCULL_CCW;
 diff --git a/src/d3d/d3d8_present.inc b/src/d3d/d3d8_present.inc
 new file mode 100644
-index 0000000..38b3006
+index 0000000..6c8378e
 --- /dev/null
 +++ b/src/d3d/d3d8_present.inc
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,169 @@
 +/* Native output presentation. Internal game pixels/depth never resize with the
 + * Cocoa drawable; only the final image is scaled. Included after D3DGL globals. */
 +static struct {
@@ -598,6 +598,9 @@ index 0000000..38b3006
 +
 +GLuint xbox_D3D8GLBackBuffer(unsigned index)
 +{ return index < 2 ? g_output.fbo[index] : 0; }
++
++GLuint xbox_D3D8GLDepthBuffer(void)
++{ return g_output.depth; }
 +
 +int xbox_D3D8GLSetPresentationFilter(const char *source,float strength)
 +{
