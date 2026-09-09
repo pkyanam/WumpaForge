@@ -36,6 +36,7 @@ int xbox_D3D8GLBeginCall(void) { return 1; }
 int xbox_D3D8GLBeginStateCall(void) { return 1; }
 int xbox_D3D8GLEnsureCurrent(void) { return 1; }
 void xbox_D3D8GLEndCall(int outer) { assert(outer==1); }
+void wumpa_gl_rpc_call(void (*function)(void *),void *argument) { function(argument); }
 void *SDL_GL_GetProcAddress(const char *name) { (void)name;return NULL; }
 static void enabled(GLenum cap) { sequence[transitions++]=cap; }
 static void disabled(GLenum cap) { sequence[transitions++]=cap+1; }
@@ -68,7 +69,7 @@ int main(void) {
         sdl = original / 'deps' / f'SDL-{prepare.SDL_REV}' / 'include'
         binary = work / 'fixture'
         subprocess.run(['cc', '-std=c11', '-O1', '-fsanitize=undefined', '-I'+str(work / 'gl'),
-                        '-I'+str(sdl), str(fixture), '-o', str(binary)], check=True)
+                        '-I'+str(sdl), '-I'+str(ROOT / 'android/shield2019'), str(fixture), '-o', str(binary)], check=True)
         subprocess.run([str(binary)], check=True)
     print('PASS: adjacent exact duplicates, state order, signed zero/NaNs, barriers, capacity and non-idempotent calls')
 

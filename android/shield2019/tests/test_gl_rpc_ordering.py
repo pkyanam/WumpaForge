@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Test the real synchronous render RPC with real threads and a fake SDL context."""
+import importlib.util
+import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -15,6 +18,7 @@ int SDL_GL_MakeCurrent(SDL_Window *, SDL_GLContext);
 SDL_GLContext SDL_GL_GetCurrentContext(void);
 void SDL_GL_SwapWindow(SDL_Window *);
 const char *SDL_GetError(void);
+void *SDL_GL_GetProcAddress(const char *);
 '''
 
 FIXTURE = r'''
@@ -25,6 +29,12 @@ FIXTURE = r'''
 #include <string.h>
 #include <stdlib.h>
 #include "gl_rpc.h"
+#include "gl_loader.c"
+int xbox_D3D8GLBeginCall(void) { return 1; }
+int xbox_D3D8GLBeginStateCall(void) { return 1; }
+int xbox_D3D8GLEnsureCurrent(void) { return 1; }
+void xbox_D3D8GLEndCall(int outer) { assert(outer==1); }
+void *SDL_GL_GetProcAddress(const char *name) { (void)name;return NULL; }
 
 static SDL_Window window;
 static SDL_GLContext context=(void *)(uintptr_t)123;
@@ -76,6 +86,22 @@ static void *caller(void *arg) {
     }
     return NULL;
 }
+static void buffer_data(GLenum target,GLsizeiptr size,const void *data,GLenum usage) {
+    assert(wumpa_gl_rpc_owner() && current==context);
+    assert(target==GL_ARRAY_BUFFER && size==5 && usage==GL_STATIC_DRAW);
+    assert(!memcmp(data,"hello",5));
+}
+static void shader_source(GLuint shader,GLsizei count,const GLchar *const *strings,const GLint *lengths) {
+    assert(wumpa_gl_rpc_owner() && shader==71 && count==2);
+    assert(lengths[0]==3 && lengths[1]==4);
+    assert(!memcmp(strings[0],"one",3) && !memcmp(strings[1],"four",4));
+}
+static void get_integer(GLenum pname,GLint *result) {
+    assert(wumpa_gl_rpc_owner() && pname==GL_MAX_TEXTURE_SIZE);*result=4096;
+}
+static const GLubyte *get_string(GLenum name) {
+    assert(wumpa_gl_rpc_owner() && name==GL_VENDOR);return (const GLubyte *)"mock GPU";
+}
 static void direct(void *argument) { *(unsigned *)argument=42; }
 int main(void) {
     assert(!wumpa_gl_rpc_active());unsigned value=0;
@@ -86,6 +112,14 @@ int main(void) {
     assert(!setenv("WRATH_GL_RPC","1",1));
     assert(!wumpa_gl_rpc_start(&window,context));assert(wumpa_gl_rpc_active());
     assert(!wumpa_gl_rpc_owner());assert(!current);
+    wumpa_glBufferData=buffer_data;wumpa_glShaderSource=shader_source;
+    wumpa_glGetIntegerv=get_integer;wumpa_glGetString=get_string;
+    char bytes[]="hello";glBufferData(GL_ARRAY_BUFFER,5,bytes,GL_STATIC_DRAW);
+    memset(bytes,0,sizeof(bytes));
+    const GLchar *strings[]={"one","four"};GLint lengths[]={3,4};
+    glShaderSource(71,2,strings,lengths);
+    GLint result=0;glGetIntegerv(GL_MAX_TEXTURE_SIZE,&result);assert(result==4096);
+    assert(!strcmp((const char *)glGetString(GL_VENDOR),"mock GPU"));
     pthread_t a,b;assert(!pthread_create(&a,NULL,caller,(void *)(uintptr_t)0));
     assert(!pthread_create(&b,NULL,caller,(void *)(uintptr_t)1));
     assert(!pthread_join(a,NULL));assert(!pthread_join(b,NULL));
@@ -113,13 +147,22 @@ int main(void) {
 '''
 
 def main():
+    spec=importlib.util.spec_from_file_location('shield_prepare',HERE/'prepare.py')
+    prepare=importlib.util.module_from_spec(spec);spec.loader.exec_module(prepare)
+    original=prepare.OUT
+    ndk=Path(os.environ.get('ANDROID_NDK_HOME',str(Path.home()/'Library/Android/sdk/ndk/27.1.12297006')))
     with tempfile.TemporaryDirectory() as directory:
         work=Path(directory)
+        (work/'title').symlink_to(original/'title',target_is_directory=True)
+        (work/'runtime').symlink_to(original/'runtime',target_is_directory=True)
+        prepare.OUT=work;prepare.generate_loader(original/'deps/glcorearb.h')
+        (work/'gl/KHR').mkdir()
+        shutil.copy2(ndk/'toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/include/KHR/khrplatform.h',work/'gl/KHR/khrplatform.h')
         (work/'SDL.h').write_text(SDL)
         (work/'fixture.c').write_text(FIXTURE)
         binary=work/'fixture'
         subprocess.run(['cc','-std=c11','-O1','-g','-fsanitize=address,undefined','-pthread',
-                        '-I'+str(work),'-I'+str(HERE),str(work/'fixture.c'),
+                        '-I'+str(work),'-I'+str(work/'gl'),'-I'+str(HERE),str(work/'fixture.c'),
                         str(HERE/'gl_rpc.c'),'-o',str(binary)],check=True)
         subprocess.run([str(binary)],check=True,timeout=20)
 
