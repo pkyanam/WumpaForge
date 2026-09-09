@@ -66,3 +66,16 @@ Shield graphics suite together. Repeat source preparation also passes; it now
 removes the disposable title copy before replaying patches that create files.
 Current rendering measurements follow after deployment; synthetic validation is
 not a measured60FPS guarantee. Mac source and package remain unchanged.
+
+## Combined device validation
+
+PID8086 (source71bf969 plus preparation fix) reports640x480 internal,
+1920x1080 drawable and swapinterval1. Opening windows:51.22/52.18FPS at
+animation326/356;28.54 at416 and21.64 at446. At446, workCPU42.709ms,
+present1.038ms. Earlier cache build at446 measured20.83FPS; uncontrolled device
+load and slightly shifted window boundaries limit precise comparison.
+The target is still unmet. Large remaining gains require reducing render-driver
+submission/context work. Do not hold the graphics lock across arbitrary original
+guest execution: potential guest lock/wait ordering must be proven or explicitly
+handled. The9.98-second maximum early frame also includes loading and1571texture
+uploads over its60-frame window; steady-state FPS does not describe that pause.
