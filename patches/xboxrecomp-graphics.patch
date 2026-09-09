@@ -13,7 +13,7 @@ index f1b3606..4f014dc 100644
  
  target_include_directories(xbox_d3d8 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 diff --git a/src/d3d/d3d8_gl.c b/src/d3d/d3d8_gl.c
-index 7888785..2de7a7a 100644
+index 7888785..a63b5b7 100644
 --- a/src/d3d/d3d8_gl.c
 +++ b/src/d3d/d3d8_gl.c
 @@ -31,6 +31,12 @@
@@ -335,7 +335,7 @@ index 7888785..2de7a7a 100644
  static const IDirect3DTexture8Vtbl g_tex_vtbl = {
      tex_QueryInterface, tex_AddRef, tex_Release,
      tex_GetDevice, tex_SetPriority, tex_GetPriority, tex_PreLoad, tex_GetType,
-@@ -544,19 +789,54 @@ static HRESULT __stdcall dev_GetCreationParameters(IDirect3DDevice8 *s, void *pP
+@@ -544,19 +789,63 @@ static HRESULT __stdcall dev_GetCreationParameters(IDirect3DDevice8 *s, void *pP
  static HRESULT __stdcall dev_Reset(IDirect3DDevice8 *s, D3DPRESENT_PARAMETERS *pPP)
  { (void)s;(void)pPP; return D3D_OK; }
  
@@ -384,13 +384,22 @@ index 7888785..2de7a7a 100644
 +    int profiling=profile_present_enabled();
 +    uint64_t profile_start=profiling?monotonic_ns():0;
 +    xbox_D3D8GLPresentImage();
++    /* SDL's macOS contract requires the default DRAW framebuffer at swap.
++     * Restore the game's target only after the drawable has been flushed. */
++    GLint game_draw,game_buffer;
++    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&game_draw);
++    glGetIntegerv(GL_DRAW_BUFFER,&game_buffer);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0);glDrawBuffer(GL_BACK);
++    HRESULT swap_result=D3D_OK;
 +#ifdef __APPLE__
 +    if (!pthread_main_np()) {
 +        if (!g_cgl || CGLFlushDrawable(g_cgl) != kCGLNoError)
-+            return D3DERR_INVALIDCALL;
++            swap_result=D3DERR_INVALIDCALL;
 +    } else
 +#endif
 +        SDL_GL_SwapWindow(g.window);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,game_draw);glDrawBuffer(game_buffer);
++    if(swap_result<0)return swap_result;
 +    uint64_t swap_end=profiling?monotonic_ns():0;
 +    pace_present();
 +    uint64_t pace_end=profiling?monotonic_ns():0;
@@ -399,7 +408,7 @@ index 7888785..2de7a7a 100644
      return D3D_OK;
  }
  
-@@ -687,7 +967,23 @@ static void setup_fvf_attribs(DWORD fvf, UINT stride)
+@@ -687,7 +976,23 @@ static void setup_fvf_attribs(DWORD fvf, UINT stride)
          glVertexAttrib4f(1, 1.f, 1.f, 1.f, 1.f);
      }
      /* Specular */
@@ -424,7 +433,7 @@ index 7888785..2de7a7a 100644
      /* Texcoord 0 */
      if (has_tex) {
          glEnableVertexAttribArray(2);
-@@ -714,6 +1010,11 @@ static void bind_texture0(void)
+@@ -714,6 +1019,11 @@ static void bind_texture0(void)
      }
      glUniform1i(g.u_tex0, 0);
      glUniform1i(g.u_use_tex, use_tex);
@@ -436,7 +445,7 @@ index 7888785..2de7a7a 100644
  }
  
  static void update_mvp(DWORD fvf)
-@@ -721,8 +1022,16 @@ static void update_mvp(DWORD fvf)
+@@ -721,8 +1031,16 @@ static void update_mvp(DWORD fvf)
      D3DMATRIX wv, mvp;
      mat4_mul(&wv, &g.m_world, &g.m_view);
      mat4_mul(&mvp, &wv, &g.m_proj);
@@ -455,7 +464,7 @@ index 7888785..2de7a7a 100644
      glUniform1i(g.u_use_xform, d3d8_fvf_transformed(fvf) ? 0 : 1);
  }
  
-@@ -737,17 +1046,18 @@ static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETY
+@@ -737,17 +1055,18 @@ static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *s, D3DPRIMITIVETY
      glUseProgram(g.prog);
      glBindVertexArray(g.vao);
      glBindBuffer(GL_ARRAY_BUFFER, g.stream_vbo);
@@ -480,7 +489,7 @@ index 7888785..2de7a7a 100644
      return D3D_OK;
  }
  
-@@ -765,16 +1075,18 @@ static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s, D3DPRIM
+@@ -765,16 +1084,18 @@ static HRESULT __stdcall dev_DrawIndexedPrimitiveUP(IDirect3DDevice8 *s, D3DPRIM
      glUseProgram(g.prog);
      glBindVertexArray(g.vao);
      glBindBuffer(GL_ARRAY_BUFFER, g.stream_vbo);
@@ -503,7 +512,7 @@ index 7888785..2de7a7a 100644
      return D3D_OK;
  }
  
-@@ -974,6 +1286,14 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -974,6 +1295,14 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
  {
      (void)s; (void)adapter; (void)devtype; (void)hwnd; (void)flags;
      if (!pp || !pPP) return D3DERR_INVALIDCALL;
@@ -518,7 +527,7 @@ index 7888785..2de7a7a 100644
  
      /* Initialise SDL video + GL 3.3 core context. */
      if (!SDL_WasInit(SDL_INIT_VIDEO)) SDL_InitSubSystem(SDL_INIT_VIDEO);
-@@ -993,7 +1313,7 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -993,7 +1322,7 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
      g.window = SDL_CreateWindow(g_window_title,
                                  SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                                  g.backbuf_w, g.backbuf_h,
@@ -527,7 +536,7 @@ index 7888785..2de7a7a 100644
      if (!g.window) {
          fprintf(stderr, "[d3d8_gl] SDL_CreateWindow failed: %s\n", SDL_GetError());
          return D3DERR_INVALIDCALL;
-@@ -1006,11 +1326,28 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -1006,11 +1335,28 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
          return D3DERR_INVALIDCALL;
      }
      SDL_GL_MakeCurrent(g.window, g.glctx);
@@ -556,7 +565,7 @@ index 7888785..2de7a7a 100644
      init_gl_pipeline();
  
      /* Reasonable default states */
-@@ -1018,9 +1355,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -1018,9 +1364,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
      mat4_identity(&g.m_view);
      mat4_identity(&g.m_proj);
      g.rs[D3DRS_ZENABLE]            = 1;

@@ -59,3 +59,20 @@ The updated main/worker context test passed48 readbacks and6 real presents in0.0
 `patches/xboxrecomp-graphics.patch` includes the new backend include and passes
 reverse-apply checking against the dependency checkout. Parent owns production
 builds and live game fullscreen/quality/performance verification.
+
+## Build60 black-window regression and correction
+
+Story22 showed a black window even though game draws and audio continued. The
+first resize tests checked GL_BACK pixels before swapping, so they missed a macOS
+presentation requirement. [SDL_GL_SwapWindow's official contract](https://wiki.libsdl.org/SDL2/SDL_GL_SwapWindow)
+requires draw framebuffer0 during the swap. Restoring the internal game FBO before
+SDL/CGL flush prevented the image from reaching the displayed front buffer.
+
+An expanded test reproduced that exact failure: expected red after Present,
+actual RGB0,0,0 (`presentation-swap-before.log`). The backend now binds default draw
+FBO0 through SDL_GL_SwapWindow/CGLFlushDrawable, then restores the game's draw FBO
+and buffer selection. The same real front-buffer readback now passes, along with
+resize/fullscreen/filter tests (`presentation-swap-fixed.log`). Main and worker
+regression additionally checks the displayed front pixels after all6 actual swaps;
+48 internal readbacks and all6 displayed images pass (`presentation-swap-threads.log`).
+The patch reverse-apply check passes. Root owns build61/live-window verification.

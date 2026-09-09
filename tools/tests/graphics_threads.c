@@ -38,7 +38,15 @@ static void render(unsigned worker, unsigned iteration)
     assert(pixel[0] == (worker ? 255 : 0));
     assert(pixel[1] == (worker ? 0 : 255));
     assert(pixel[2] == iteration && pixel[3] == 255);
-    if (iteration < 3) assert(device->lpVtbl->Present(device, NULL, NULL, NULL, NULL) == 0);
+    if (iteration < 3) {
+        assert(device->lpVtbl->Present(device, NULL, NULL, NULL, NULL) == 0);
+        GLint draw;glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);
+        assert((GLuint)draw==xbox_D3D8GLBackBuffer(0));
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,0);glReadBuffer(GL_FRONT);
+        glReadPixels(8,8,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+        assert(pixel[0]==(worker?255:0) && pixel[1]==(worker?0:255) && pixel[2]==iteration);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,xbox_D3D8GLBackBuffer(0));glReadBuffer(GL_COLOR_ATTACHMENT0);
+    }
     xbox_D3D8GLPumpEvents(); /* Worker path must not call SDL event/window APIs. */
     assert(glGetError() == GL_NO_ERROR);
     atomic_fetch_add(&passes, 1);

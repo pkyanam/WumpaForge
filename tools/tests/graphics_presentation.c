@@ -15,6 +15,7 @@ extern int xbox_D3D8GLSetPresentationFilter(const char *,float);
 static void pixel(int x,int y,unsigned r,unsigned green,unsigned b)
 {
     unsigned char p[4]; glReadPixels(x,y,1,1,GL_RGBA,GL_UNSIGNED_BYTE,p);
+    if(p[0]!=r || p[1]!=green || p[2]!=b)fprintf(stderr,"pixel%d,%d actual%u,%u,%u expected%u,%u,%u\n",x,y,p[0],p[1],p[2],r,green,b);
     assert(p[0]==r && p[1]==green && p[2]==b);
 }
 static void resized(SDL_Window *window,int w,int h)
@@ -67,6 +68,14 @@ int main(void)
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
     glEnable(GL_SCISSOR_TEST);glScissor(32,24,32,24);glClearColor(0,1,0,1);glClear(GL_COLOR_BUFFER_BIT);
     resized(window,320,180); resized(window,160,240); resized(window,400,300);
+    assert(!device->lpVtbl->Present(device,NULL,NULL,NULL,NULL));
+    GLint bound;glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&bound);assert((GLuint)bound==xbox_D3D8GLBackBuffer(0));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,0);glReadBuffer(GL_FRONT);
+    int shown_width,shown_height;SDL_GL_GetDrawableSize(window,&shown_width,&shown_height);
+    pixel(shown_width/4,shown_height/4,255,0,0);
+    pixel(3*shown_width/4,3*shown_height/4,0,255,0);
+    assert(glGetError()==GL_NO_ERROR);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,xbox_D3D8GLBackBuffer(0));glReadBuffer(GL_COLOR_ATTACHMENT0);
     /* Same public keyboard event path as F11; repeat keydowns must not toggle. */
     SDL_Event key={0};key.type=SDL_KEYDOWN;key.key.windowID=SDL_GetWindowID(window);key.key.keysym.sym=SDLK_F11;
     assert(SDL_PushEvent(&key)==1);SDL_Delay(20);xbox_D3D8GLPumpEvents();
