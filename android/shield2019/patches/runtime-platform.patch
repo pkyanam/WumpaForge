@@ -39,6 +39,15 @@
      explicit_bzero(ptr, cnt);
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
+@@ -18,7 +18,7 @@
+ #include <stdlib.h>
+ #if !defined(_WIN32)
+ #include <unistd.h>
+-#if defined(__APPLE__)
++#if defined(__APPLE__) || defined(__ANDROID__)
+ extern void *w32_reserve_guest_address_space(size_t size);
+ extern void w32_release_guest_address_space(void);
+ #endif
 @@ -1056,10 +1056,11 @@
       * Windows 11 where low addresses are often reserved), try page-aligned
       * addresses upward until we find a free region.
