@@ -64,12 +64,10 @@ added to Git. The new GLSL uniform contract is integer u_nv2a_fog_mode (0 disabl
 
 ## Explicit boundary
 
-Fixed XYZ vertices now use the original fixed distance contract, described below.
-Enabled XYZRHW remains explicit: original102850 uploads a separate SDK vertex
-microprogram for transformed coordinates. Its fog distance cannot be assumed to
-be the untransformed world/view contract. Fixed-vertex/programmed-pixel pairing
-also retains its existing explicit boundary. NV2A ABS fog modes are not emitted
-by the audited original SDK; unknown D3D table modes still fail explicitly.
+Fixed XYZ vertices and transformed XYZRHW now use their distinct original
+contracts, described below. Fixed-vertex/programmed-pixel pairing retains its
+existing explicit boundary. NV2A ABS fog modes are not emitted by the audited
+original SDK; unknown D3D table modes still fail explicitly.
 
 ## Validation
 
@@ -124,3 +122,49 @@ retained vertex address and native fence tests. Logs:
 and `git diff --check` passed, including the existing CMake Apple OpenGL linkage.
 Production was frozen before parent build59. Actual snow playability remains the
 parent's integration/visual test, not something the component fixture proves.
+
+## Transformed XYZRHW fog: story21
+
+Build59/story21 passed the first fixed XYZ snow draw and reached FVF0x144
+(XYZRHW, diffuse, one UV) with fog still enabled. This uses an original SDK
+vertex program rather than the fixed transform distance path. The supplied
+XBE contains the following audited program arrays; the addresses are source
+provenance, not newly substituted game shaders:
+
+| Original program | Instructions | oFog producer | Selection at102850 |
+| --- | --- | --- | --- |
+|10B238|12|slot2 RCP v0.w|table mode nonzero and device+8 bit2 clear|
+|10B2F8|11|slot0 MOV v0.z|table mode nonzero and device+8 bit2 set|
+|10B3A8|12|slot2 MOV v4.w|table mode NONE|
+
+Original FEA20 projection setter clears flag2 atFEAC4 and sets it atFEB16 only
+when projection elements[3,7,11] are0 and element[15] is1. Thus affine/orthographic
+projection selects original inputZ; ordinary perspective selects reciprocal
+originalRHW. Story21's captured projection has element11=1 and15=0, requiring
+reciprocalRHW. The range-fog flag does not change this program selection. The
+SDK's NONE program uses original specular alpha, including default1 when the
+FVF omits the specular field.
+
+Native screen-to-clip conversion already overwrites positionZ and RHW. To preserve
+the original fog input, conversion appends one float to its private staging
+vertex: untouched originalZ or RHW, selected using the same guest flag. The fixed
+GL vertex shader either reads it directly or computes its reciprocal. No guest
+vertex bytes or buffer metadata are changed. The original coefficient equations,
+Inf/NaN handling, perspective interpolation, fragment clamping and RGB-only blend
+are shared with fixed XYZ fog. There is no guessed screen-depth-to-eye-depth
+conversion or disabled-overlay exception.
+
+`tools/test_transformed_fog.inc` exercises both projection choices with distinct
+Z/RHW values, range independence, specular-alpha/NONE, omitted specular default,
+EXP/EXP2, zero originalRHW (preserved despite existing clip conversion's finite
+fallback), perspective interpolation before clamping, alpha preservation and
+disable. These are asset-free native GPU pixel checks. The fixture is included
+in the full renderer smoke alongside XYZ fog and controller presentation tests.
+
+The combined GPU smoke passed on the first run after integration, including the
+new transformed fog fixture and all prior renderer regressions. Logs are
+`local/reports/presentation-combined-build.log` and
+`local/reports/presentation-combined-smoke.log`. Production was frozen before
+parent build60; the controller agent refreshes the cumulative backend patch with
+both fog and presentation changes. Actual snow movement/rendering is still the
+parent's next live-game verification.
