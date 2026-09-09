@@ -70,6 +70,38 @@ def main():
             '    SDL_GL_MakeCurrent(g.window, g.glctx);\n    if (!wumpa_gl_load()) return D3DERR_INVALIDCALL;\n#ifdef __APPLE__')
     replace(backend,'void xbox_D3D8GLPumpEvents(void)\n{',
             'void xbox_D3D8GLPumpEvents(void)\n{\n    if (!wumpa_is_game_thread()) return;')
+    replace(backend,'static _Thread_local unsigned g_context_depth;',
+            'static _Thread_local unsigned g_context_depth;\n'
+            'int xbox_D3D8GLAcquire(void);\n'
+            'void xbox_D3D8GLRelease(void);\n'
+            'static int lazy_context_bind(void) {\n'
+            '    const char *v=getenv("WRATH_EGL_LAZY_BIND"); return v && !strcmp(v,"1");\n'
+            '}\n'
+            'int xbox_D3D8GLEnsureCurrent(void) {\n'
+            '    if (!g.glctx || SDL_GL_GetCurrentContext()==g.glctx) return 1;\n'
+            '    if (!g_context_depth) return 0;\n'
+            '    uint64_t begin=profile_context_enabled()?monotonic_ns():0;\n'
+            '    int ok=SDL_GL_MakeCurrent(g.window,g.glctx)>=0;\n'
+            '    if(begin)g_profile_calls.bind+=monotonic_ns()-begin;\n'
+            '    return ok;\n'
+            '}\n'
+            'int xbox_D3D8GLBeginCall(void) {\n'
+            '    if(!lazy_context_bind())return 0;\n'
+            '    int outer=!g_context_depth;\n'
+            '    if(outer && !xbox_D3D8GLAcquire())abort();\n'
+            '    if(!xbox_D3D8GLEnsureCurrent())abort();\n'
+            '    return outer;\n'
+            '}\n'
+            'void xbox_D3D8GLEndCall(int outer) { if(outer)xbox_D3D8GLRelease(); }')
+    replace(backend,'    if (g.glctx && SDL_GL_MakeCurrent(g.window, g.glctx) < 0) goto fail;',
+            '    if (!lazy_context_bind() && g.glctx && SDL_GL_MakeCurrent(g.window, g.glctx) < 0) goto fail;')
+    replace(backend,'        if (g.glctx && SDL_GL_MakeCurrent(g.window, NULL) < 0) abort();',
+            '        if (g.glctx && (!lazy_context_bind() || SDL_GL_GetCurrentContext()==g.glctx) &&\n'
+            '            SDL_GL_MakeCurrent(g.window, NULL) < 0) abort();')
+    replace(backend,'    if (g.window) {\n        last_pump_ns = now;',
+            '    if (g.window) {\n'
+            '        if(!xbox_D3D8GLEnsureCurrent())abort();\n'
+            '        last_pump_ns = now;')
     replace(backend,'            output_event(&ev);',
             '            if (ev.type == SDL_RENDER_DEVICE_RESET || SDL_HasEvent(SDL_RENDER_DEVICE_RESET)) {\n'
             '                fprintf(stderr, "[shield] EGL context lost; resource restoration is not implemented. Ending this game process.\\n");\n'
@@ -134,12 +166,28 @@ def generate_loader(registry):
     names=sorted(set(re.findall(r'\b(gl[A-Z]\w*)\s*\(',source)) | {'glGetStringi','glGetIntegerv','glGetString'})
     registry_text=registry.read_text()
     header=['/* Generated from pinned Khronos declarations; do not edit. */','#pragma once','#include <GL/glcorearb.h>','#define GL_FLAT 0x1D00 /* Guest shade-mode token; no legacy GL call. */','#define GL_SMOOTH 0x1D01','int wumpa_gl_load(void);','int epoxy_gl_version(void);','int epoxy_has_gl_extension(const char *name);']
-    body=['#include <SDL.h>','#include <stdio.h>','#include <string.h>','#include "epoxy/gl.h"']
+    body=['#include <SDL.h>','#include <stdio.h>','#include <string.h>','#include "epoxy/gl.h"',
+          'extern int xbox_D3D8GLBeginCall(void);','extern void xbox_D3D8GLEndCall(int outer);']
     for name in names:
         typedef='PFN'+name.upper()+'PROC'
         if typedef not in registry_text: raise RuntimeError(f'Missing GL declaration: {name}')
-        header += [f'extern {typedef} wumpa_{name};',f'#define {name} wumpa_{name}']
-        body += [f'{typedef} wumpa_{name};']
+        declaration=re.search(r'typedef\s+([^;\n]+?)\s*\(APIENTRYP '+typedef+r'\)\s*\(([^;]+)\);',registry_text)
+        if not declaration:raise RuntimeError(f'Cannot parse GL declaration: {name}')
+        result,parameters=declaration.groups()
+        arguments=[]
+        if parameters.strip()!='void':
+            for parameter in parameters.split(','):
+                arg=re.search(r'(\w+)\s*(?:\[[^]]*\])?\s*$',parameter)
+                if not arg:raise RuntimeError(f'Cannot parse GL argument: {parameter}')
+                arguments.append(arg.group(1))
+        header += [f'{result} wumpa_call_{name}({parameters});',f'#define {name} wumpa_call_{name}']
+        body += [f'static {typedef} wumpa_{name};',f'{result} wumpa_call_{name}({parameters}) {{',
+                 '    int wumpa_outer=xbox_D3D8GLBeginCall();']
+        invocation=f'wumpa_{name}({", ".join(arguments)})'
+        body += [f'    {invocation};' if result=='void' else f'    {result} wumpa_result={invocation};',
+                 '    xbox_D3D8GLEndCall(wumpa_outer);']
+        if result!='void':body += ['    return wumpa_result;']
+        body += ['}']
     body += ['int wumpa_gl_load(void) { int missing=0;']
     for name in names:
         body += [f'    wumpa_{name}=({"PFN"+name.upper()+"PROC"})SDL_GL_GetProcAddress("{name}");',
