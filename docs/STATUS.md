@@ -1,6 +1,23 @@
 # Status — 2026-09-08
 
-## Current: build54 texture adjustment passes; hub reflection shader and audio audit
+## Current: build55/story15 reflection passes; Xbox address5 is next hub setting
+- b951812 implements actual[PROJECT2D,DOT,DOT,DOT_RFLCT_SPEC] shader chain, signed
+  mapping1 andoriginalreflectionequation. FullGPUtests pass all6cube faces, exact128
+  normalcenter, nonunitnormal denominator, diffuseRGBA andinvaliddependency checks.
+- Actualstory15build55 reacheslinked31VSreflectionprogram54 then21VSprogram57.
+  Nextstopshader_error(texture addressing,unsupportedmode): stage0/1 U=V=5,W=1.
+  Stage0screen640x480; stage1/2sameboundtexture; PStexturemodes1057=[1,1,1,0].
+  mac_runtime owns exact originaladdress5 mapping andnativeGPUvalidation; controller
+  auditsremainingstaticPSdefinitions toreducefutureone-boundary-per-launch cycles.
+- No game running. Story15PID38140/session8479endedatshaderbreak; appbuild55current.
+  Nextfrozenaddressfix/build56/story16 thenoriginalNewGame/Spaceskip→hub→ArcticAntics.
+- Audio-startup01and02 bothsurvived15seconds (watchdogstops). 01probe failedAppleLLDB
+  missingSetExecutionPolicy; agentfixed toSetAllowJIT(False) andtestedactualhost.
+  02probe succeeded: stream010FF430/16B70Cvtable/method1363D6/nativepointeragree,
+  allotherwrappersinactive, pendingpacketsnormal. Originalstory13sporadicfault remains
+  unresolved, notdismissed. Includeaudio_probeonstop inallfutureboots; fd9d9fa audit.
+
+## Earlier: build54 texture adjustment passes; hub reflection shader and audio audit
 -6c1494c implements original PS_ADJUST_TEXTUREMODES flag100: unbound PROJECT modes
   becomeNONE and boundsamplers adapt to resourceheader dimensions. NONE isRGBA0001.
   Bound/null/rebind and fullGPUtests pass. Native linker retained unusedsampler
