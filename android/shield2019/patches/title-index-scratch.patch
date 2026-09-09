@@ -1,0 +1,61 @@
+--- a/index_bridge.inc
++++ b/index_bridge.inc
+@@ -8,6 +8,7 @@
+  */
+ static uint32_t s_index_handle;
+ #include "index_resource_bounds.inc"
++#include "index_scratch.inc"
+ 
+ static int index_range(uint32_t address, uint64_t bytes)
+ {
+@@ -71,7 +72,8 @@
+         uint32_t index=in[i*2]|((uint32_t)in[i*2+1]<<8);
+         if ((uint64_t)offset+((uint64_t)base+index+1)*stride>vb->bytes) return D3DERR_INVALIDCALL;
+     }
+-    uint8_t *expanded=malloc((size_t)count*stride);
++    struct IndexScratchLease scratch=index_scratch_acquire((size_t)count*stride);
++    uint8_t *expanded=scratch.data;
+     if (!expanded) return (HRESULT)0x8007000Eu;
+     const uint8_t *vertices=(const uint8_t *)guest_ptr(vb->data)+offset;
+     for (uint32_t i=0;i<count;++i) {
+@@ -80,7 +82,7 @@
+     }
+     struct VertexFetch fetch={.first=base,.indices=in};
+     HRESULT result=draw_vertices_data_fetch(type,count,expanded,stride,&fetch);
+-    free(expanded); return result;
++    index_scratch_release(scratch); return result;
+ }
+ void sub_00101BC0(void) /* DrawIndexedVertices(type,indexCount,uint16Pointer), ret12. */
+ {
+--- /dev/null
++++ b/index_scratch.inc
+@@ -0,0 +1,29 @@
++/* All indexed draws hold the recursive graphics mutex. Borrow at most 1MiB
++ * between draws; oversized or nested draws retain the original temporary path. */
++#define INDEX_SCRATCH_LIMIT (1024u * 1024u)
++struct IndexScratchLease { uint8_t *data; int retained; };
++static uint8_t *s_index_scratch;
++static size_t s_index_scratch_capacity;
++static int s_index_scratch_busy;
++static struct IndexScratchLease index_scratch_acquire(size_t size)
++{
++    struct IndexScratchLease lease={NULL,0};
++    if(!size)return lease;
++    if(!s_index_scratch_busy&&size<=INDEX_SCRATCH_LIMIT) {
++        if(size>s_index_scratch_capacity) {
++            size_t capacity=s_index_scratch_capacity?s_index_scratch_capacity:4096;
++            while(capacity<size)capacity*=2;
++            uint8_t *grown=realloc(s_index_scratch,capacity);
++            if(grown){s_index_scratch=grown;s_index_scratch_capacity=capacity;}
++        }
++        if(size<=s_index_scratch_capacity) {
++            s_index_scratch_busy=1;lease.data=s_index_scratch;lease.retained=1;return lease;
++        }
++    }
++    lease.data=malloc(size);return lease;
++}
++static void index_scratch_release(struct IndexScratchLease lease)
++{
++    if(lease.retained)s_index_scratch_busy=0;
++    else free(lease.data);
++}
