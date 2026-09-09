@@ -90,3 +90,44 @@ omits the patch and fails at the first gamepad-to-port-0 assertion (exit 134).
 The fake rumble callback accommodates the existing sdl2-compat 2.32.70 callback
 ABI issue, as the repository's earlier virtual-controller test does. Physical
 Android Bluetooth mappings and pairing behavior remain untested.
+
+## Xbox filename case on Android storage
+
+The local original-XBE string/disc inventory audit matched 108 literal asset
+references after the `Crashdat/` prefix; 43 had different case from their disc
+entries. Examples include `intro2/control.cut` versus `intro2/Control.cut` and
+`outro2/iceberg.cut` versus `outro2/IceBerg.cut`. Case-insensitive macOS storage
+can conceal these errors; Android's ordinary app storage cannot be assumed to.
+
+`runtime-path-case.patch`, also gated by `WRATH_ANDROID_TV`, resolves recognized
+Xbox mounted paths component by component. Existing exact names take a fast
+`fstatat` path on Android; a missing exact name scans only that parent directory
+for an ASCII case-insensitive match. Returned paths retain the actual stored
+spelling, including existing save directories/files. Multiple fallback matches
+are rejected rather than choosing an arbitrary file. An exact literal name is
+authoritative on a case-sensitive host. No asset tree is scanned recursively,
+renamed, lowercased or copied, and there is no stale global directory cache.
+
+A missing final component retains the guest's spelling for normal create/open
+semantics. Missing intermediate guest components still fail. Existing namespace
+creation behavior (for example `Cache/Partition5`) is preserved after resolving
+its existing spelling. Lexical `.` and internal `..` normalize within the mounted
+namespace; escaping its root, symlink components, overlong paths and a file used
+as a directory fail. Configured host roots remain trusted. Unrecognized native
+path passthrough and raw partition-image naming retain their existing behavior.
+
+```sh
+python3 android/shield2019/tests/test_path_case.py
+```
+
+The UBSan fixture compiles the actual patched POSIX translator in a temporary
+copy. It checks exact returned spelling for mixed-case assets and saves, missing
+create leaves, namespace creation, no file modification, dot normalization,
+root boundaries, symlink rejection and buffer bounds. Because APFS may accept
+wrong-case `fstatat`, the Apple fixture path always enumerates sibling spellings;
+it does not claim that merely opening a file proves canonical resolution.
+Ambiguous case-colliding dirents are injected only for that one failure case,
+since case-insensitive APFS cannot represent the collision. The fixture passed;
+`--baseline` intentionally fails its first `Control.cut` spelling assertion.
+Android fast-path compilation and actual case-sensitive storage still require
+the NDK build/device validation owned by root.
