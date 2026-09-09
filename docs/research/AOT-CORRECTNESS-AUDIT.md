@@ -169,3 +169,47 @@ count at least32 is the false-positive41B20 seed. This inventory includes
 existing discovery aliases/false positives and supplies no runtime frequency or
 claim that an out-of-range count occurred during the reported demo. Full details
 are in `local/reports/logical-shift-inventory.json`.
+
+## Carry rotations and original CRT division
+
+RCR was an explicit execution boundary in genuine large-divisor normalization
+loops, with SHR of the high DWORD followed by RCR of the low DWORD. The first
+CPU run reached that boundary atF6462. Original algorithm/output checks establish
+the following operations without relying on automatically assigned CRT names:
+
+| Original helper | RCR sites | Validated outputs | Caller call/return |
+| --- | --- | --- | --- |
+| F61C0 | F61F1,F61F5 | Unsigned remainder in EDX:EAX | EE280/EE285 |
+| F6380 | F63E9,F63ED | Signed quotient in EDX:EAX | F1E95/F1E9A |
+| F6430 | F6462,F6466 | Unsigned quotient in EDX:EAX | 155FF4/155FF9 |
+| FB6C0 | FB701,FB705 | Unsigned quotient EDX:EAX and remainder EBX:ECX | F7672/F7677;FADB0/FADB5 |
+
+RCL/RCR now rotate the operand plus incoming carry as a9/17/33-bit ring, applying
+the five-bit count mask and the byte/word modulo rule. Carry becomes the shifted
+out bit; one-bit overflow follows the resulting sign/carry contract. Zero count
+preserves result/flags. The translator now allocates carry whenever an RCL/RCR
+instruction needs its incoming value, even without a subsequent carry branch.
+No global EFLAGS redesign or variable zero-count merge claim is added.
+
+After implementing RCR, UBSan exposed a second valid-input issue in the signed
+routine: NEG of80000000h used signed int32 negation, which is C overflow. NEG now
+computes its wrapping result with unsigned zero-minus-value while retaining its
+existing carry update. This change does not modify DIV/IDIV exception handling
+or add a complete NEG overflow-flag implementation.
+
+`tools/test_carry_rotates.py` passes UBSan across8/16/32 bits, every byte value,
+every8-bit count, both carry inputs, and defined overflow. Complete translated
+SHR→RCL/RCR→MOV→JO/JB fixtures verify incoming carry and flag use after destination
+overwrite. `tools/test_crt_division.py` compiles the four original routines into
+temporary CPU fixtures and passes signed/unsigned edge cases plus40,000 random
+input pairs, including both nonzero and zero divisor high DWORDs. It verifies
+stack cleanup and preserved registers as well as quotient/remainder outputs.
+Divisor zero and INT64_MIN/-1 are excluded from the C oracle; no claim is made
+that architectural divide exceptions are newly implemented. No original bytes
+or generated function bodies are committed, and no game/UI test was performed.
+
+Reports under local/reports: `crt-division-before.log` records the original RCR
+boundary; `crt-division-rcr-fixed.log` records the subsequent NEG UBSan failure;
+`crt-division-fixed.log`, `carry-rotates-fixed.log` pass; `crt-division-original.txt`
+contains original instructions/call sites. Existing logical/double-shift,
+rotate, flag-merge and unsupported-instruction regressions also pass.

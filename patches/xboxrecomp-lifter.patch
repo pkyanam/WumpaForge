@@ -1,5 +1,5 @@
 diff --git a/templates/runtime/recomp_types.h b/templates/runtime/recomp_types.h
-index 4cf3d79..5dfe940 100644
+index 4cf3d79..36934fd 100644
 --- a/templates/runtime/recomp_types.h
 +++ b/templates/runtime/recomp_types.h
 @@ -60,6 +60,8 @@
@@ -47,7 +47,7 @@ index 4cf3d79..5dfe940 100644
  
  /* ================================================================
   * ICALL trace ring buffer (for debugging indirect calls)
-@@ -574,6 +598,76 @@ static inline uint32_t SUB32_CF(uint32_t a, uint32_t b, int *cf) {
+@@ -574,6 +598,95 @@ static inline uint32_t SUB32_CF(uint32_t a, uint32_t b, int *cf) {
   * Rotation / shift helpers
   * ================================================================ */
  
@@ -72,6 +72,25 @@ index 4cf3d79..5dfe940 100644
 +    }
 +    return result;
 +}
++/* Rotate the operand and CF as a 9/17/33-bit ring. The count is masked to 5
++ * bits before reducing modulo the ring width. OF is defined only at count 1. */
++static inline uint32_t RECOMP_CARRY_ROTATE(uint32_t value, unsigned count, unsigned bits,
++                                          int right, int *cf, int *of)
++{
++    uint32_t mask = bits == 32 ? UINT32_MAX : (1u << bits) - 1u;
++    unsigned masked = count & 31u, shift = masked % (bits + 1u);
++    uint64_t ring_mask = (UINT64_C(1) << (bits + 1u)) - 1u;
++    uint64_t ring = (value & mask) | ((uint64_t)(*cf & 1) << bits);
++    if (shift) ring = (right ? (ring >> shift) | (ring << (bits + 1u - shift)) :
++                              (ring << shift) | (ring >> (bits + 1u - shift))) & ring_mask;
++    uint32_t result = (uint32_t)ring & mask;
++    *cf = (int)((ring >> bits) & 1u);
++    if (of && masked == 1u)
++        *of = (int)(((result >> (bits - 1u)) ^
++                     (right ? result >> (bits - 2u) : (unsigned)*cf)) & 1u);
++    return result;
++}
++
 +/* Logical shifts truncate to operand width before shifting. CF is undefined
 + * for nonzero masked counts >= width; choose 0 there. OF is defined at count 1. */
 +static inline uint32_t RECOMP_SHIFT(uint32_t value, unsigned count, unsigned bits,
@@ -124,7 +143,7 @@ index 4cf3d79..5dfe940 100644
  static inline uint32_t ROL32(uint32_t val, int n) {
      n &= 31;
      return (val << n) | (val >> (32 - n));
-@@ -886,9 +980,8 @@ void recomp_abi_violation_log(uint32_t va, uint32_t ebx0, uint32_t esi0,
+@@ -886,9 +999,8 @@ void recomp_abi_violation_log(uint32_t va, uint32_t ebx0, uint32_t esi0,
   *
   * mm0..mm7 alias the x87 stack on real hardware. Nothing here does, and
   * nothing needs to: a title that interleaves the two calls emms between, and
@@ -137,7 +156,7 @@ index 4cf3d79..5dfe940 100644
  
  #ifndef RECOMP_MMX_DEFINED
 diff --git a/tools/conformance/__main__.py b/tools/conformance/__main__.py
-index aa3c9f9..288ab28 100644
+index aa3c9f9..f87c87a 100644
 --- a/tools/conformance/__main__.py
 +++ b/tools/conformance/__main__.py
 @@ -124,7 +124,10 @@ def _lift(code_bytes):
@@ -148,7 +167,7 @@ index aa3c9f9..288ab28 100644
 +    from tools.recomp.translator import FunctionTranslator
 +    lifter.needs_cf = FunctionTranslator._function_needs_cf(insns)
 +    lifter.needs_shift_snapshot = any(i.mnemonic in ("shl", "shr", "shld", "shrd") for i in insns)
-+    lifter.needs_rotate_snapshot = any(i.mnemonic in ("rol", "ror") for i in insns)
++    lifter.needs_rotate_snapshot = any(i.mnemonic in ("rol", "ror", "rcl", "rcr") for i in insns)
      lines, _ = lift_basic_block(lifter, BasicBlock(start=0x00100000,
                                                     instructions=insns))
      return list(lines), mnemonics
@@ -242,14 +261,14 @@ index 55fec47..a1d3c6c 100644
      ranked = sorted(unimplemented.items(),
                      key=lambda kv: (-len(kv[1]), kv[0]))
 diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
-index 468312d..ce9431c 100644
+index 468312d..e23234b 100644
 --- a/tools/recomp/lifter.py
 +++ b/tools/recomp/lifter.py
 @@ -254,6 +254,7 @@ FLAG_SETTERS = frozenset({
  # this shape: "add reg, reg" to shift the top bit into CF, then jae on it.
  CF_TRACKED = frozenset({
      "add", "sub", "adc", "sbb", "shl", "shr", "sar",
-+    "rol", "ror", "shld", "shrd",
++    "rol", "ror", "rcl", "rcr", "shld", "shrd",
  })
  
  # Additional instructions that modify EFLAGS (tracked but handled as generic)
@@ -264,17 +283,18 @@ index 468312d..ce9431c 100644
  
      # A cmp/test that is not fused with its jcc snapshots its operands into
      # _fa/_fb (zero-extended) and _fas/_fbs (sign-extended) at the point the
-@@ -385,6 +390,18 @@ def _make_condition(jcc, flag_setter, flag_ops):
+@@ -385,6 +390,19 @@ def _make_condition(jcc, flag_setter, flag_ops):
      if lhs is None:
          return None
  
-+    if flag_setter in ("rol", "ror"):
++    if flag_setter in ("rol", "ror", "rcl", "rcr"):
 +        if jcc in ("jb", "jnae", "jc"): return "_cf", desc
 +        if jcc in ("jae", "jnb", "jnc"): return "!_cf", desc
 +        if (jcc in ("jo", "jno") and len(flag_ops) > 1 and
 +                flag_ops[1].type == "imm" and (flag_ops[1].imm & 31) == 1):
 +            bits = (_operand_width(flag_ops[0]) or 4) * 8
-+            other = "_rotate_result" if flag_setter == "rol" else f"(_rotate_result >> {bits - 2})"
++            other = ("_rotate_result" if flag_setter == "rol" else "_cf" if flag_setter == "rcl"
++                     else f"(_rotate_result >> {bits - 2})")
 +            overflow = f"(((_rotate_result >> {bits - 1}) ^ {other}) & 1u)"
 +            return (overflow if jcc == "jo" else f"!{overflow}"), desc
 +        # Rotation never establishes ZF/SF/PF. A multi-bit OF is undefined.
@@ -283,7 +303,7 @@ index 468312d..ce9431c 100644
      # ── comiss/ucomiss: float comparison, sets CF/ZF/PF ──
      if flag_setter in ("comiss", "comisd", "ucomiss", "ucomisd"):
          def _sse_op(op):
-@@ -485,6 +502,10 @@ def _make_condition(jcc, flag_setter, flag_ops):
+@@ -485,6 +503,10 @@ def _make_condition(jcc, flag_setter, flag_ops):
              return f"(!RECOMP_PARITY8(({lhs}) & ({rhs})))", desc
          return None
  
@@ -294,7 +314,7 @@ index 468312d..ce9431c 100644
      # ── carry conditions, from the _cf the arithmetic already produced ──
      #
      # Ahead of the per-mnemonic rules below, which reconstruct CF from the
-@@ -630,27 +651,22 @@ def _make_condition(jcc, flag_setter, flag_ops):
+@@ -630,27 +652,22 @@ def _make_condition(jcc, flag_setter, flag_ops):
          return None
  
      # ── shift: result-based ──
@@ -332,7 +352,16 @@ index 468312d..ce9431c 100644
          return None
  
      # ── rol/ror/rcl/rcr: rotation, only CF/OF affected ──
-@@ -1172,12 +1188,9 @@ class Lifter:
+@@ -1045,6 +1062,8 @@ class Lifter:
+             return self._lift_sar(insn, ops)
+         if m in ("rol", "ror"):
+             return self._lift_rotate(insn, ops, m)
++        if m in ("rcl", "rcr"):
++            return self._lift_carry_rotate(insn, ops, m)
+ 
+         # ── Comparison / test (standalone, not part of cmp+jcc pattern) ──
+         if m == "cmp":
+@@ -1172,12 +1191,9 @@ class Lifter:
              if len(ops) >= 2:
                  return [f"/* bt {_fmt_operand_read(ops[0])}, {_fmt_operand_read(ops[1])} - bit test */"]
              return [f"/* bt {insn.op_str} */"]
@@ -348,7 +377,7 @@ index 468312d..ce9431c 100644
          if m in ("xlat", "xlatb"):
              # AL indexes the byte table at EBX. With an address-size override,
              # the effective offset is calculated and wrapped at 16 bits.
-@@ -1290,7 +1303,7 @@ class Lifter:
+@@ -1290,7 +1306,7 @@ class Lifter:
          if m in ("bsf", "bsr"):
              if len(ops) < 2:
                  self.unimplemented.setdefault(m, []).append(insn.address)
@@ -357,7 +386,7 @@ index 468312d..ce9431c 100644
              dst = _fmt_operand_read(ops[0])
              src = _fmt_operand_read(ops[1])
              width = (_operand_width(ops[1]) or 4) * 8
-@@ -1359,11 +1372,14 @@ class Lifter:
+@@ -1359,11 +1375,14 @@ class Lifter:
          #
          # Recorded, not merely commented -- see self.unimplemented.
          self.unimplemented.setdefault(m, []).append(insn.address)
@@ -373,7 +402,16 @@ index 468312d..ce9431c 100644
          if nops := len(ops) < 2:
              return [f"/* mov: bad operands */"]
          src = _fmt_operand_read(ops[1])
-@@ -1549,24 +1565,25 @@ class Lifter:
+@@ -1514,7 +1533,7 @@ class Lifter:
+         if preserve_carry or self.needs_cf:
+             # neg sets CF iff the operand was non-zero (neg/sbb sign-extract).
+             out.append(f"_cf = (int)(({val}) != 0);")
+-        out.append(_fmt_operand_write(ops[0], f"(uint32_t)(-(int32_t){val})"))
++        out.append(_fmt_operand_write(ops[0], f"(0u - (uint32_t)({val}))"))
+         return out
+ 
+     def _lift_not(self, insn, ops):
+@@ -1549,24 +1568,25 @@ class Lifter:
                  % (dst, src, w, _fmt_operand_write(ops[0], "(uint32_t)_t"))]
  
      def _lift_shld(self, insn, ops):
@@ -414,7 +452,7 @@ index 468312d..ce9431c 100644
  
      def _lift_imul(self, insn, ops):
          nops = len(ops)
-@@ -1614,36 +1631,40 @@ class Lifter:
+@@ -1614,36 +1634,53 @@ class Lifter:
  
      def _lift_shift(self, insn, ops, c_op):
          if len(ops) < 2:
@@ -468,10 +506,23 @@ index 468312d..ce9431c 100644
 +        if getattr(self, "needs_rotate_snapshot", False):
 +            return [f"_rotate_result = {expression};", _fmt_operand_write(ops[0], "_rotate_result")]
 +        return [_fmt_operand_write(ops[0], expression)]
++
++    def _lift_carry_rotate(self, insn, ops, m):
++        if len(ops) < 2:
++            return [f"/* {m}: bad operands */"]
++        if ops[1].type == "imm" and (ops[1].imm & 31) == 0:
++            return ["(void)0; /* carry rotate: masked zero count preserves flags/result */"]
++        dst = _fmt_operand_read(ops[0])
++        cnt = _fmt_operand_read(ops[1])
++        bits = (_operand_width(ops[0]) or 4) * 8
++        expression = f"RECOMP_CARRY_ROTATE({dst}, {cnt}, {bits}, {int(m == 'rcr')}, &_cf, NULL)"
++        if getattr(self, "needs_rotate_snapshot", False):
++            return [f"_rotate_result = {expression};", _fmt_operand_write(ops[0], "_rotate_result")]
++        return [_fmt_operand_write(ops[0], expression)]
  
      # ── Compare / Test (standalone) ──
  
-@@ -1681,6 +1702,9 @@ class Lifter:
+@@ -1681,6 +1718,9 @@ class Lifter:
              f"_fas = (int32_t){sx}(_fa); _fbs = (int32_t){sx}(_fb);"
              f" /* {kind} {lhs}, {rhs} ({size*8}-bit) */",
          ]
@@ -481,7 +532,7 @@ index 468312d..ce9431c 100644
          # A cmp sets the carry flag too, and sbb/adc/setc/rcl read it directly
          # rather than through _fa/_fb. Leaving CF alone here let those pick up
          # whatever an earlier instruction had left in it.
-@@ -2263,21 +2287,13 @@ class Lifter:
+@@ -2263,21 +2303,13 @@ class Lifter:
          if not ops:
              return [f"/* {m}: no operands */"]
  
@@ -504,7 +555,7 @@ index 468312d..ce9431c 100644
              if is_mm(dst):
                  return [f"{dst.reg} = {self._MMX_BINARY[m]}({a}, {b}); /* {m} */"]
              return [f"/* TODO: {m} {insn.op_str} (dst not mm) */"]
-@@ -2291,7 +2307,7 @@ class Lifter:
+@@ -2291,7 +2323,7 @@ class Lifter:
              elif count.type == "mem":
                  cnt = f"MMX_MEM({_fmt_mem(count)}).q"
              else:
@@ -513,7 +564,7 @@ index 468312d..ce9431c 100644
              return [f"{dst.reg} = {self._MMX_SHIFT[m]}({dst.reg}, {cnt}); /* {m} */"]
  
          # cvtps2pi / cvttps2pi: two singles in, two dwords out. The source is
-@@ -2306,20 +2322,20 @@ class Lifter:
+@@ -2306,20 +2338,20 @@ class Lifter:
                  addr = _fmt_mem(s_op)
                  lo, hi = f"MEMF({addr})", f"MEMF(({addr}) + 4)"
              else:
@@ -537,7 +588,7 @@ index 468312d..ce9431c 100644
              return [f"{dst.reg} = MMX_PINSRW({dst.reg}, {v}, "
                      f"{ops[2].imm & 0xFF}u); /* pinsrw */"]
  
-@@ -2351,14 +2367,14 @@ class Lifter:
+@@ -2351,14 +2383,14 @@ class Lifter:
                               " /* movd */"])
                  if dst.type == "reg":
                      return [f"{dst.reg} = {ops[1].reg}.ud[0]; /* movd */"]
@@ -554,7 +605,7 @@ index 468312d..ce9431c 100644
  
      def _lift_sse(self, insn, m, ops):
          """Translate SSE instructions to C float operations."""
-@@ -2758,6 +2774,10 @@ class Lifter:
+@@ -2758,6 +2790,10 @@ class Lifter:
                      dst = "fp_st1()" if idx == 1 else \
                            f"g_fp_stack[(g_fp_top + {idx}) & 7]"
                      parts.append(f"{dst} = fp_top();")
@@ -565,7 +616,7 @@ index 468312d..ce9431c 100644
                  if m == "fstp":
                      parts.append("fp_pop();")
                  body = " ".join(parts) if parts else "(void)0;"
-@@ -2776,9 +2796,32 @@ class Lifter:
+@@ -2776,9 +2812,32 @@ class Lifter:
                  mem_acc = _smem_accessor(size)
                  int_type = {2: "int16_t", 4: "int32_t", 8: "int64_t"}.get(
                      size, "int32_t")
@@ -600,7 +651,7 @@ index 468312d..ce9431c 100644
              return [f"/* {m} {insn.op_str} */"]
  
          if m in ("fadd", "faddp", "fsub", "fsubp", "fsubr", "fsubrp",
-@@ -2903,7 +2946,25 @@ class Lifter:
+@@ -2903,7 +2962,25 @@ class Lifter:
          if m == "fscale":
              return [f"fp_top() = ldexp(fp_top(), (int)fp_st1()); /* fscale */"]
          if m == "frndint":
@@ -627,7 +678,7 @@ index 468312d..ce9431c 100644
          if m == "fldpi":
              return [f"fp_push(3.14159265358979323846); /* fldpi */"]
          if m == "fldl2e":
-@@ -2915,8 +2976,15 @@ class Lifter:
+@@ -2915,8 +2992,15 @@ class Lifter:
          if m == "fldln2":
              return [f"fp_push(0.69314718055994530942); /* fldln2 */"]
          if m == "ftst":
@@ -645,7 +696,7 @@ index 468312d..ce9431c 100644
          if m == "fxch":
              # fxch st(i) swaps st0 with st(i); the bare form is st(1). Was
              # hardcoded to st1, so fxch st(2)/st(3)/st(4) (86/7/1 sites in Halo)
-@@ -2930,7 +2998,12 @@ class Lifter:
+@@ -2930,7 +3014,12 @@ class Lifter:
              i = (self._st_index(ops[-1].reg)
                   if (ops and ops[-1].type == "reg" and ops[-1].reg) else 1)
              dst = self._st_expr(i)
@@ -659,7 +710,7 @@ index 468312d..ce9431c 100644
                      f" /* fxch {insn.op_str} */"]
          if m in ("fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp"):
              # Compare st0 against the operand, not always st1. `fcomp [mem]`
-@@ -2950,7 +3023,7 @@ class Lifter:
+@@ -2950,7 +3039,7 @@ class Lifter:
              npop = 2 if m.endswith("pp") else (1 if m.endswith("p") else 0)
              pops = " fp_pop();" * npop
              return [f"g_fp_cmp = RECOMP_FCMP(fp_top(), {rhs});"
@@ -668,7 +719,7 @@ index 468312d..ce9431c 100644
          if m in ("fcompi", "fcomip", "fucomi", "fucompi", "fucomip", "fcomi"):
              # These set EFLAGS directly (CF, ZF, PF) from FPU comparison
              # fcompi/fucompi pop st(0) after comparing; fcomi/fucomi do not
-@@ -2976,10 +3049,7 @@ class Lifter:
+@@ -2976,10 +3065,7 @@ class Lifter:
              # `test ah, 0x44; jp` -- the standard isnan idiom -- reads exactly
              # those two bits. Reporting equal for a NaN compare sends every
              # float classification in a title down the wrong branch.
@@ -680,7 +731,7 @@ index 468312d..ce9431c 100644
              if insn.op_str.strip() in ("ax", "eax"):
                  # `fnstsw ax` writes the whole of AX, not just AH.
                  return [f"eax = (eax & 0xFFFF0000u) | (uint32_t){status};"
-@@ -3015,7 +3085,82 @@ class Lifter:
+@@ -3015,7 +3101,82 @@ class Lifter:
          if m == "fld1":
              return [f"fp_push(1.0); /* fld1 */"]
  
@@ -730,7 +781,7 @@ index 468312d..ce9431c 100644
 +def advance_flag_state(curr, state):
 +    """Pure flag transfer shared by CFG analysis and instruction emission."""
 +    m = curr.mnemonic
-+    if (m in ("rol", "ror", "sar", "shl", "shr") and len(curr.operands) > 1 and
++    if (m in ("rol", "ror", "rcl", "rcr", "sar", "shl", "shr") and len(curr.operands) > 1 and
 +            curr.operands[1].type == "imm" and (curr.operands[1].imm & 31) == 0):
 +        return state
 +    if (m in ("shld", "shrd") and len(curr.operands) > 2 and
@@ -764,7 +815,7 @@ index 468312d..ce9431c 100644
  
  
  def lift_basic_block(lifter, bb, flag_state=None):
-@@ -3134,53 +3279,9 @@ def lift_basic_block(lifter, bb, flag_state=None):
+@@ -3134,53 +3295,9 @@ def lift_basic_block(lifter, bb, flag_state=None):
              results = lifter.lift_instruction(insns[i])
          stmts.extend(results)
  
@@ -822,7 +873,7 @@ index 468312d..ce9431c 100644
          i += 1
  
 diff --git a/tools/recomp/translator.py b/tools/recomp/translator.py
-index 978b319..590aa7a 100644
+index 978b319..5b111aa 100644
 --- a/tools/recomp/translator.py
 +++ b/tools/recomp/translator.py
 @@ -22,7 +22,7 @@ import struct
@@ -846,6 +897,15 @@ index 978b319..590aa7a 100644
      "    #define fp_top() g_fp_stack[g_fp_top]",
      "    #define fp_st(i) g_fp_stack[(g_fp_top + (i)) & 7u]",
      "    #define fp_st1() fp_st(1)",
+@@ -537,7 +539,7 @@ class FunctionTranslator:
+         last_setter = None
+         for insn in instructions:
+             m = insn.mnemonic
+-            if m in ("adc", "sbb", "stc", "clc", "cmc"):
++            if m in ("adc", "sbb", "stc", "clc", "cmc", "rcl", "rcr"):
+                 return True
+             cc = None
+             if m.startswith("j") and len(m) > 1:
 @@ -859,6 +861,13 @@ class FunctionTranslator:
          # corrupts multi-word arithmetic (add/adc pairs) and the shr/adc
          # idiom MSVC emits for odd trailing elements.
@@ -854,7 +914,7 @@ index 978b319..590aa7a 100644
 +        if self.lifter.needs_shift_snapshot:
 +            lines.append("    uint32_t _shift_result = 0; (void)_shift_result;")
 +            lines.append("    int _shift_of = 0; (void)_shift_of;")
-+        self.lifter.needs_rotate_snapshot = any(insn.mnemonic in ("rol", "ror") for insn in instructions)
++        self.lifter.needs_rotate_snapshot = any(insn.mnemonic in ("rol", "ror", "rcl", "rcr") for insn in instructions)
 +        if self.lifter.needs_rotate_snapshot:
 +            lines.append("    uint32_t _rotate_result = 0; (void)_rotate_result;")
          self.lifter.publishes_ebp = self._func_owns_a_frame(instructions)
