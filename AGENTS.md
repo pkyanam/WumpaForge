@@ -86,3 +86,16 @@ compilable console binary with a working native game.
   bounds on return to the hub were fixed in build63 and need live verification.
 - Root coordinates full builds and game/UI tests. Run at most two compiler jobs
   total. Parallel agents should own disjoint files and commit bounded changes.
+
+## September 8 evening wrap-up
+- The user requested continued work until midnight America/New_York, wrapping by
+  2026-09-09 00:00 EDT (04:00 UTC). Reserve the last15 minutes for validation,
+  packaging, private push and a candid handoff; avoid unreviewed late changes.
+- Add a generated fruit/crate app icon (root owns branding/package tooling),
+  discoverable1440p output and sharpening controls (mac_runtime owns presentation),
+  and test actual displayed pixels and performance. Output scaling is not new
+  internal scene detail; document actual drawable size on Retina/fullscreen.
+- Finish with a primary-source Shield/AndroidTV plan and small validated source
+  scaffolding only. No promised working APK or unrequested large SDK downloads.
+- Newly generated project branding in assets/branding is intentionally tracked;
+  original game assets, captures and binaries remain excluded.

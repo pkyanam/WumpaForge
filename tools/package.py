@@ -3,6 +3,32 @@
 from pathlib import Path
 import plistlib
 import shutil
+import subprocess
+
+
+def build_icon():
+    """Build standard Retina icon sizes from the project-owned generated artwork."""
+    source = ROOT / "assets/branding/wumpaforge-icon.png"
+    output = ROOT / "build/branding/WumpaForge.icns"
+    if output.is_file() and output.stat().st_mtime_ns >= source.stat().st_mtime_ns:
+        return output
+    iconset = output.parent / "WumpaForge.iconset"
+    iconset.mkdir(parents=True, exist_ok=True)
+    sizes = ((16, 1), (16, 2), (32, 1), (32, 2), (128, 1), (128, 2),
+             (256, 1), (256, 2), (512, 1), (512, 2))
+    rendered = {}
+    for points, scale in sizes:
+        pixels = points * scale
+        suffix = "@2x" if scale == 2 else ""
+        destination = iconset / f"icon_{points}x{points}{suffix}.png"
+        if pixels in rendered:
+            shutil.copy2(rendered[pixels], destination)
+        else:
+            subprocess.run(["sips", "-z", str(pixels), str(pixels), str(source),
+                            "--out", str(destination)], check=True, stdout=subprocess.DEVNULL)
+            rendered[pixels] = destination
+    subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(output)], check=True)
+    return output
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,6 +43,7 @@ def main():
     executable.parent.mkdir(parents=True, exist_ok=True)
     resources.mkdir(parents=True, exist_ok=True)
     shutil.copy2(binary, executable)
+    shutil.copy2(build_icon(), resources / "WumpaForge.icns")
     assets = resources / 'assets'
     if not assets.is_symlink() and assets.exists():
         raise SystemExit(f'Preserving unexpected existing asset directory: {assets}')
@@ -31,6 +58,7 @@ def main():
         'CFBundleName': 'Wrath Native',
         'CFBundleDisplayName': 'Crash Bandicoot: The Wrath of Cortex',
         'CFBundlePackageType': 'APPL',
+        'CFBundleIconFile': 'WumpaForge.icns',
         'CFBundleVersion': '0.1',
         'CFBundleShortVersionString': '0.1',
         'LSMinimumSystemVersion': '14.0',
