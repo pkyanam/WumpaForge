@@ -3,6 +3,7 @@
 from pathlib import Path
 import argparse
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -34,6 +35,17 @@ def build_icon():
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def minimum_macos(binary):
+    """Use the deployment target embedded by the compiler, not a guessed version."""
+    metadata = subprocess.check_output(
+        ['xcrun', 'vtool', '-show-build', str(binary)], text=True)
+    versions = re.findall(r'^\s*minos\s+(\d+(?:\.\d+){0,2})\s*$', metadata, re.MULTILINE)
+    platforms = re.findall(r'^\s*platform\s+(\S+)\s*$', metadata, re.MULTILINE)
+    if len(versions) != 1 or platforms != ['MACOS']:
+        raise SystemExit('Expected one native macOS build-version record; preserving the app.')
+    return versions[0]
+
+
 def replace_executable(source, destination):
     """Leave an already mapped executable inode intact when packaging a rerun."""
     with tempfile.NamedTemporaryFile(prefix='.wrath-', dir=destination.parent,
@@ -53,6 +65,7 @@ def main():
     binary = ROOT / 'build/native/wrath_native'
     if not binary.is_file():
         raise SystemExit('Build the native executable first.')
+    deployment_target = minimum_macos(binary)
     app = args.output.expanduser().resolve()
     contents = app / 'Contents'
     executable = contents / 'MacOS/wrath_native'
@@ -78,7 +91,7 @@ def main():
         'CFBundleIconFile': 'WumpaForge.icns',
         'CFBundleVersion': '0.1',
         'CFBundleShortVersionString': '0.1',
-        'LSMinimumSystemVersion': '14.0',
+        'LSMinimumSystemVersion': deployment_target,
         'NSHighResolutionCapable': True,
         'NSPrincipalClass': 'NSApplication',
     }
