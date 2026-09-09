@@ -238,6 +238,14 @@ def generate_loader(registry):
             queue_cases += [f'        case {index}: wumpa_{name}('+', '.join(f'command->args.{name}.{arg}' for arg in arguments)+'); break;']
             wrappers += ['    if(wumpa_defer_state()) {',
                          '        int wumpa_outer=xbox_D3D8GLBeginStateCall();',
+                         '        /* Only adjacent identical idempotent setters; compare fields, not padding. */',
+                         '        if(wumpa_state_count) {',
+                         '            const WumpaStateCommand *last=&wumpa_state_queue[wumpa_state_count-1];',
+                         f'            if(last->kind=={index} && '+
+                         ' && '.join(f'!memcmp(&last->args.{name}.{arg},&{arg},sizeof({arg}))' for arg in arguments)+') {',
+                         '                xbox_D3D8GLEndCall(wumpa_outer); return;',
+                         '            }',
+                         '        }',
                          '        if(wumpa_state_count==WUMPA_STATE_CAPACITY)wumpa_gl_flush_state();',
                          '        WumpaStateCommand *command=&wumpa_state_queue[wumpa_state_count++];',
                          f'        command->kind={index};']
