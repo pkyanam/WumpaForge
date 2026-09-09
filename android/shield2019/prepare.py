@@ -51,7 +51,7 @@ def main():
         subprocess.run(['git','apply','--check',str(patch)],cwd=OUT/'runtime',check=True)
         subprocess.run(['git','apply',str(patch)],cwd=OUT/'runtime',check=True)
     backend=OUT/'runtime/src/d3d/d3d8_gl.c'
-    replace(backend,'#include <epoxy/gl.h>','#include <epoxy/gl.h>\n#include "shield_host.h"')
+    replace(backend,'#include <epoxy/gl.h>','#include <epoxy/gl.h>\n#include <stdatomic.h>\n#include "shield_host.h"')
     replace(backend,'SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);\n    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);',
             'SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);\n    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);')
     # SDL2 defaults to RGB 3/3/2, which permits a reduced-precision EGL config.
@@ -75,8 +75,13 @@ def main():
             'int xbox_D3D8GLAcquire(void);\n'
             'void xbox_D3D8GLRelease(void);\n'
             'static int lazy_context_bind(void) {\n'
+            '    static _Atomic int cached=-1;\n'
+            '    int enabled=atomic_load_explicit(&cached,memory_order_relaxed);\n'
+            '    if(enabled>=0)return enabled;\n'
+            '    /* Host sets immutable process flags before starting game threads. */\n'
             '    const char *v=getenv("WRATH_EGL_LAZY_BIND"), *d=getenv("WRATH_EGL_DEFER_STATE");\n'
-            '    return (v && !strcmp(v,"1")) || (d && !strcmp(d,"1"));\n'
+            '    enabled=(v && !strcmp(v,"1")) || (d && !strcmp(d,"1"));\n'
+            '    atomic_store_explicit(&cached,enabled,memory_order_relaxed);return enabled;\n'
             '}\n'
             'int xbox_D3D8GLEnsureCurrent(void) {\n'
             '    if (!g.glctx || SDL_GL_GetCurrentContext()==g.glctx) return 1;\n'
@@ -203,7 +208,7 @@ def generate_loader(registry):
     registry_text=registry.read_text()
     header=['/* Generated from pinned Khronos declarations; do not edit. */','#pragma once','#include <GL/glcorearb.h>','#define GL_FLAT 0x1D00 /* Guest shade-mode token; no legacy GL call. */','#define GL_SMOOTH 0x1D01','int wumpa_gl_load(void);','int epoxy_gl_version(void);','int epoxy_has_gl_extension(const char *name);']
     header += ['void wumpa_gl_flush_state(void); /* Caller holds context mutex. */']
-    body=['#include <SDL.h>','#include <stdio.h>','#include <stdlib.h>','#include <string.h>','#include "epoxy/gl.h"',
+    body=['#include <SDL.h>','#include <stdio.h>','#include <stdlib.h>','#include <stdatomic.h>','#include <string.h>','#include "epoxy/gl.h"',
           'extern int xbox_D3D8GLBeginCall(void);','extern int xbox_D3D8GLBeginStateCall(void);',
           'extern int xbox_D3D8GLEnsureCurrent(void);','extern void xbox_D3D8GLEndCall(int outer);']
     deferred=set('glEnable glDisable glDepthMask glDepthFunc glColorMask glBlendFunc glBlendFuncSeparate glBlendEquation glBlendEquationSeparate glStencilFunc glStencilFuncSeparate glStencilOp glStencilOpSeparate glStencilMask glStencilMaskSeparate glCullFace glFrontFace glPolygonMode glViewport glDepthRange glActiveTexture glBindTexture glTexParameteri glUseProgram glBindBuffer glBindFramebuffer glBindRenderbuffer glBindVertexArray glEnableVertexAttribArray glDisableVertexAttribArray glVertexAttrib4f'.split())
@@ -246,7 +251,13 @@ def generate_loader(registry):
              '    } args; } WumpaStateCommand;',
              'static WumpaStateCommand wumpa_state_queue[WUMPA_STATE_CAPACITY];',
              'static unsigned wumpa_state_count;',
-             'static int wumpa_defer_state(void) { const char *v=getenv("WRATH_EGL_DEFER_STATE"); return v && !strcmp(v,"1"); }',
+             'static int wumpa_defer_state(void) {',
+             '    static _Atomic int cached=-1;',
+             '    int enabled=atomic_load_explicit(&cached,memory_order_relaxed);',
+             '    if(enabled>=0)return enabled;',
+             '    /* Startup-only environment, immutable after host initialization. */',
+             '    const char *v=getenv("WRATH_EGL_DEFER_STATE");enabled=v && !strcmp(v,"1");',
+             '    atomic_store_explicit(&cached,enabled,memory_order_relaxed);return enabled;', '}',
              'void wumpa_gl_flush_state(void) {',
              '    if(!wumpa_state_count)return;',
              '    if(!xbox_D3D8GLEnsureCurrent())abort();',
