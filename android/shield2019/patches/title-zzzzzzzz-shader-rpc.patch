@@ -1,0 +1,39 @@
+--- a/shader_bridge.inc
++++ b/shader_bridge.inc
+@@ -38,9 +38,11 @@
+ {
+     return address >= 0x1000 && address < 0x4000000 && size <= 0x4000000-address;
+ }
++#include "shader_draw_rpc.inc"
++
+ static void shader_error(const char *what, const char *detail)
+ {
+-    fprintf(stderr,"[wrath shaders] %s: %s, guest return0x%X after%u swaps\n",what,detail,read32(g_esp),read32(GUEST_SWAP_COUNT));
++    fprintf(stderr,"[wrath shaders] %s: %s, guest return0x%X after%u swaps\n",what,detail,shader_guest_return(),read32(GUEST_SWAP_COUNT));
+     abort();
+ }
+ static void shader_set_vertex(uint32_t handle)
+@@ -290,7 +292,7 @@
+ }
+ #include "sampler_queries.inc"
+ 
+-static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertices, uint32_t stride,
++static HRESULT shader_draw_impl(GLenum primitive, uint32_t count, const void *vertices, uint32_t stride,
+                            const struct VertexFetch *fetch)
+ {
+     Nv2aPixelDef pixel=s_pixel_definition;
+@@ -393,7 +395,7 @@
+                         (unsigned long long)((uint64_t)displacement+slot->offset+high*stream_stride+slot->byte_count),
+                         nv2a_vertex_input_is_dead(&s_vertex_object.words[0][0],s_vertex_object.instruction_count,i,s_vertex_constants),
+                         s_vertex_constants[122][0],s_vertex_constants[122][1],s_vertex_constants[122][2],s_vertex_constants[122][3],
+-                        read32(g_esp),read32(GUEST_SWAP_COUNT));
++                        shader_guest_return(),read32(GUEST_SWAP_COUNT));
+                     if (!handle) {
+                         const struct VertexArrayAddress *a=&s_vertex_arrays[i];
+                         struct Resource *owner=resource(a->handle);
+@@ -490,3 +492,5 @@
+     GLenum error=glGetError(); if(error) { char msg[40];snprintf(msg,sizeof(msg),"GL error0x%X",error);shader_error("draw",msg); }
+     return 0;
+ }
++
++#include "shader_draw_rpc_wrap.inc"

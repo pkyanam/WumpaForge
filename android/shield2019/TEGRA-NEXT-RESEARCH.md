@@ -169,3 +169,22 @@ check. The callback must not expand to invoke guest/SDK/event-pump functions.
 Validate actual wrapper arguments, borrowed lifetimes, early failure, diagnostic
 override restoration and exact profile deltas with real pthread RPC, then run
 the physical shader/secondary-stream fixtures before a matched scene measurement.
+
+### Opt-in implementation gate
+
+The Android-only `title-zzzzzzzz-shader-rpc.patch` now provides that wrapper,
+selected by `WRATH_GL_RPC_SHADER=1` with active RPC. The original body is retained
+except its name and the two diagnostic return lookups. Separate include files
+hold the scoped diagnostic override and synchronous request wrapper. The runtime
+profile adapter restores owner counters and returns only draw-count/time deltas.
+The root host maps its startup marker separately.
+
+`python3 android/shield2019/tests/test_shader_draw_rpc.py` passes the real RPC
+pthread queue/generated GL wrapper harness under ASan/UBSan. The fixture checks
+all title patches replay, reverses the narrow substitutions to prove body
+preservation, and exercises the actual wrapper/profile-adapter with a controlled
+body for arguments, synchronous lifetime, early failure, caller/owner guest TLS,
+diagnostic override restoration, draw attribution and inactive/disabled/already-
+owner modes. The controlled body does not validate actual shader pixels; the
+physical full graphics suite and a matched game profile remain required. No
+upload/resource profiling call was moved: those remain outside this seam.

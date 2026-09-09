@@ -1,0 +1,22 @@
+--- a/src/d3d/d3d8_gl.c
++++ b/src/d3d/d3d8_gl.c
+@@ -160,6 +160,19 @@
+     if(!start) return;
+     g_profile_calls.draw_time+=monotonic_ns()-start;
+     ++g_profile_calls.draws;
++}
++/* Scoped host callback profiling: return only this body's draw delta and
++ * retain unrelated owner counters. The caller merges after synchronous return. */
++void xbox_D3D8GLProfileHostCall(void (*callback)(void *),void *argument,uint64_t delta[2])
++{
++    uint64_t draws=g_profile_calls.draws,time=g_profile_calls.draw_time;
++    callback(argument);
++    delta[0]=g_profile_calls.draws-draws;delta[1]=g_profile_calls.draw_time-time;
++    g_profile_calls.draws=draws;g_profile_calls.draw_time=time;
++}
++void xbox_D3D8GLProfileMergeDraw(const uint64_t delta[2])
++{
++    g_profile_calls.draws+=delta[0];g_profile_calls.draw_time+=delta[1];
+ }
+ /* Some macOS drivers return from a swap before the requested refresh interval.
+  * Cap completion using one monotonic schedule for both rendering threads. Work
