@@ -79,6 +79,18 @@ rumble or reconnect behavior is correct. Unmapped controllers need a mapping.
 - Original game opening renders. Baseline profile measures16.18FPS in one
   opening segment, bind14.87ms + detach35.38ms per frame; user confirms severe
   loading slowness and audio/video desync. Other segments are slower.
+- Lazy EGL binding and ordered scalar GL batching, cached profile flags, API
+  binding guard and uniform locations improve that same segment to51.08–51.35FPS.
+  Other intro segments measure roughly20–40FPS; this remains below the target.
+- Opt-in on-disk shader binaries pass the real GPU suite cold and warm; the warm
+  run loaded23 cached programs, saved0 new ones, and returned0. The host fixture
+  also rejects corrupt, mismatched-driver and link-rejected entries and bounds
+  disk use to256 files/64MiB. This is not a measured whole-game speedup yet.
+- ADB remote Start press/release reached guest input, and Center selected New
+  Game/name confirmation. Physical controller/remote chord testing remains open.
+- An AFK Arctic Antics load stalled with the main game thread waiting for the
+  loading worker's guest lock0x4EA440. The worker holds it during presentation;
+  a bounded opt-in trace is testing lock balance versus driver delay.
 - Physical Bluetooth, story/gameplay completion, saves, lifecycle and sustained
   performance remain unverified.
 
@@ -202,3 +214,17 @@ App-external marker files `profile-context`, `lazy-bind`, `no-release-flush` and
 `defer-state` select diagnostic/experimental paths on the next process launch.
 The profiling marker also enables bounded guest-input traces. Markers are
 local development controls; do not treat them as a finished settings UI.
+
+### Optional development diagnostics
+
+Empty marker files in app external `files/` are read only at process startup:
+`lazy-bind`, `defer-state`, `profile`, `profile-context`, `shader-cache`, and
+`trace-loading-cs`. The context/state optimizations currently require their
+markers for controlled comparisons; `defer-state` implies lazy binding.
+`profile` enables lightweight frame counters; `profile-context` adds more costly
+context timings. `shader-cache` uses internal private `files/shader-cache/` and
+falls back to normal compilation on any rejection. `trace-loading-cs` starts at
+worker2BF30's first lock acquisition and stops after3000 records; it does not
+change locking. Remove its marker and restart for clean performance measurements.
+The NVIDIA driver does not advertise the optional release-flush control extension;
+`no-release-flush` therefore produced no applicable optimization on this device.

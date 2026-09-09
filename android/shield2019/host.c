@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "shield_host.h"
 static pthread_t game_thread;
 static int thread_ready;
@@ -35,7 +36,19 @@ int wumpa_host_start(const char *log_name)
     profile_n=snprintf(profile,sizeof(profile),"%s/defer-state",storage);
     if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
         SDL_setenv("WRATH_EGL_DEFER_STATE","1",1);
+    profile_n=snprintf(profile,sizeof(profile),"%s/trace-loading-cs",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
+        SDL_setenv("WRATH_TRACE_LOADING_CS","1",1);
     SDL_setenv("WRATH_STATE_ROOT",state,1);
+    profile_n=snprintf(profile,sizeof(profile),"%s/shader-cache",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0){
+        char cache[4096];
+        int count=snprintf(cache,sizeof(cache),"%s/shader-cache",state);
+        if(count>0 && (size_t)count<sizeof(cache)){
+            mkdir(cache,0700);
+            SDL_setenv("WRATH_SHADER_CACHE_ROOT",cache,1);
+        }
+    }
     char mapping[4096];int mapping_n=snprintf(mapping,sizeof(mapping),"%s/gamecontrollerdb.txt",storage);
     if(mapping_n>0&&(size_t)mapping_n<sizeof(mapping)&&access(mapping,R_OK)==0)
         SDL_SetHint(SDL_HINT_GAMECONTROLLERCONFIG_FILE,mapping);

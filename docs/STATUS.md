@@ -6,10 +6,19 @@ development APK includes asset-free memory/graphics/input/audio diagnostics.
 The user authorized real network ADB access. The 2019 Pro/API30 passes sparse
 memory, desktop OpenGL4.1, full graphics component and PCM callback checks.
 All2267 asset files were transferred and remotely verified. The original game
-opening renders, but initial performance is severely slow (one measured segment
-16.18FPS) with user-confirmed audio/video desync. Android context bind/release
-cost dominates that segment. Performance and remote controls are being improved;
-no playable Shield milestone is claimed. Mac build68 remains intact. The earlier
+opening and menus render. Android lazy context binding, ordered scalar GL command
+batching, immutable profile flags, EGL API guarding and cached uniform locations
+improve the same opening segment from16.18 to51.08–51.35FPS on device. Heavy
+segments remain slower; audio/video sync is unresolved. Full GPU component checks
+pass after these changes. Remote layers map movement, actions, camera and extra
+buttons; ADB Start press/release and New Game selection reached the game.
+An AFK Arctic Antics load stalled: main game thread waits on guestCS0x4EA440,
+owned by the active loading worker. This is not yet proof of a lock leak;
+the original worker deliberately holds that lock while rendering/presenting.
+Bounded Android-only tracing now measures actual enter/leave pairs and unlock
+results. Shader binary caching passed host corruption/driver/reject/bounds tests;
+physical cold/warm validation is in progress. No playable Shield milestone or
+60FPS/audio-sync guarantee is claimed. Mac build68 remains intact. The earlier
 Mac handoff below is retained as its validation record.
 
 ## Midnight handoff
