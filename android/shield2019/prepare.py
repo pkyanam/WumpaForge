@@ -42,9 +42,9 @@ def main():
         subprocess.run(['git','apply','--check',str(sdl_patch)],cwd=sdl,check=True)
         subprocess.run(['git','apply',str(sdl_patch)],cwd=sdl,check=True)
     # Source copies are disposable build inputs; the original Mac checkout stays intact.
-    runtime_source=OUT/'runtime/src'
-    if runtime_source.is_symlink():raise RuntimeError('Unexpected runtime source symlink')
-    if runtime_source.exists():shutil.rmtree(runtime_source)
+    for disposable in (OUT/'runtime/src',OUT/'title'):
+        if disposable.is_symlink():raise RuntimeError('Unexpected source copy symlink')
+        if disposable.exists():shutil.rmtree(disposable)
     for source,dest in [(ROOT/'third_party/xboxrecomp/src',OUT/'runtime/src'),(ROOT/'src',OUT/'title')]:
         shutil.copytree(source,dest,dirs_exist_ok=True)
     for patch in sorted((HERE/'patches').glob('runtime-*.patch')):

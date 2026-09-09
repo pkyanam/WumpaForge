@@ -17,8 +17,20 @@ owned by the active loading worker. This is not yet proof of a lock leak;
 the original worker deliberately holds that lock while rendering/presenting.
 Bounded Android-only tracing now measures actual enter/leave pairs and unlock
 results. Shader binary caching passed host corruption/driver/reject/bounds tests;
-physical cold/warm validation is in progress. No playable Shield milestone or
-60FPS/audio-sync guarantee is claimed. Mac build68 remains intact. The earlier
+physical cold/warm GPU validation passed (23 warm program hits, no new saves).
+A new game reached the space-station story; all33 captured worker outer releases
+returned depth0 with successful unlocks. After story skip, hub loading crashed
+in original heap free-list functionEF72D, called byF05E3/F1629 from EndStateBlock.
+Both Mac and Android execute that state-block code natively, so a missing Android
+hook is not established. Crash log and matching symbol file are retained under
+local/reports/shield2019; investigate the corrupted null free-list link rather
+than suppressing the allocation or state-block operation. The latest rendering pass adds a lifecycle-invalidated live-index-buffer candidate
+list (20000 UBSan reference comparisons) and removes duplicate texture snapshot
+checks within each draw. Full real Shield GPU regression passes with both changes;
+opening performance measurement is in progress. Android worker/main profiling is
+now separated and reports actual internal/drawable dimensions. Repeat source
+preparation passes after cleaning disposable title copies before patch replay.
+No playable Shield milestone or60FPS/audio-sync guarantee is claimed. Mac build68 remains intact. The earlier
 Mac handoff below is retained as its validation record.
 
 ## Midnight handoff

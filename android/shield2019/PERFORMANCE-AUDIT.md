@@ -50,3 +50,19 @@ swap interval, and target refresh when the drawable changes. It does not change
 rendering or pacing. Exact patch application and output were checked against an
 isolated copy of the upstream runtime files. Compilation and physical output
 validation remain root-task gates; no speedup is claimed for this diagnostic fix.
+
+## Indexed resource scan sample attribution
+
+An8-second `task-clock:u` capture of PID6947 recorded761 samples with0 loss.
+79 samples (10.38%) land in native DrawIndexedVertices;74 are at
+`index_bridge.inc:67`,3 in its inlined `resource_at`, and2 on adjacent loop lines.
+This identifies the full resource-table bounds scan, not vertex expansion, as
+that sampled cost. Native and NVIDIA GL code each account for34.82% of samples.
+Raw ignored evidence: `render-current.data`, `render-current-dump.txt`, and
+`render-current-report.txt` under `local/reports/shield2019/`.
+
+The candidate-list and duplicate-texture-check patches passed the full physical
+Shield graphics suite together. Repeat source preparation also passes; it now
+removes the disposable title copy before replaying patches that create files.
+Current rendering measurements follow after deployment; synthetic validation is
+not a measured60FPS guarantee. Mac source and package remain unchanged.
