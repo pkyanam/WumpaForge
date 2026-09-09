@@ -104,3 +104,15 @@ compilable console binary with a working native game.
   requests source audits plus synthetic CPU/GPU tests instead of further live
   game testing for now. Report per-path evidence, not a made-up99.5% guarantee.
 - Shield scope is specifically NVIDIA SHIELD TV Pro2019 (mdarcy), not other models.
+
+## Midnight handoff checkpoint
+- The September 8 evening work is wrapped. Build 68 is packaged from source
+  ab6d29d; later commits update packaging metadata and handoff documentation.
+- All implementation agents are finished. The requested first-level milestone
+  was demonstrated by the user's completed Arctic Antics run on build 61.
+  Build 68 passed CPU/GPU component checks but has not had another live play pass.
+- Keep the latest source-only validation preference until the user requests game
+  testing. Resume further development on user instruction; the elapsed midnight
+  deadline is not authorization for a recurring or indefinite background task.
+- Read current STATUS, README, CHANGELOG and Git history. Preserve known gaps;
+  do not reinterpret a passing fixture as whole-game correctness or crash freedom.

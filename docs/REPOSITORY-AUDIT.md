@@ -80,3 +80,16 @@ explicitly requested by the user. It is intentionally tracked and is not an ISO
 extraction. Its [prompt/provenance](BRANDING.md) is recorded; generated `.icns`
 and app bundles stay under ignored `build/`. The no-binary result above describes
 the earlier audit checkpoint, not a claim that this later artwork is absent.
+
+## Final evening integration
+
+The later source candidate `ab6d29d` was rechecked before the private push.
+The 19 changed paths since `f6b878e` contain text source/tests/docs only, with no
+NUL-containing files, ignored input/build/dependency paths or common credential
+signatures. Earlier incremental source checks from 7eec696 to f6b878e also passed.
+These extend the earlier history audit; they do not rescan ignored local inputs.
+All five dependency patches replayed exactly across 43 files for build 68.
+A fresh authenticated private clone at ab6d29d passed setup dry-run and configured
+the standalone component targets with no game assets or generated game C, using
+the already verified local dependency checkout. No ISO was copied/uploaded and
+no game was launched. Later handoff-only documentation is reviewed separately.

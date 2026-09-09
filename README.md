@@ -16,7 +16,8 @@ game's original, readable source code.
 The user has completed **Arctic Antics**, the first winter/penguin level. Bugs
 remain, and the rest of the game has not been validated. The target is 60 FPS;
 performance varies by scene and this is not a finished release. Development
-evidence and known issues are in [STATUS](docs/STATUS.md). Intermittent story
+evidence and known issues are in [STATUS](docs/STATUS.md); the
+[development changelog](CHANGELOG.md) summarizes milestones. Intermittent story
 visual artifacts remain; the latest hub-return crash fix has passed GPU tests
 and awaits a full post-level return test. Physical Bluetooth controllers also
 need testing on the actual hardware.
@@ -73,6 +74,9 @@ open "build/Wrath Native.app"
 The app currently uses a link to `local/assets` and local Homebrew libraries.
 Keep the checkout and dependencies in place; the app is not a standalone,
 redistributable bundle. **Extracted game assets are required at runtime.**
+The bundle records the compiled binary's actual minimum macOS version; building
+on a newer Mac does not automatically produce a binary for macOS 14. The current
+development host runs macOS 26.6; other OS versions have not been tested.
 
 Focus the game window, then use WASD to move, Space to jump/confirm, X or left
 mouse to spin, C or right mouse to crouch/slide, and Enter to pause. The original
