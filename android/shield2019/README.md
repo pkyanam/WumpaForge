@@ -240,7 +240,9 @@ See [architecture research](SHIELD-ARCHITECTURE-RESEARCH.md) for primary sources
 and the driver-threading experiment, which showed no useful gain and was removed.
 New bounded work reuses up to1MiB of indexed-draw scratch memory, skips adjacent
 identical queued state setters, and limits routine successful read diagnostics.
-Read failures and short reads remain visible. Direct DXT upload is undergoing
-physical GPU validation; do not infer level loading or60FPS from component tests.
+Read failures and short reads remain visible. Direct DXT1/3/5 upload and bounded Morton conversion pass physical GPU validation.
+The first loading window upload CPU fell39.297→21.109ms/frame, with the same
+131.753MiB uploaded; longest pause10.41→8.87seconds in single-run comparisons.
+Heavy scenes remain13–28FPS. Do not infer successful level loading from these tests.
 An external `trace-loading-cs-outer` marker captures only outer loading-worker lock
 pairs across later loads; remove it for uninstrumented measurements.

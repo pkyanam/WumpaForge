@@ -128,3 +128,22 @@ fixture that extracts the actual patched bridge and POSIX read function. It read
 real temporary-file bytes, checks guest byte counts/status and completion calls,
 and verifies budgeted successful logging plus retained short/EOF/invalid-handle
 records. No Android build or device run was performed by this audit task.
+
+## Compressed uploads and Morton addressing
+
+Native sampling-only DXT1/3/5 uploads use the advertised S3TC capability, preserving
+all faces/mips and CPU decode fallback. Physical fixtures cover alpha, selectors,
+cubes, mip chains, mutation, forced fallback and preexisting GL error propagation.
+Opening volume only drops133.253→131.753MiB; most opening content is uncompressed.
+Morton column lookup ff42244 preserves every byte offset, with bounded scratch and
+allocation-failure fallback. Host UBSan checks and full Shield GPU suite pass.
+First loading-window upload CPU39.297→21.109ms/frame, longest pause10.41→8.87s,
+same131.753MiB. Single-run comparisons; not a controlled latency guarantee.
+
+The later black attract scene has active main-thread draws after loader exit.
+There are67 successful traced outer unlocks. Repeated128x128 format06 uploads
+correspond to1962 resolves totaling122.625MiB. Snapshot allocation is only1.7MiB,
+so current evidence contradicts snapshot-cap exhaustion. Correlate per-resource
+resolve bytes, guest mutations and upload snapshots before attempting to avoid
+readbacks. Preserve guest coherence and original heap semantics. User-selected
+portal loading and original heap corruption remain unresolved.

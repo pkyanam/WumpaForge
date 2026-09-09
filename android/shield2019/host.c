@@ -42,6 +42,25 @@ int wumpa_host_start(const char *log_name)
     profile_n=snprintf(profile,sizeof(profile),"%s/trace-loading-cs-outer",storage);
     if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
         SDL_setenv("WRATH_TRACE_LOADING_CS","outer",1);
+    /* Numeric frame selector keeps expensive texture diagnostics to one frame. */
+    profile_n=snprintf(profile,sizeof(profile),"%s/trace-texture-frame",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile)){
+        FILE *selection=fopen(profile,"r");
+        if(selection){
+            unsigned frame=0; char value[32];
+            if(fscanf(selection,"%u",&frame)==1 && frame>0 && frame<10000000){
+                snprintf(value,sizeof(value),"%u",frame);
+                SDL_setenv("WRATH_TRACE_TEXTURE_FRAME",value,1);
+            }
+            fclose(selection);
+        }
+    }
+    profile_n=snprintf(profile,sizeof(profile),"%s/trace-heap",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
+        SDL_setenv("WRATH_TRACE_HEAP","1",1);
+    profile_n=snprintf(profile,sizeof(profile),"%s/target-return-cache",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
+        SDL_setenv("WRATH_TARGET_RETURN_CACHE","1",1);
     SDL_setenv("WRATH_STATE_ROOT",state,1);
     profile_n=snprintf(profile,sizeof(profile),"%s/shader-cache",storage);
     if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0){

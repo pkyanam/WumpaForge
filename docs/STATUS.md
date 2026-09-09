@@ -42,12 +42,41 @@ levelplay milestone is established. Indexed expansion now reuses bounded scratch
 memory, adjacent identical queued state calls are coalesced, and routine successful
 read logging uses the existing diagnostic budget. Fixtures pass; combined device
 validation is underway. Driver-threading on/off showed no useful gain and was
-removed. Direct compressed DXT upload is under isolated implementation/testing.
+removed. Direct compressed DXT upload completed physical validation below.
+Read logging, bounded indexed scratch, adjacent state deduplication and native
+DXT1/3/5 uploads now pass the full physical Shield GPU suite. DXT fixtures cover
+2D/cubes/mips, mutation, CPU fallback and pending GL errors. Initial upload volume
+only fell133.253→131.753MiB: opening assets are mostly uncompressed. Bounded
+Morton axis lookup ff42244 also passes physical GPU tests; the same initial
+131.753MiB window reports upload CPU39.297→21.109ms/frame and maximum pause
+10.41→8.87seconds. These single-run comparisons are not controlled benchmarks.
+Light opening remains about52FPS, heavy portions13–28FPS;60FPS is unresolved.
+Later outer-only trace captured67 successful depth-zero worker releases. A black
+attract scene (level12/demo1) had the main thread actively drawing after worker
+exit, so that snapshot is not a loader lock wait. Five hot128x128 resources show
+repeated readback/resolve/upload work; snapshot storage was only1.7MiB, below its
+64MiB cap. Next correlate guest writes and resolve/upload ownership before
+changing coherence. This does not resolve the user-selected endless portal load
+or the earlier original-heap crash. Reports: morton-graphics.log,
+morton-opening.log, dxt-afterload.log, snapshot-loading-symbols.txt.
 Source/pixel checks do not establish crash freedom; the original heap issue remains. Android worker/main profiling is
 now separated and reports actual internal/drawable dimensions. Repeat source
 preparation passes after cleaning disposable title copies before patch replay.
 No playable Shield milestone or60FPS/audio-sync guarantee is claimed. Mac build68 remains intact. The earlier
 Mac handoff below is retained as its validation record.
+
+## Active loading investigation (supersedes earlier balanced-only evidence)
+
+Source9880401 render-target Morton encoding also passes the full Shield GPU suite.
+Actual New Game run pid13492 subsequently reproduced retained loading-worker
+ownership: outer n807 entersdepth1; n808 leavesdepth3; n809 unlocksdepth2, then
+repeatsdepth3/2. LLDB confirms main waiting via3A550/9A1A0/AF0A0 while worker2BF30
+sleeps. This differs from earlier balanced runs and is now the priority lead.
+Reports resolve-live.log and resolve-lock-game-symbols.txt; ignore the initial
+resolve-lock-live.txt capture of launcher13207. Game is a separate :game process;
+use native.log startupPID or pidof org.wumpaforge.shield:game. Debugger detached.
+A bounded nested-call ring and original-heap diagnostics are under integration.
+The user explicitly lifted the20%weekly floor and requests continued efficient work.
 
 ## Midnight handoff
 

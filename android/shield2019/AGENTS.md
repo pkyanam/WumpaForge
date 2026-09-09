@@ -55,3 +55,8 @@ performance/allocation work plus primary-source Shield architecture research.
 Continue bounded work beyond the old77%buffer; preserve20%remaining and check
 before builds. The old clock deadline/pause is superseded. User reports hub
 movement and level selection, followed by endless green loading; not levelplay.
+
+## Latest allowance authorization
+The user explicitly authorizes working past20% weekly remaining to get the game
+working. The earlier20%floor and77%buffer are superseded. Remain token/resource
+efficient; no arbitrary usage burn. Root owns device testing and two-job builds.
