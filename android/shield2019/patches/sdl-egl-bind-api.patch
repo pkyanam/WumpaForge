@@ -1,0 +1,20 @@
+--- a/src/video/SDL_egl.c
++++ b/src/video/SDL_egl.c
+@@ -1101,9 +1101,14 @@
+         }
+     }
+ 
+-    /* Make sure current thread has a valid API bound to it. */
+-    if (_this->egl_data->eglBindAPI) {
+-        _this->egl_data->eglBindAPI(_this->egl_data->apitype);
++    /* Query the calling thread, including workers or external API changes.
++       Rebinding the same API enters Android's costly graphics-layer loader. */
++    if (_this->egl_data->eglBindAPI &&
++        (!_this->egl_data->eglQueryAPI ||
++         _this->egl_data->eglQueryAPI() != _this->egl_data->apitype)) {
++        if (!_this->egl_data->eglBindAPI(_this->egl_data->apitype)) {
++            return SDL_EGL_SetError("Unable to bind EGL client API", "eglBindAPI");
++        }
+     }
+ 
+     /* The android emulator crashes badly if you try to eglMakeCurrent

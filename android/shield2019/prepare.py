@@ -38,9 +38,9 @@ def main():
         member=archive.extractfile(f'SDL-{SDL_REV}/src/video/SDL_egl.c')
         if member is None:raise RuntimeError('Pinned SDL EGL source missing')
         (sdl/'src/video/SDL_egl.c').write_bytes(member.read())
-    sdl_patch=HERE/'patches/sdl-egl-release.patch'
-    subprocess.run(['git','apply','--check',str(sdl_patch)],cwd=sdl,check=True)
-    subprocess.run(['git','apply',str(sdl_patch)],cwd=sdl,check=True)
+    for sdl_patch in sorted((HERE/'patches').glob('sdl-*.patch')):
+        subprocess.run(['git','apply','--check',str(sdl_patch)],cwd=sdl,check=True)
+        subprocess.run(['git','apply',str(sdl_patch)],cwd=sdl,check=True)
     # Source copies are disposable build inputs; the original Mac checkout stays intact.
     runtime_source=OUT/'runtime/src'
     if runtime_source.is_symlink():raise RuntimeError('Unexpected runtime source symlink')
