@@ -1,0 +1,52 @@
+# September 9 presentation and CPU timing audit
+
+This source-only pass used the existing Shield reports; it did not launch the game,
+change pacing, or measure a new build. The root task owns device validation.
+
+## Evidence
+
+In `local/reports/shield2019/cache-game.log`, the original opening scene's frame455
+window reports20.61FPS,48.531ms interval,47.458ms work wall time,45.000ms work
+thread CPU time, and1.073ms presentation. Nearby presentation windows report
+approximately1.08ms driver time and0.000ms pacing. Frame635 reports41.39FPS,
+21.486ms work CPU time, and1.042ms presentation. These CPU clocks include native
+runtime and driver execution; they do not identify guest AOT code as the bottleneck.
+
+The existing `perf-cached-report.txt` samples693 user task-clock events over8seconds.
+It includes NVIDIA compiler/optimizer functions, `nvLoseCurrent`, memory routines,
+and AOT `sub_00101BC0`. This is useful evidence for context/shader work, but not a
+matched before/after experiment or a GPU execution-time measurement.
+
+The backend requests swap interval1 and then uses one monotonic refresh deadline.
+The deadline accounts for elapsed rendering/swap time, rather than adding a fixed
+sleep after every frame. The observed slow windows spend essentially no time in
+that pacing loop. Changing game animation steps or removing pacing is not supported
+by this evidence as a path to60FPS.
+
+## Output sizing
+
+`d3d8_present.inc:init_output_buffers` allocates both color targets and depth at
+`g.backbuf_w`/`g.backbuf_h`, taken from the guest presentation parameters. The final
+presentation copies to the front-image target at that same internal size, then
+scales to an aspect-preserving rectangle in the actual drawable. SDL Android
+replaces requested window dimensions with `Android_SurfaceWidth/Height`; asking
+SDL for640x480 therefore does not establish a640x480 Android output surface.
+The source does not accidentally promote the internal scene FBO to4K. The actual
+output surface size needed explicit logging before deciding whether a lower output
+resolution would save measurable work. Existing logs identify bilinear filtering.
+
+## Diagnostic correction
+
+`runtime-profile-output.patch` fixes the runtime's presentation/context profile
+bucket selection to distinguish the Android game thread from its loading worker.
+Previously only Apple selected the worker bucket: Android mixed the60-present
+window across threads while the context counters were thread-local. Earlier
+runtime `thread=main` labels therefore cannot identify worker presentation costs.
+The title's separate frame/CPU profiler already uses the Android-aware
+`window_thread()` and is unaffected.
+
+The patch also logs internal dimensions, actual drawable dimensions, reported SDL
+swap interval, and target refresh when the drawable changes. It does not change
+rendering or pacing. Exact patch application and output were checked against an
+isolated copy of the upstream runtime files. Compilation and physical output
+validation remain root-task gates; no speedup is claimed for this diagnostic fix.

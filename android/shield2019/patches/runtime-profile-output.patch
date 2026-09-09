@@ -1,0 +1,25 @@
+--- a/src/d3d/d3d8_gl.c
++++ b/src/d3d/d3d8_gl.c
+@@ -798,6 +798,8 @@
+     unsigned index=0;
+ #ifdef __APPLE__
+     index=!pthread_main_np();
++#elif defined(__ANDROID__)
++    index=!wumpa_is_game_thread();
+ #endif
+     frames[index].driver+=swap_end-start;
+     frames[index].pace+=pace_end-swap_end;
+--- a/src/d3d/d3d8_present.inc
++++ b/src/d3d/d3d8_present.inc
+@@ -146,6 +146,11 @@
+         if (g_cgl) CGLUpdateContext(g_cgl);
+ #endif
+         g_output.width=width; g_output.height=height;
++#ifdef __ANDROID__
++        fprintf(stderr,"[shield output] internal=%dx%d drawable=%dx%d swap_interval=%d refresh_target_hz=%.3f\n",
++            g.backbuf_w,g.backbuf_h,width,height,SDL_GL_GetSwapInterval(),
++            g_present_period_ns?1e9/g_present_period_ns:0.0);
++#endif
+     }
+     update_output_feedback();
+ }
