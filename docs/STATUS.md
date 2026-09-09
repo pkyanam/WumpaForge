@@ -22,13 +22,16 @@ remain ignored. Generated project branding is intentionally tracked.
   Check PID before any Computer Use call: querying a closed app can relaunch it.
 - Packaged `build/Wrath Native.app` is build64. User reported the attract demo
   looked glitched. That visual issue is not declared fixed.
-- Native build65 compiled successfully with the new Display menu. Subsequent
-  NaN-color/audio/lifter work needs a combined build66 after source freezes.
-  Do not overwrite the running app; `tools/package.py --output` can stage a
-  separate candidate. No further live gameplay validation is currently planned.
+- Combined native **build66** compiled successfully from7eec696, including the
+  Display menu, NaN color, spatial audio, surface aliases and x87/rotate fixes.
+  It is staged at `build/staged/Wrath Native.app`, with ARM64 machine code,
+  icon/Info.plist and asset link verified in `local/reports/build66-manifest.json`.
+  The CPU agent is investigating logical-shift count masking exposed by a
+  compiler warning before a final candidate. Do not overwrite the running app.
+  No further live gameplay validation is currently planned.
 - `build/branding/WumpaForge.icns` is generated and valid. Icon source/provenance:
-  [BRANDING](BRANDING.md). It is integrated by packaging, not yet visible in the
-  currently running older bundle.
+  [BRANDING](BRANDING.md). It is integrated in the staged candidate, not yet
+  visible in the currently running older bundle.
 
 ## Latest fixes and evidence
 
@@ -40,7 +43,9 @@ remain ignored. Generated project branding is intentionally tracked.
 | Pixel arithmetic |9a1fd88:3072 synthetic comparisons across96 multistage shaders match independent scalar equations with max0/255 output difference. No pixel-generator change needed. [Audit](research/PIXEL-NUMERIC-AUDIT.md) |
 | Display controls |632baaf native Display menu,720p/1080p/1440p output and Off/Light/Medium/Strong sharpening. Synthetic menu actions and displayed pixels pass;1440p produced2560x1440 drawable from1280x720 Retina points. [Presentation](WINDOW-PRESENTATION.md) |
 | Native spatial audio |de7d92a real min/max-distance attenuation, listener/source positioning and atomic deferred updates; UBSan spatial/stream/252-buffer regressions pass. Stereo positioning is a documented approximation; HRTF/reverb remain unsupported. [Audio](AUDIO-SPATIAL.md) |
-| x87 correctness |992e5ba fixes FRNDINT using guest rounding and unordered FTST; emitted-code CPU fixture went61→0 mismatches. Regression agent is auditing FXAM occupancy and byte rotates; wait for its freeze before relift/build. |
+| x87 correctness |992e5ba fixes guest FRNDINT and unordered FTST; fixture went61→0 mismatches. dddf1a9 fixes FXAM/TLS occupancy and SAR/ROL/ROR widths, with exhaustive byte/count and original CRT sequence tests. FNSAVE/FRSTOR remain explicit unsupported boundaries. [Audit](research/AOT-CORRECTNESS-AUDIT.md) |
+| Active surface aliases |cce7d26 fixes stale GPU reads/lost writes through identical shared texture views. Before/after synthetic CopyRects and full GL suite pass. [Audit](SURFACE-ALIAS-COHERENCE.md) |
+| Atomic aggregate waits |dddf1a9/7eec696 preserve event/semaphore/mutex state until every object is ready. UBSan fixture went4→0 failed checks. This XBE does not import the affected multi-object wait APIs; no current stall is attributed to it. [Audit](research/WAIT-ALL-AUDIT.md) |
 
 Build61 snow measurements varied: median42.35FPS in a heavier sampled area and
 60FPS later. The user reported smooth full-level play. Build63 hub samples had
@@ -54,8 +59,9 @@ these facts do not establish constant60FPS across the game. Sharpening preserves
 verified **PRIVATE**, with origin configured and source history pushed. Root
 must push the newest evening commits again before handoff and verify remote SHA.
 A fresh authenticated clone plus setup dry-run passed. All five dependency
-patches replayed on a clean pinned checkout and matched local changes through
-build64; repeat after final pending lifter/runtime patches.
+patches replayed on a clean pinned checkout and matched all39 affected files
+through build66 (`local/reports/patch-replay66.json`). Repeat after final pending
+lifter/runtime patches. Source7eec696 is pushed.
 
 [README](../README.md) includes the private clone/setup one-liner, BYO supported
 USA Xbox ISO, runtime asset requirement, controls and optional AI agents.
@@ -75,9 +81,10 @@ probe. Root macOS build is unchanged by this scaffolding.
 
 ## Active ownership and next steps
 
-- regression_audit: bounded x87/rotate/TLS source audit, CPU regressions, pending
-  FXAM state and explicit handling of unmodeled x87 opcodes. Owns lifter template
-  and relevant runtime TLS definitions/patches; coordinate before building.
+- regression_audit: logical SHL/SHR operand/count masking review and focused
+  emitted CPU regressions. Owns lifter/template patches; prior x87 work is frozen.
+  Root fixed7 DWORD diagnostic formats and a comment in runtime source; include
+  these in the agent's next runtime patch snapshot.
 - Root: final integration, private push, packaging/icon, source-first validation.
   mac_runtime and native_audio completed their current source/test commits.
 - After freeze: relift incrementally if required, full build with at most2 jobs,

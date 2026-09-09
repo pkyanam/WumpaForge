@@ -8,6 +8,11 @@ code is translated ahead of time to C and compiled to ARM64, with compatibility
 layers for graphics, audio, input, and system calls. There is no CPU interpreter
 or JIT fallback.
 
+**Is this a decompilation or recompilation?** Primarily static recompilation:
+machine-generated C carries the original game logic to ARM64. Reverse engineering
+informs the compatibility code, but this is not a full reconstruction of the
+game's original, readable source code.
+
 The user has completed **Arctic Antics**, the first winter/penguin level. Bugs
 remain, and the rest of the game has not been validated. The target is 60 FPS;
 performance varies by scene and this is not a finished release. Development
