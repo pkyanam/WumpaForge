@@ -16,6 +16,9 @@
   This addresses prior story16/17 reflection fault without inventing tangents.
 - Audio continues at portal hang; native_audio audits transition test coverage.
   Sporadic story13 null audio call remains unproven; retain on-stop audio probe.
+- User additionally reports intermittent Cortex hub-hologram warping/morphing
+  and scattered visual artifacts. Track separately; relation to vertex retention
+  is unverified. Recheck visually after fixes, retain original animations/effects.
 - Next freeze fixes, max2-job build58/package, story19 navigate original portal
   and verify Level7/Demo0 plus movement/jump/spin in snow. Goal remains active.
 
