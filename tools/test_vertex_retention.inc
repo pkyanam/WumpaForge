@@ -66,8 +66,54 @@ static void test_vertex_retention(void)
     assert(pixel[0]==0 && pixel[1]==0 && pixel[2]==255);
     uint8_t *gathered=NULL;struct VertexFetch fetch={.first=3,.indices=(const uint8_t *)indices};
     assert(gather_retained_vertex_attribute(5,&s_vertex_object.slots[4],3,&fetch,&gathered)==D3DERR_INVALIDCALL);
-    struct VertexFetch too_far={.first=100};
+    struct VertexFetch too_far={.first=0x4000000u};
     assert(gather_retained_vertex_attribute(4,&s_vertex_object.slots[4],3,&too_far,&gathered)==D3DERR_INVALIDCALL);
+    /* Actual Story23 address arithmetic: old base1847*24, requested49152
+     * bytes, max raw index325 -> byte52140. DMA sees adjacent mapped RAM. */
+    struct VertexArrayAddress previous=s_vertex_arrays[4];
+    uint32_t dma_create[]={49152,0,0,0,0x20440};call(0x100D70,dma_create,5);assert(g_eax==0);
+    uint32_t dma_owner=read32(dma_create[4]),dma_data=read32(dma_owner+4);
+    dma_create[0]=8192;call(0x100D70,dma_create,5);assert(g_eax==0);
+    uint32_t neighbor=read32(dma_create[4]),neighbor_data=read32(neighbor+4);
+    assert(neighbor_data>=dma_data+49152 && neighbor_data<dma_data+44328+225*24);
+    struct Resource *dma_resource=resource(dma_owner);
+    dma_resource->vertex_generation=++s_vertex_generation;
+    s_vertex_arrays[4]=(struct VertexArrayAddress){.handle=dma_owner,.data=dma_data,.bytes=49152,
+        .stride=24,.format=0x32,.generation=dma_resource->vertex_generation,.offset=44328};
+    Nv2aVertexSlot dma_slot={0};assert(nv2a_vertex_format_decode(0x32,&dma_slot,NULL,0));
+    const uint16_t dma_indices[]={0,225,325};
+    const float dma_colors[][3]={{1,0,0},{0,1,0},{0,0,1}};
+    for(unsigned i=0;i<3;++i)memcpy(guest_ptr(dma_data+44328+dma_indices[i]*24),dma_colors[i],12);
+    struct VertexFetch dma_fetch={.first=230,.indices=(const uint8_t *)dma_indices};
+    assert(!gather_retained_vertex_attribute(4,&dma_slot,3,&dma_fetch,&gathered));
+    assert(!memcmp(gathered,dma_colors,sizeof(dma_colors)));free(gathered);gathered=NULL;
+    /* The same actual bytes feed a native shader, including both vertices in
+     * the neighboring allocation. Preserve the original retained address. */
+    write32(object+0x1c+4*16,0x32);call(0x102940,shader,1);
+    struct VertexFetch sequential={0};
+    uint8_t *expanded=NULL;
+    assert(!gather_retained_vertex_attribute(4,&dma_slot,3,&dma_fetch,&expanded));
+    /* Use constant source positions but the real gathered color attribute. */
+    float gpu_vertices[3][7];
+    for(unsigned i=0;i<3;++i){memcpy(gpu_vertices[i],triangle[i],16);memcpy(gpu_vertices[i]+4,expanded+i*12,12);}
+    free(expanded);
+    Nv2aVertexSlot saved_slot=s_vertex_object.slots[4];
+    s_vertex_object.slots[4].stream=0;s_vertex_object.slots[4].offset=16;
+    call(0x100EA0,clear,6);
+    assert(!shader_draw(GL_TRIANGLES,3,gpu_vertices,sizeof(gpu_vertices[0]),&sequential));
+    glReadPixels(50,240-50,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+    assert(pixel[0]>100 && pixel[1]>40 && pixel[2]>40); /* interpolated actual RGB */
+    s_vertex_object.slots[4]=saved_slot;
+    struct VertexArrayAddress live=s_vertex_arrays[4];
+    s_vertex_arrays[4].offset=0x4000000ull-dma_data-8;
+    const uint16_t zero_index[]={0};struct VertexFetch at_end={.indices=(const uint8_t *)zero_index};
+    assert(gather_retained_vertex_attribute(4,&dma_slot,1,&at_end,&gathered)==D3DERR_INVALIDCALL && !gathered);
+    s_vertex_arrays[4]=live;
+    uint32_t dma_release[]={dma_owner};call(0x103AD0,dma_release,1);
+    assert(gather_retained_vertex_attribute(4,&dma_slot,3,&dma_fetch,&gathered)==D3DERR_INVALIDCALL);
+    dma_release[0]=neighbor;call(0x103AD0,dma_release,1);
+    s_vertex_arrays[4]=previous;
+    write32(object+0x1c+4*16,0x40);call(0x102940,shader,1);
     /* Release must invalidate even if the guest heap later recycles the exact
      * handle and data addresses. Rebinding/drawing establishes a new generation. */
     uint32_t release[]={secondary};call(0x103AD0,release,1);assert(!resource(secondary));

@@ -103,7 +103,13 @@ static HRESULT gather_retained_vertex_attribute(unsigned attribute, const Nv2aVe
     for (uint32_t i=0;i<count;++i) {
         uint64_t index=vertex_fetch_index(fetch,i)-indexed_base;
         uint64_t offset=a->offset+index*a->stride;
-        if (offset>a->bytes || slot->byte_count>a->bytes-offset) return D3DERR_INVALIDCALL;
+        /* The original device binds one physical RAM DMA object to both
+         * vertex inputs (104160), not a per-resource extent. A retained NULL
+         * address can therefore reach adjacent RAM beyond its owner's size.
+         * Keep ownership/generation checks above; validate the actual DMA
+         * address before reading, without wrapping or inventing attributes. */
+        uint64_t available=0x4000000ull-a->data;
+        if (offset>available || slot->byte_count>available-offset) return D3DERR_INVALIDCALL;
     }
     uint8_t *data=malloc((size_t)count*slot->byte_count);
     if (!data) return (HRESULT)0x8007000Eu;

@@ -168,3 +168,40 @@ Story20 reached actual Arctic Antics (Level7, Demo0) without this reflection fau
 then stopped at the separate fixed-function fog boundary. It does not validate the
 failing retained address. Its probe module had been imported before the update, so
 cache fields remain unavailable; the exact rejection cause is still unresolved.
+
+## Story23 post-level return: physical DMA extent
+
+The user completed Arctic Antics in actual play, then Story23 stopped on return to
+Level37/Demo0 hub. The new cache capture resolves the previous uncertainty:
+v4 owner0x01924DF0, data0x022D4D80, requested49152 bytes, generation1106 still live;
+retained offset44328 is old base1847×24. New raw indices0..325 require end52140,
+2988 bytes beyond the old logical resource. Generation, stride and old base agree
+with original108F40. Original100D70 requests49152 bytes without extra padding;
+this size is already page-aligned. No offset reset, wrapping or invented tangent
+allocation would explain the draw.
+
+The original device binds the same global DMA RAM object to both vertex inputs;
+NV2A array state contains address/stride/type, with no per-vertex-buffer byte limit.
+See [the independently pinned DMA audit](research/RETAINED-VERTEX-DMA-BOUNDS.md)
+for original104160 methods19C/1A0 and xemu source contracts. The full actual span
+0x022DFAA8..0x022E192C is inside the mapped64MiB physical RAM aperture. The former
+native per-resource bound was stricter than this hardware contract.
+
+Only retained NULL-stream gathering now validates its actual absolute reads
+against64MiB DMA extent. It preserves live-owner/type/data/size/generation checks,
+format validation, allocation caps and old-address arithmetic; no wrap, clamp,
+zero/default attribute or new game asset is introduced. Explicitly bound stream
+validation is unchanged. Released/recycled owners still reject in this bounded
+implementation. Bytes past the logical owner come from existing adjacent mapped
+guest RAM. Their visible effect can depend on guest allocation contents, as on the
+original physical fetch; this fix does not establish the cause of reported visual
+artifacts.
+
+`retained-dma-build.log` and `retained-dma-smoke.log` pass the full native GPU suite.
+The new fixture reproduces49152-byte owner/44328-byte retained offset and max raw
+index325, reads actual colored float records from a separate adjacent allocation,
+and renders those gathered colors through the native shader. A vector crossing
+the physical aperture end rejects before any memory read (the smoke allocation
+itself is smaller than production RAM). Never-initialized, released and exact
+same-address recycled-generation tests remain intact. Root owns build63 and live
+post-level hub/save verification.
