@@ -69,6 +69,12 @@ def dump(debugger, destination):
         for name in ("s_vertex_arrays_ready","s_vertex_array_base","s_vertex_generation"):
             item=target.FindFirstGlobalVariable(name)
             if item.IsValid():out[name]=integers(item)
+    presentation = target.FindFirstGlobalVariable("g_output")
+    if presentation.IsValid():
+        out["native_presentation"] = {
+            field.GetName(): integers(field) for field in presentation
+            if field.GetName() != "filter_source"
+        }
     def floats(address, count):
         return [struct.unpack("<f", word.to_bytes(4, "little"))[0]
                 for word in words(address, count)]
