@@ -93,13 +93,13 @@ static void wrath_profile_present_end(uint64_t start)
         memcpy(&position,guest_ptr(instance+0x70),4); memcpy(&step,guest_ptr(instance+0x74),4);
     }
     double n=p->frames,interval_n=p->intervals?p->intervals:1;
-    fprintf(stderr,"[wrath profile] thread=%s frame=%u fps=%.2f interval_ms=%.3f max_ms=%.3f work_wall_ms=%.3f work_cpu_ms=%.3f present_ms=%.3f uploads=%llu upload_MiB=%.3f upload_ms_per_frame=%.3f binds=%llu same_binds=%llu draws=%llu draw_input_MiB=%.3f scene=%u anim=%.3f step=%.3f audio_gate=%u vblank=%u\n",
+    fprintf(stderr,"[wrath profile] thread=%s frame=%u fps=%.2f interval_ms=%.3f max_ms=%.3f work_wall_ms=%.3f work_cpu_ms=%.3f present_ms=%.3f uploads=%llu upload_MiB=%.3f upload_ms_per_frame=%.3f binds=%llu same_binds=%llu draws=%llu draw_input_MiB=%.3f scene=%u anim=%.3f step=%.3f audio_gate=%u vblank=%u level=%u demo=%u\n",
         window_thread()?"main":"worker",read32(GUEST_SWAP_COUNT),
         p->interval?interval_n*1e9/p->interval:0,p->interval/interval_n/1e6,p->max_interval/1e6,
         p->work/interval_n/1e6,p->work_cpu/interval_n/1e6,p->present/n/1e6,
         (unsigned long long)p->uploads,p->upload_bytes/1048576.0,p->upload_time/n/1e6,
         (unsigned long long)p->binds,(unsigned long long)p->rebinds,(unsigned long long)p->draws,
-        p->stream_bytes/1048576.0,scene,position,step,read32(0x1BAA2C),read32(0x1BABB0));
+        p->stream_bytes/1048576.0,scene,position,step,read32(0x1BAA2C),read32(0x1BABB0),read32(0x19C068),read32(0x23B750));
     fprintf(stderr,"[wrath surface profile] thread=%s readbacks=%llu readback_MiB=%.3f readback_ms=%.3f copies=%llu copy_source_MiB=%.3f copy_ms=%.3f resolves=%llu resolve_MiB=%.3f resolve_ms=%.3f upload_untracked=%llu\n",
         window_thread()?"main":"worker",(unsigned long long)p->surface_count[0],p->surface_bytes[0]/1048576.0,p->surface_time[0]/n/1e6,
         (unsigned long long)p->surface_count[1],p->surface_bytes[1]/1048576.0,p->surface_time[1]/n/1e6,
