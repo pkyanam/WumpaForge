@@ -1,0 +1,20 @@
+--- a/shader_bridge.inc
++++ b/shader_bridge.inc
+@@ -288,6 +288,8 @@
+         pixel->texture_modes=(pixel->texture_modes&~(31u<<(i*5)))|(mode<<(i*5));
+     }
+ }
++#include "sampler_queries.inc"
++
+ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertices, uint32_t stride,
+                            const struct VertexFetch *fetch)
+ {
+@@ -440,7 +442,7 @@
+     glUniform1i(p->u_alpha_func_location,(int)read32(0x10EE18+58*4)-GL_NEVER+1);
+     glUniform1f(p->u_alpha_ref_location,(read32(0x10EE18+61*4)&255)/255.0f);
+     GLint previous_samplers[4];
+-    for (unsigned i=0;i<4;++i) { glActiveTexture(GL_TEXTURE0+i); glGetIntegerv(GL_SAMPLER_BINDING,&previous_samplers[i]); }
++    wumpa_shader_sampler_queries(previous_samplers);
+     for (unsigned i=0;i<4;++i) {
+         /* Declared texture modes can be absent from the combiner result.
+          * The linked native shader proves these samplers inactive; no host
