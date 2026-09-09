@@ -1,6 +1,23 @@
 # Status — 2026-09-08
 
-## Current: build55/story15 reflection passes; Xbox address5 is next hub setting
+## Current: build57/story17 hub movement; reflection input fault and texture-copy cost
+- Build57 reaches visible hub and accepts keyboard jumping/movement after original
+  story skip. Arctic Antics remains unverified; target is Level7/Demo0 via Hub0 portal0.
+- Story17 stops on live reflection v4/v5 stream1 NULL, stride24. Actual bounded
+  buffer probe succeeds: game handle374 pool explicitly lacks tangent storage;
+  matching materials have shader selector0 and reflection manager flag1 intact.
+  Next investigate current draw job/material override versus stale shader selection;
+  do not substitute tangent data or relax live-input bounds. Controller owns analysis.
+- Actual hub median32.6FPS with context timer overhead disabled. Disjoint upload,
+  CopyRects and target resolve work totals about16ms/frame; readback is nested.
+  mac_runtime implements exact linear BGRA8 fastpaths first. See performance report.
+- Build57 includes MIRRORONCE and low-overhead profiling; all19 original static
+  pixel shader definitions pass generation (76 fog/specular variants).
+- Story18 diagnostic PID66826/session42667 is running with extended selection,
+  buffer, shader and audio probes. Root owns UI/build/package; max2 compile jobs.
+  Next consume stop evidence, fix selection/buffer cause, then build58 and enter snow.
+
+## Earlier: build55/story15 reflection passes; Xbox address5 is next hub setting
 - b951812 implements actual[PROJECT2D,DOT,DOT,DOT_RFLCT_SPEC] shader chain, signed
   mapping1 andoriginalreflectionequation. FullGPUtests pass all6cube faces, exact128
   normalcenter, nonunitnormal denominator, diffuseRGBA andinvaliddependency checks.
