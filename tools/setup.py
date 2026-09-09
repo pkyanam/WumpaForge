@@ -2,6 +2,7 @@
 """Build and package WumpaForge locally from your original USA Xbox ISO."""
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import platform
@@ -19,7 +20,56 @@ def run(*command, dry_run=False):
     command = list(map(str, command))
     print("+ " + shlex.join(command), flush=True)
     if not dry_run:
-        subprocess.run(command, cwd=ROOT, check=True)
+        log = ROOT / "local/reports/setup.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a") as output:
+            output.write("\n+ " + shlex.join(command) + "\n")
+            output.flush()
+            result = subprocess.run(command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT)
+        if result.returncode:
+            print("\n".join(log.read_text(errors="replace").splitlines()[-20:]), file=sys.stderr)
+            raise ValueError(f"Build step failed. Full log: {log}")
+
+
+def translation_key():
+    digest = hashlib.sha256(USA_XBE_SHA256.encode())
+    files = [ROOT / "tools/pipeline.py", ROOT / "tools/bootstrap.py", ROOT / "requirements.txt"]
+    files += sorted((ROOT / "config").rglob("*")) + sorted((ROOT / "patches").glob("*.patch"))
+    for path in files:
+        if path.is_file():
+            digest.update(str(path.relative_to(ROOT)).encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def generated_inventory():
+    return {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted((ROOT / "local/generated").glob("*")) if path.is_file()}
+
+
+def translation_is_current():
+    try:
+        manifest = json.loads((ROOT / "local/reports/setup-translation.json").read_text())
+        actual = generated_inventory()
+        return (bool(actual) and any(name.endswith(".c") for name in actual)
+                and manifest == {"key": translation_key(), "files": actual}
+                and (ROOT / "local/reports/disasm/functions.json").is_file())
+    except (OSError, ValueError):
+        return False
+
+
+def record_translation():
+    path = ROOT / "local/reports/setup-translation.json"
+    path.write_text(json.dumps({"key": translation_key(), "files": generated_inventory()}, indent=2) + "\n")
+
+
+def migrate_legacy_saves():
+    source = ROOT / "local/saves"
+    target = Path.home() / "Library/Application Support/WumpaForge/saves"
+    if source.is_dir() and not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, target)
+        print(f"Copied existing saves to {target}; originals retained.")
 
 
 def preflight():
@@ -83,8 +133,13 @@ def main():
     for stage in ("prepare", "assets"):
         run(PYTHON, ROOT / "tools/pipeline.py", stage, "--iso", iso, dry_run=args.dry_run)
     run(PYTHON, ROOT / "tools/verify_assets.py", "--iso", iso, dry_run=args.dry_run)
-    for stage in ("analyze", "lift"):
-        run(PYTHON, ROOT / "tools/pipeline.py", stage, dry_run=args.dry_run)
+    if not args.dry_run and translation_is_current():
+        print("Reusing verified native translation (inputs and generated files unchanged).")
+    else:
+        for stage in ("analyze", "lift"):
+            run(PYTHON, ROOT / "tools/pipeline.py", stage, dry_run=args.dry_run)
+        if not args.dry_run:
+            record_translation()
     run("cmake", "-S", ROOT, "-B", ROOT / "build/native",
         "-DCMAKE_BUILD_TYPE=RelWithDebInfo", "-DCMAKE_OSX_ARCHITECTURES=arm64",
         f"-DOPENSSL_ROOT_DIR={openssl}", dry_run=args.dry_run)
@@ -100,8 +155,9 @@ def main():
     if args.dry_run:
         print("Dry run complete; ISO contents and build have not been validated.")
     else:
-        print("Setup complete. Keep this checkout and its local/assets directory in place.")
-        print("Launch with: " + shlex.join(["open", str(ROOT / "build/Wrath Native.app")]))
+        migrate_legacy_saves()
+        print("Done. Your personal app includes its assets and libraries; move it wherever you like.")
+        print("Launch with: " + shlex.join(["open", str(ROOT / "build/WumpaForge.app")]))
 
 
 if __name__ == "__main__":

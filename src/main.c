@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include "macos_paths.h"
 #endif
 
 extern void xbe_entry_point(void);
@@ -18,6 +19,7 @@ extern RECOMP_TLS uint32_t g_esp;
 int main(int argc, char **argv)
 {
     char bundled_assets[4096];
+    int using_bundle = 0;
     const char *directory = argc > 1 ? argv[1] : "local/assets";
 #ifdef __APPLE__
     if (argc < 2) {
@@ -27,7 +29,7 @@ int main(int argc, char **argv)
             if (base) {
                 *base = 0;
                 snprintf(bundled_assets, sizeof(bundled_assets), "%s/../Resources/assets", executable);
-                if (!access(bundled_assets, R_OK)) directory = bundled_assets;
+                if (!access(bundled_assets, R_OK)) { directory = bundled_assets; using_bundle = 1; }
             }
         }
     }
@@ -44,6 +46,11 @@ int main(int argc, char **argv)
     snprintf(xbe_path, sizeof(xbe_path), "%s/default.xbe", resolved);
     snprintf(save_path, sizeof(save_path), "%s/../saves", resolved);
     snprintf(run_path, sizeof(run_path), "%s/../run", resolved);
+#ifdef __APPLE__
+    if (using_bundle && wrath_macos_state_paths(save_path, sizeof(save_path), run_path, sizeof(run_path))) {
+        perror("WumpaForge user data directory"); return 1;
+    }
+#endif
     mkdir(run_path, 0755);
     if (chdir(run_path)) { perror(run_path); return 1; }
     FILE *input = fopen(xbe_path, "rb");
