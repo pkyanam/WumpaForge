@@ -1206,6 +1206,7 @@ void sub_000FE9C0(void) /* CreateTexture(w,h,levels,usage,format,pool,out), ret2
     write32(r->handle + 16, linear ? (width - 1) | ((height - 1) << 12) | ((r->pitch / 64 - 1) << 24) : 0);
     write32(output, r->handle); finish(28, 0);
 }
+static HRESULT sync_readonly_texture_lock(struct Resource *r,uint32_t level,uint32_t flags);
 void sub_00103C80(void) /* Texture_LockRect(texture,level,out,rect,flags) */
 {
     struct Resource *r = resource(arg(0)); uint32_t level = arg(1), out = arg(2), rectangle = arg(3);
@@ -1222,6 +1223,8 @@ void sub_00103C80(void) /* Texture_LockRect(texture,level,out,rect,flags) */
         int linear; int bpp = format_info(r->format, &linear);
         offset += rect.y1 * r->pitches[level] + rect.x1 * bpp;
     }
+    HRESULT result=sync_readonly_texture_lock(r,level,arg(4));
+    if(result<0){finish(20,(uint32_t)result);return;}
     write32(out, r->pitches[level]); write32(out + 4, r->data + offset);
     if (!(arg(4) & 0x80)) r->dirty = 1;
     finish(20, 0);
@@ -1901,6 +1904,20 @@ static HRESULT resolve_texture_target(struct Resource *r)
     wrath_profile_surface(WRATH_PROFILE_RESOLVE,profile_start,(uint64_t)r->width*r->height*4);
     return result;
 }
+static HRESULT sync_readonly_texture_lock(struct Resource *r,uint32_t level,uint32_t flags)
+{
+    /* Original1062B0 waits on the resource unless NOOVERWRITE(20) is set.
+     * Only a synchronized READONLY(80) lock of the active GPU-written mip
+     * needs this readback. Ordinary CPU upload locks stay entirely in RAM.
+     * glReadPixels in resolve performs the required native completion wait. */
+    if(!(flags&0x80) || (flags&0x20))return 0;
+    struct Resource *active=resource(read32(GUEST_DEVICE+0x2070));
+    if(!active || active->type!=RESOURCE_SURFACE || !active->target_fbo ||
+       active->owner!=r->handle || active->data!=r->data+r->offsets[level] ||
+       active->bytes!=r->sizes[level] || active->pitch!=r->pitches[level] ||
+       active->format!=r->format)return 0;
+    return resolve_texture_target(active);
+}
 static HRESULT prepare_texture_target(struct Resource *r)
 {
     uint32_t *pixels=malloc((size_t)r->width*r->height*4);
@@ -2367,6 +2384,7 @@ static void test_shader_bridge(void)
 #include "../tools/test_gpu_fences.inc"
 #include "../tools/test_texture_depth.inc"
 #include "../tools/test_surface_alias.inc"
+#include "../tools/test_texture_target_lock.inc"
 #include "../tools/test_context_profile_bench.inc"
 #include "../tools/test_texture_snapshot.inc"
 
@@ -2715,6 +2733,7 @@ int main(void)
     test_gpu_fences();
     test_texture_depth();
     test_surface_alias();
+    test_texture_target_lock();
     test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();
