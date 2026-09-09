@@ -45,6 +45,14 @@ def main():
     replace(backend,'#include <epoxy/gl.h>','#include <epoxy/gl.h>\n#include "shield_host.h"')
     replace(backend,'SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);\n    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);',
             'SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);\n    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);')
+    # SDL2 defaults to RGB 3/3/2, which permits a reduced-precision EGL config.
+    # The guest backbuffer and the color regression fixtures require RGBA8.
+    replace(backend,'    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);',
+            '    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);\n'
+            '    SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);\n'
+            '    SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);\n'
+            '    SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);\n'
+            '    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);')
     replace(backend,'    SDL_GL_MakeCurrent(g.window, g.glctx);\n#ifdef __APPLE__',
             '    SDL_GL_MakeCurrent(g.window, g.glctx);\n    if (!wumpa_gl_load()) return D3DERR_INVALIDCALL;\n#ifdef __APPLE__')
     replace(backend,'void xbox_D3D8GLPumpEvents(void)\n{',
@@ -74,7 +82,25 @@ def main():
     checks=OUT/'checks';checks.mkdir(exist_ok=True)
     fixture=(OUT/'title/graphics.c').read_text()
     assert fixture.count('int main(void)')==1
-    (checks/'graphics_check.c').write_text(fixture.replace('int main(void)','int wumpa_graphics_checks(void)'))
+    fixture=fixture.replace('int main(void)','int wumpa_graphics_checks(void)')
+    assert fixture.count('#include "../tools/test_multistream.inc"')==1
+    fixture=fixture.replace('#include "../tools/test_multistream.inc"', '#include "test_multistream.inc"')
+    (checks/'graphics_check.c').write_text(fixture)
+    multistream=(ROOT/'tools/test_multistream.inc').read_text()
+    exact_color='    assert(pixel[0]==64 && pixel[1]==128 && pixel[2]==191);'
+    assert multistream.count(exact_color)==1
+    multistream=multistream.replace(exact_color,
+            '    {\n'
+            '        int r=-1,g=-1,b=-1,a=-1;\n'
+            '        SDL_GL_GetAttribute(SDL_GL_RED_SIZE,&r);\n'
+            '        SDL_GL_GetAttribute(SDL_GL_GREEN_SIZE,&g);\n'
+            '        SDL_GL_GetAttribute(SDL_GL_BLUE_SIZE,&b);\n'
+            '        SDL_GL_GetAttribute(SDL_GL_ALPHA_SIZE,&a);\n'
+            '        fprintf(stderr,"[shield] multistream RGBA=%u,%u,%u,%u framebuffer bits=%d,%d,%d,%d\\n",\n'
+            '                pixel[0],pixel[1],pixel[2],pixel[3],r,g,b,a);\n'
+            '        fflush(stderr);\n'
+            '    }\n'+exact_color)
+    (checks/'test_multistream.inc').write_text(multistream)
     tools_link=OUT/'tools'
     if tools_link.is_symlink():
         if tools_link.resolve()!=ROOT/'tools':raise RuntimeError('Unexpected tools link')
