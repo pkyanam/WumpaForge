@@ -1,12 +1,28 @@
 # Wrath of Cortex — native Apple Silicon port in progress
 
-**Development build; not yet playable.** This workspace statically translates the
+**Development build; gameplay validation is in progress.** This workspace statically translates the
 supplied original Xbox executable into C and compiles it to native ARM64. The user
 approved Xbox graphics/audio/system compatibility layers; no Xbox CPU interpreter
 or JIT is used. See [current status](docs/STATUS.md) and `git log` for progress.
 
 The original ISO stays read-only at the workspace root. Game assets, generated
 sources, build outputs, virtual environments, and upstream clones are ignored by Git.
+
+## Launch the local build
+
+After building, run `python3 tools/package.py`, then open `build/Wrath Native.app`.
+The app finds the local extracted assets automatically and has no diagnostic
+watchdog unless one is explicitly enabled in the environment. The bundle links
+to this workspace's assets and currently relies on its local native libraries.
+
+Use WASD to move, Space to jump/confirm, X to spin, and Enter to pause. Space can
+skip the story and hub hologram. Walk into portal1 and wait to enter Arctic Antics.
+See [all controls](docs/CONTROLS.md) for mouse and gamepad mappings.
+
+The window can be resized or maximized. F11 (or Control–Command–F) toggles
+fullscreen; F10 toggles sharpening. Output preserves the original4:3 aspect
+ratio. The game still renders internally at640x480; larger output is scaled.
+See [presentation](docs/WINDOW-PRESENTATION.md) for validation and limitations.
 
 ## Reproduce
 
