@@ -1,7 +1,7 @@
 """Read-only LLDB capture of original game VB registry and tangent pools.
 
 Import in a stopped game, then buffer_probe.dump(lldb.debugger, absolute_path).
-No target expression is executed. Fixed original tables are bounded by 39670
+No target code is executed. Fixed original tables are bounded by 39670
 (0xDAC0 DWORD registry initialization) and 3A550 (1000 pool records).
 """
 import json
@@ -79,10 +79,25 @@ def dump(debugger, destination):
                     break
             if len(visited) >= 8192:
                 break
+    overrides = words(0x4234E8, 2)
+    # Simple stopped-thread TLS variable evaluation only; JIT disabled prevents
+    # LLDB running any helper in the target. At this audited indexed-draw stop,
+    # the original A5D40 saved draw-job pointer is guest stack DWORD4.
+    options = lldb.SBExpressionOptions()
+    options.SetAllowJIT(False)
+    stack_value = process.GetSelectedThread().GetSelectedFrame().EvaluateExpression(
+        'g_esp', options)
+    stack = (words(stack_value.GetValueAsUnsigned(), 32)
+             if stack_value.IsValid() and stack_value.GetError().Success() else None)
     out = {'stream_records': streams, 'registry_matches': matches,
            'active_pools': active_pools, 'errors': errors,
            'scene_address': scene_pointer, 'scene_header': scene,
            'matching_geometries': geometries,
+           'material_overrides': overrides,
+           'override_material': words(overrides[0], 32) if overrides else None,
+           'shader_manager_current': words(0x426CB8, 4),
+           'guest_stack': stack,
+           'candidate_draw_job': words(stack[4], 16) if stack else None,
            'reflection_manager_record': words(0x426CB8 + 27 * 20 + 16, 5)}
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)

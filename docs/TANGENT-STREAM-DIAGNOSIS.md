@@ -50,7 +50,17 @@ command script import tools/buffer_probe.py
 script buffer_probe.dump(lldb.debugger, 'local/reports/story-17-buffers.json')
 ```
 
-Validation so far: Python syntax check only; first stopped-process capture is
-pending. The desired distinction is a pool created without tangents, allocation
-failure/lifetime corruption, or a missed original tangent-generation path. No
-renderer behavior has been changed for this boundary.
+Story17's stopped-process capture succeeded without read errors. It identifies
+game handle374, pool `[374,0,4,89,0]`, and registry tangent0. The pool was explicitly
+created without tangents. Shader1B's manager still has format89 and flag1, so its
+registration was intact. All six geometries sharing that pool have ordinary
+materials with byte3E=0. The actual failed geometry is40069648,226 vertices,
+base vertex4, material31414624. Its primitive pointer40069728 matches the saved
+original draw stack.
+
+The next question is why a reflection shader is selected for this ordinarily
+nonreflective material. The probe now also captures global overrides4234E8/EC,
+the manager's cached selection, and the original draw-job candidate saved on
+the audited A5D40 stack. Its TLS variable read disables LLDB target JIT. This
+extra capture has only a Python syntax check so far. No renderer behavior has
+been changed or missing tangent data invented.
