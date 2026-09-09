@@ -1,0 +1,20 @@
+--- a/graphics.c
++++ b/graphics.c
+@@ -1339,6 +1339,17 @@
+ {
+     struct Resource *r = resource(arg(0)); uint32_t offset = arg(1), size = arg(2), out = arg(3);
+     if (!r || r->type != RESOURCE_VERTEX_BUFFER || !out || offset > r->bytes || size > r->bytes - offset) {
++        static unsigned failures;
++        if(failures++<16) {
++            uint32_t handle=arg(0);
++            int header=handle>=0x1000u && handle<=0x4000000u-12;
++            int output=out>=0x1000u && out<=0x4000000u-4;
++            fprintf(stderr,"[shield vb lock] rejected handle=%08X type=%u refs=%u bindings=%u data=%08X bytes=%u offset=%u size=%u out=%08X flags=%08X caller=%08X frame=%u header=%d common=%08X header_data=%08X header_lock=%08X out_valid=%d out_previous=%08X\n",
++                handle,r?r->type:0,r?r->references:0,r?r->bindings:0,r?r->data:0,r?r->bytes:0,
++                offset,size,out,arg(4),read32(g_esp),read32(GUEST_SWAP_COUNT)+1,header,
++                header?read32(handle):0,header?read32(handle+4):0,header?read32(handle+8):0,
++                output,output?read32(out):0);
++        }
+         finish(20, (uint32_t)D3DERR_INVALIDCALL); return;
+     }
+     write32(out, r->data + offset); finish(20, 0);
