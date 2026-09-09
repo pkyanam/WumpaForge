@@ -72,3 +72,29 @@ the selected faulting worker's TLS and object state must be compared instead.
 Two short runs without the fault establish successful capture and healthy
 startup examples, not resolution of the intermittent story13 failure. Continue
 the primary gameplay work and retain this probe for a naturally recurring stop.
+
+## Additional source ownership review
+
+The evening source-only pass inspected the original wrapper call graph again.
+Worker5DA30 calls5D820 when the wrapper's request byte is set;5D820 first calls
+5D420, then constructs the new stream. The same worker calls5D420 for its close
+request. Its GetStatus call at5DABB follows a nonzero stream-pointer check at
+5DAA9. These are sequential operations on that worker; their existence alone
+does not prove that native creation and release race with its GetStatus call.
+
+5D420 also has a constructor caller5D650. An immediate reference atBA00F passes
+5D650 to the six-element,68-byte wrapper construction loop atBA00A–BA029.
+The worker address5DA30 is passed to thread creation atB9AE2–B9AEE. Empty
+`called_by` metadata is therefore not evidence that either callback is unused.
+The teardown sibling5D660 is also passed as an exception-cleanup callback and
+must not be inferred unreachable from the direct-call inventory.
+
+Main-side callers separately use5D4B0 to poll wrapper status. That path reads a
+wrapper flag and pointer before calling GetStatus; a full cross-thread lifetime
+proof requires the surrounding request and shutdown ordering. The native bridge
+lock protects bridge methods and object publication, not every preceding guest
+vtable dereference. No new concrete failing interleaving or fix was established
+by this review. In particular, do not preserve released objects indefinitely,
+skip a null method, or add speculative global barriers to conceal the fault.
+The original stopped values remain the next useful evidence. No game was run
+or controlled for this source review.
