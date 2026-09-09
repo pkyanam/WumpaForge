@@ -101,3 +101,11 @@ This monitoring task made no production edits. The read-only sampling attempt
 found PID30506 already exited at the subsequent vertex-stream stop (report
 `story17-hub-sample-command.log`); it did not interrupt the live session. Parent
 owned game launch, input, stop captures and the next compatibility boundary.
+
+## Implemented bounded format optimization
+
+The direct format0x12 upload and row-copy path is now implemented and passes the
+full GPU suite. It preserves exact shadows, guest visibility, row pitch, alpha,
+copy bounds and orientation. See [implementation and GPU coverage](../LINEAR-BGRA-FASTPATH.md).
+This removes redundant CPU conversions; actual next-run FPS and the existing
+per-resource/copy summaries will determine the performance gain.

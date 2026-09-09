@@ -886,8 +886,11 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
         }
     }
     uint64_t profile_start=wrath_profile_begin(),profile_bytes=0;
-    uint32_t *pixels = malloc((size_t)r->width * r->height * 4);
-    if (!pixels) return (HRESULT)0x8007000E;
+    /* LIN_A8R8G8B8 is already the native BGRA8 upload representation. Preserve
+     * the exact-byte snapshot and tell GL each level's actual guest row pitch. */
+    int direct_bgra=r->format==0x12;
+    uint32_t *pixels = direct_bgra?NULL:malloc((size_t)r->width * r->height * 4);
+    if (!direct_bgra && !pixels) return (HRESULT)0x8007000E;
     const uint8_t *encoded=texture_snapshot_capture(r);
     GLint old_texture, old_unpack, old_alignment, old_row, old_rows, old_columns, old_swap;
     glGetIntegerv(target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_BINDING_CUBE_MAP : GL_TEXTURE_BINDING_2D, &old_texture);
@@ -908,7 +911,8 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
         if (!width) width = 1; if (!height) height = 1;
         profile_bytes+=(uint64_t)width*height*4;
         const uint8_t *source = encoded + face * r->face_stride + r->offsets[level];
-        for (unsigned y = 0; y < height; ++y) for (unsigned x = 0; x < width; ++x) {
+        if(direct_bgra) glPixelStorei(GL_UNPACK_ROW_LENGTH,(GLint)(r->pitches[level]/4));
+        else for (unsigned y = 0; y < height; ++y) for (unsigned x = 0; x < width; ++x) {
             uint32_t color;
             if (!bpp) {
                 unsigned block_size = r->format == 0x0C ? 8 : 16;
@@ -923,7 +927,7 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
             pixels[y * width + x] = color;
         }
         glTexImage2D(target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : GL_TEXTURE_2D,
-                     (GLint)level, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
+                     (GLint)level, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,direct_bgra?(const void *)source:pixels);
     }
     glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, 0);
     glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, (GLint)r->levels - 1);
@@ -1639,6 +1643,17 @@ static uint32_t encode_color(uint32_t color, uint32_t format)
     default: return 0;
     }
 }
+/* Bounded scratch lets optimized memcpy reverse whole BGRA rows, including
+ * odd widths/heights, without a second full-surface allocation. */
+static void flip_bgra_rows(uint32_t *pixels,unsigned width,unsigned height)
+{
+    uint32_t temporary[256];
+    for(unsigned y=0;y<height/2;++y)for(unsigned x=0;x<width;x+=256) {
+        unsigned count=width-x<256?width-x:256;
+        uint32_t *top=pixels+(size_t)y*width+x,*bottom=pixels+(size_t)(height-1-y)*width+x;
+        memcpy(temporary,top,count*4);memcpy(top,bottom,count*4);memcpy(bottom,temporary,count*4);
+    }
+}
 static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
 {
     if (r->framebuffer || (r->target_fbo && read32(GUEST_DEVICE+0x2070)==r->handle)) {
@@ -1661,7 +1676,8 @@ static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
         glPixelStorei(GL_PACK_ALIGNMENT, old_alignment); glPixelStorei(GL_PACK_ROW_LENGTH, old_row);
         glPixelStorei(GL_PACK_SKIP_ROWS, old_rows); glPixelStorei(GL_PACK_SKIP_PIXELS, old_pixels);
         /* GL readback rows start at the bottom; Xbox memory rows start at top. */
-        for (unsigned y = 0; y < r->height / 2; ++y)
+        if(r->format==0x12)flip_bgra_rows(pixels,r->width,r->height);
+        else for (unsigned y = 0; y < r->height / 2; ++y)
             for (unsigned x = 0; x < r->width; ++x) {
                 unsigned top = y * r->width + x, bottom = (r->height - 1 - y) * r->width + x;
                 uint32_t swap = pixels[top]; pixels[top] = pixels[bottom]; pixels[bottom] = swap;
@@ -1672,6 +1688,10 @@ static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
     int linear, bpp = format_info(r->format, &linear);
     if (bpp < 0) return D3DERR_INVALIDCALL;
     const uint8_t *data = guest_ptr(r->data);
+    if(r->format==0x12) {
+        for(unsigned y=0;y<r->height;++y)memcpy(pixels+(size_t)y*r->width,data+(size_t)y*r->pitch,(size_t)r->width*4);
+        return 0;
+    }
     for (unsigned y = 0; y < r->height; ++y)
         for (unsigned x = 0; x < r->width; ++x) {
             uint32_t color;
@@ -1700,7 +1720,9 @@ static HRESULT resolve_texture_target(struct Resource *r)
     HRESULT result=surface_pixels(r,pixels);
     if (result>=0) {
         uint8_t *data=guest_ptr(r->data);
-        for (unsigned y=0;y<r->height;++y) for (unsigned x=0;x<r->width;++x) {
+        if(r->format==0x12) {
+            for(unsigned y=0;y<r->height;++y)memcpy(data+(size_t)y*r->pitch,pixels+(size_t)y*r->width,(size_t)r->width*4);
+        } else for (unsigned y=0;y<r->height;++y) for (unsigned x=0;x<r->width;++x) {
             uint32_t value=encode_color(pixels[y*r->width+x],r->format);
             uint32_t offset=linear ? y*r->pitch+x*bpp : morton_index(x,y,r->width,r->height)*bpp;
             memcpy(data+offset,&value,bpp);
@@ -1718,7 +1740,8 @@ static HRESULT prepare_texture_target(struct Resource *r)
     if (!pixels) return (HRESULT)0x8007000E;
     HRESULT result=surface_pixels(r,pixels);
     if (result<0) { free(pixels); return result; }
-    for (unsigned y=0;y<r->height/2;++y) for (unsigned x=0;x<r->width;++x) {
+    if(r->format==0x12)flip_bgra_rows(pixels,r->width,r->height);
+    else for (unsigned y=0;y<r->height/2;++y) for (unsigned x=0;x<r->width;++x) {
         unsigned a=y*r->width+x,b=(r->height-1-y)*r->width+x;
         uint32_t swap=pixels[a]; pixels[a]=pixels[b]; pixels[b]=swap;
     }
@@ -1817,7 +1840,11 @@ void sub_000FF580(void) /* CopyRects(source,rectangles,count,destination,points)
             free(region);
         } else {
             uint8_t *data = guest_ptr(destination->data);
-            for (int64_t y = 0; y < height; ++y)
+            if(destination->format==0x12) {
+                for(int64_t y=0;y<height;++y)
+                    memcpy(data+(point[1]+y)*destination->pitch+(size_t)point[0]*4,
+                           pixels+(rect.y1+y)*source->width+rect.x1,(size_t)width*4);
+            } else for (int64_t y = 0; y < height; ++y)
                 for (int64_t x = 0; x < width; ++x) {
                     uint32_t color = encode_color(pixels[(rect.y1 + y) * source->width + rect.x1 + x], destination->format);
                     uint32_t dx = point[0] + x, dy = point[1] + y;
@@ -2160,6 +2187,7 @@ static void test_shader_bridge(void)
 #include "../tools/test_native_fog.inc"
 #include "../tools/test_dot_reflection.inc"
 #include "../tools/test_mirror_once.inc"
+#include "../tools/test_linear_bgra.inc"
 #include "../tools/test_context_profile_bench.inc"
 #include "../tools/test_texture_snapshot.inc"
 
@@ -2498,6 +2526,7 @@ int main(void)
     test_native_fog();
     test_dot_reflection();
     test_mirror_once();
+    test_linear_bgra();
     test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();
