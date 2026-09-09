@@ -1,0 +1,91 @@
+--- a/graphics.c
++++ b/graphics.c
+@@ -698,6 +698,7 @@
+  * e.g. GetCubeMapSurface retains its parent pointer while allocating a child. */
+ static struct Resource *s_resource_pages[RESOURCE_MAX_PAGES];
+ static unsigned s_resource_page_count;
++static int s_index_resource_dirty=1;
+ static unsigned resource_capacity(void)
+ {
+     return s_resource_page_count * RESOURCE_PAGE_SLOTS;
+@@ -782,6 +783,7 @@
+ }
+ static struct Resource *new_resource(void)
+ {
++    s_index_resource_dirty=1;
+     for (unsigned i = 0; i < resource_capacity(); ++i) {
+         struct Resource *r = resource_at(i);
+         if (!r->handle) return r;
+@@ -804,6 +806,7 @@
+ static void release_resource(struct Resource *r)
+ {
+     if (r->references || r->bindings) { update_common(r); return; }
++    s_index_resource_dirty=1;
+     if (r->encoded_snapshot) { s_texture_snapshot_bytes-=r->bytes; free(r->encoded_snapshot); }
+     if (r->target_fbo) glDeleteFramebuffers(1, &r->target_fbo);
+     if (r->target_texture) glDeleteTextures(1, &r->target_texture);
+--- a/index_bridge.inc
++++ b/index_bridge.inc
+@@ -7,6 +7,7 @@
+  * Shared100D40 palette/index lock is supplied by the palette bridge.
+  */
+ static uint32_t s_index_handle;
++#include "index_resource_bounds.inc"
+ 
+ static int index_range(uint32_t address, uint64_t bytes)
+ {
+@@ -62,13 +63,7 @@
+         return D3DERR_INVALIDCALL;
+     /* The API accepts a literal CPU pointer, even with no index buffer bound.
+      * If it points into a known resource, also enforce that resource's extent. */
+-    for (unsigned i=0;i<resource_capacity();++i) {
+-        struct Resource *r=resource_at(i);
+-        if (r->handle && r->type==RESOURCE_INDEX_BUFFER && indices>=r->data &&
+-            (uint64_t)indices<=(uint64_t)r->data+r->bytes &&
+-            (uint64_t)indices+(uint64_t)count*2>(uint64_t)r->data+r->bytes)
+-            return D3DERR_INVALIDCALL;
+-    }
++    if(!index_resource_bounds(indices,count))return D3DERR_INVALIDCALL;
+     const uint8_t *in=guest_ptr(indices);
+     /* Validate all fetches before allocation or drawing. 64-bit arithmetic
+      * rejects base/index/stride overflow instead of wrapping into guest RAM. */
+--- /dev/null
++++ b/index_resource_bounds.inc
+@@ -0,0 +1,37 @@
++/* Rebuild only after native resource lifetime changes; all draw calls hold the
++ * graphics mutex. Keep every overlapping candidate and the inclusive end test. */
++static struct Resource **s_index_candidates;
++static unsigned s_index_candidate_count, s_index_candidate_capacity;
++static int index_resource_bounds(uint32_t indices,uint32_t count)
++{
++    unsigned capacity=resource_capacity();
++    if(s_index_resource_dirty) {
++        if(capacity>s_index_candidate_capacity) {
++            struct Resource **list=realloc(s_index_candidates,(size_t)capacity*sizeof(*list));
++            if(!list)goto uncached;
++            s_index_candidates=list;s_index_candidate_capacity=capacity;
++        }
++        s_index_candidate_count=0;
++        for(unsigned i=0;i<capacity;++i) {
++            struct Resource *r=resource_at(i);
++            if(r->handle&&r->type==RESOURCE_INDEX_BUFFER)
++                s_index_candidates[s_index_candidate_count++]=r;
++        }
++        s_index_resource_dirty=0;
++    }
++    for(unsigned i=0;i<s_index_candidate_count;++i) {
++        const struct Resource *r=s_index_candidates[i];
++        if(indices>=r->data&&(uint64_t)indices<=(uint64_t)r->data+r->bytes&&
++           (uint64_t)indices+(uint64_t)count*2>(uint64_t)r->data+r->bytes)return 0;
++    }
++    return 1;
++ uncached:
++    /* Allocation failure preserves the original complete bounds check. */
++    for(unsigned i=0;i<capacity;++i) {
++        const struct Resource *r=resource_at(i);
++        if(r->handle&&r->type==RESOURCE_INDEX_BUFFER&&indices>=r->data&&
++           (uint64_t)indices<=(uint64_t)r->data+r->bytes&&
++           (uint64_t)indices+(uint64_t)count*2>(uint64_t)r->data+r->bytes)return 0;
++    }
++    return 1;
++}
