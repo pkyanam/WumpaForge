@@ -135,6 +135,27 @@ def main():
     fixture=(OUT/'title/graphics.c').read_text()
     assert fixture.count('int main(void)')==1
     fixture=fixture.replace('int main(void)','int wumpa_graphics_checks(void)')
+    queue_anchor='    assert(!glIsEnabled(GL_DITHER));'
+    assert fixture.count(queue_anchor)==1
+    fixture=fixture.replace(queue_anchor,queue_anchor+'\n'
+            '    { /* Exceed the256-call queue and verify ordered observation. */\n'
+            '        GLboolean old_depth,old_color[4],depth,color[4];\n'
+            '        glGetBooleanv(GL_DEPTH_WRITEMASK,&old_depth);\n'
+            '        glGetBooleanv(GL_COLOR_WRITEMASK,old_color);\n'
+            '        for(unsigned i=0;i<300;++i) {\n'
+            '            if(i&1)glDisable(GL_DITHER);else glEnable(GL_DITHER);\n'
+            '            glDepthMask((i&1)!=0);\n'
+            '            glColorMask((i&1)!=0,GL_TRUE,GL_FALSE,GL_TRUE);\n'
+            '        }\n'
+            '        assert(!glIsEnabled(GL_DITHER));\n'
+            '        glGetBooleanv(GL_DEPTH_WRITEMASK,&depth);\n'
+            '        glGetBooleanv(GL_COLOR_WRITEMASK,color);\n'
+            '        assert(depth && color[0] && color[1] && !color[2] && color[3]);\n'
+            '        glDepthMask(old_depth);\n'
+            '        glColorMask(old_color[0],old_color[1],old_color[2],old_color[3]);\n'
+            '        assert(glGetError()==GL_NO_ERROR);\n'
+            '        puts("PASS: ordered scalar GL state queue overflow and getter observation");\n'
+            '    }')
     assert fixture.count('#include "../tools/test_multistream.inc"')==1
     fixture=fixture.replace('#include "../tools/test_multistream.inc"', '#include "test_multistream.inc"')
     (checks/'graphics_check.c').write_text(fixture)
