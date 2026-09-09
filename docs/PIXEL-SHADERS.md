@@ -184,3 +184,7 @@ The reached DOTPRODUCT/DOT_RFLCT_SPEC chain is now translated to native GPU
 dot products and reflected cube sampling. See DOT-REFLECTION-SHADER.md for
 exact source provenance, bounded mapping/stage support and six-face readback
 validation. Other advanced texture modes remain explicit errors.
+
+Reached address mode5 now uses native projected2D mirror-once sampling with
+original LOD gradients and independent live U/V sampler uniforms. M3 lacks the
+three native mirror-clamp extensions. See [mirror-once evidence and GPU tests](MIRROR-ONCE-TEXTURES.md).

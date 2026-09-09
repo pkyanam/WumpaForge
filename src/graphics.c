@@ -2129,6 +2129,16 @@ static void test_shader_bridge(void)
     assert(pixel[0]==0x40 && pixel[1]==0x80 && pixel[2]==0);
     GLint sampler_binding;glActiveTexture(GL_TEXTURE0);glGetIntegerv(GL_SAMPLER_BINDING,&sampler_binding);assert(sampler_binding==0);
     glActiveTexture(GL_TEXTURE1);glGetIntegerv(GL_SAMPLER_BINDING,&sampler_binding);assert(sampler_binding==0);
+    /* Shared storage still has independent MIRRORONCE and clamp bindings. */
+    for(unsigned i=0;i<4;++i)vertices[i].u=-1.25f;
+    memcpy(guest_ptr(0xF000),vertices,sizeof(vertices));write32(0x10EC18,5);
+    call(0x1019C0,draw,4);assert(g_eax==0);glReadPixels(60,180,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+    assert(pixel[0]==0x40 && pixel[1]==0x80 && pixel[2]==0);
+    write32(state1,5);call(0x1019C0,draw,4);assert(g_eax==0);glReadPixels(60,180,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+    assert(pixel[0]==0 && pixel[1]==255 && pixel[2]==0);
+    write32(0x10EC18,1);write32(state1,3);
+    for(unsigned i=0;i<4;++i)vertices[i].u=1.25f;
+    memcpy(guest_ptr(0xF000),vertices,sizeof(vertices));
     test_fog_color(draw,setps);
     bind[0]=1;bind[1]=0;call(0xFFC90,bind,2);bind[0]=0;
     call(0x102BB0,off,1);setvs[0]=D3DFVF_XYZRHW|D3DFVF_DIFFUSE|D3DFVF_TEX1;call(0x102940,setvs,1);
@@ -2141,6 +2151,7 @@ static void test_shader_bridge(void)
 #include "../tools/test_shader_constant_mode.inc"
 #include "../tools/test_native_fog.inc"
 #include "../tools/test_dot_reflection.inc"
+#include "../tools/test_mirror_once.inc"
 #include "../tools/test_texture_snapshot.inc"
 
 int main(void)
@@ -2477,6 +2488,7 @@ int main(void)
     test_shader_constant_mode();
     test_native_fog();
     test_dot_reflection();
+    test_mirror_once();
     test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();

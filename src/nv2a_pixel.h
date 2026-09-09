@@ -23,7 +23,7 @@ typedef struct Nv2aPixelInfo {
 } Nv2aPixelInfo;
 /* GLSL410: vD0/vD1/vT0..vT3 vec4, vFog float; output fragColor.
  * Uniforms: tex0..tex3, u_psconstants[18], u_fogcolor (vec3), u_alpha_enable/u_alpha_func (int),
- * u_alpha_ref (normalized float).
+ * u_alpha_ref (normalized float); u_mirror_once0..3 (ivec2, PROJECT2D axes).
  * Returns 1 on success, 0 with bounded diagnostic and empty source on failure.
  * No GL calls or allocation. Supply at least 64 KiB source capacity. */
 int nv2a_pixel_generate(const Nv2aPixelDef *definition, const Nv2aPixelOptions *options,

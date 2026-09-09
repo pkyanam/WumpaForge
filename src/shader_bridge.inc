@@ -128,7 +128,7 @@ struct ShaderKey {
 static struct ShaderProgram {
     struct ShaderKey key;
     GLuint program;
-    GLint sampler_location[4];
+    GLint sampler_location[4], mirror_once_location[4];
     uint64_t age;
     Nv2aVertexInfo vertex;
     Nv2aPixelInfo pixel;
@@ -215,6 +215,8 @@ static struct ShaderProgram *shader_program(const Nv2aPixelDef *pixel)
     for (unsigned i=0;i<4;++i) {
         char name[8]; snprintf(name,sizeof(name),"tex%u",i);
         slot->sampler_location[i]=glGetUniformLocation(program,name);
+        char mirror_name[20];snprintf(mirror_name,sizeof(mirror_name),"u_mirror_once%u",i);
+        slot->mirror_once_location[i]=glGetUniformLocation(program,mirror_name);
     }
     fprintf(stderr,"[wrath shaders] linked native program%u (%u vertex instructions, %u combiners)\n",program,vi.instruction_count,pi.stages);
     return slot;
@@ -228,7 +230,7 @@ static GLenum shader_wrap(uint32_t mode)
 {
     switch(mode) {
     case 1:return GL_REPEAT; case 2:return GL_MIRRORED_REPEAT;
-    case 3:return GL_CLAMP_TO_EDGE; case 4:return GL_CLAMP_TO_BORDER;
+    case 3:case 5:return GL_CLAMP_TO_EDGE; case 4:return GL_CLAMP_TO_BORDER;
     default:shader_error("texture addressing","unsupported mode"); return GL_REPEAT;
     }
 }
@@ -407,8 +409,14 @@ static HRESULT shader_draw(GLenum primitive, uint32_t count, const void *vertice
         if (r->levels>1&&mip) min_filter=mip==1?(min==1?GL_NEAREST_MIPMAP_NEAREST:GL_LINEAR_MIPMAP_NEAREST):(min==1?GL_NEAREST_MIPMAP_LINEAR:GL_LINEAR_MIPMAP_LINEAR);
         glSamplerParameteri(s_shader_samplers[i],GL_TEXTURE_MIN_FILTER,min_filter);
         glSamplerParameteri(s_shader_samplers[i],GL_TEXTURE_MAG_FILTER,mag==1?GL_NEAREST:GL_LINEAR);
-        glSamplerParameteri(s_shader_samplers[i],GL_TEXTURE_WRAP_S,shader_wrap(read32(state)));
-        glSamplerParameteri(s_shader_samplers[i],GL_TEXTURE_WRAP_T,shader_wrap(read32(state+4)));
+        uint32_t wrap_u=read32(state),wrap_v=read32(state+4),wrap_w=read32(state+8);
+        /* M3 GL4.1 lacks native mirror-clamp extensions. Shader folding is
+         * correct for projected 2D coordinates, never cube direction vectors. */
+        if(target==GL_TEXTURE_CUBE_MAP&&(wrap_u==5||wrap_v==5||wrap_w==5))
+            shader_error("texture addressing","MIRRORONCE cube sampling unsupported");
+        glUniform2i(p->mirror_once_location[i],wrap_u==5,wrap_v==5);
+        glSamplerParameteri(s_shader_samplers[i],GL_TEXTURE_WRAP_S,shader_wrap(wrap_u));
+        glSamplerParameteri(s_shader_samplers[i],GL_TEXTURE_WRAP_T,shader_wrap(wrap_v));
         float border[4]; shader_rgba(read32(state+0x74),border);
         glSamplerParameterfv(s_shader_samplers[i],GL_TEXTURE_BORDER_COLOR,border);
         glBindSampler(i,s_shader_samplers[i]);

@@ -295,6 +295,7 @@ int nv2a_pixel_generate(const Nv2aPixelDef *d,const Nv2aPixelOptions *options,
             static const char *types[]={"","2D","3D","Cube"};
             unsigned sampler=mode==0x0c?3:mode;
             emit(&g,"uniform sampler%s tex%u;\n",types[sampler],i);
+            if(mode==1)emit(&g,"uniform ivec2 u_mirror_once%u;\n",i);
             info->texture_mask|=1u<<i;info->sampler_dimension[i]=sampler==3?4:sampler+1;
         }
     }
@@ -305,9 +306,19 @@ int nv2a_pixel_generate(const Nv2aPixelDef *d,const Nv2aPixelOptions *options,
         if(mode==0)emit(&g,"  vec4 t%u=vec4(0.0,0.0,0.0,1.0);\n",i);
         else if(mode==5)emit(&g,"  vec4 t%u=vec4(0.0);\n",i);
         else if(mode==1) {
+            emit(&g,"  vec2 coord%u=vT%u.xy/vT%u.w;\n",i,i,i);
             if(options->rectangle_texture_mask&(1u<<i))
-                emit(&g,"  vec4 t%u=textureProj(tex%u,vec3(vT%u.xy/vec2(textureSize(tex%u,0)),vT%u.w));\n",i,i,i,i,i);
-            else emit(&g,"  vec4 t%u=textureProj(tex%u,vT%u.xyw);\n",i,i,i);
+                emit(&g,"  coord%u/=vec2(textureSize(tex%u,0));\n",i,i);
+            /* Addressing occurs after projection. Preserve unwrapped derivatives
+             * across the mirror cusp and clamp edge for native mip selection. */
+            emit(&g,"  vec4 t%u;\n  if(any(notEqual(u_mirror_once%u,ivec2(0)))) {\n"
+                    "    vec2 dx=dFdx(coord%u),dy=dFdy(coord%u);\n"
+                    "    vec2 addressed=mix(coord%u,abs(coord%u),notEqual(u_mirror_once%u,ivec2(0)));\n"
+                    "    t%u=textureGrad(tex%u,addressed,dx,dy);\n  } else {\n",i,i,i,i,i,i,i,i,i);
+            if(options->rectangle_texture_mask&(1u<<i))
+                emit(&g,"    t%u=textureProj(tex%u,vec3(vT%u.xy/vec2(textureSize(tex%u,0)),vT%u.w));\n",i,i,i,i,i);
+            else emit(&g,"    t%u=textureProj(tex%u,vT%u.xyw);\n",i,i,i);
+            emit(&g,"  }\n");
         } else if(mode==2)emit(&g,"  vec4 t%u=textureProj(tex%u,vT%u);\n",i,i,i);
         else if(mode==3)emit(&g,"  vec4 t%u=texture(tex%u,vT%u.xyz);\n",i,i,i);
         else if(mode==4)emit(&g,"  vec4 t%u=vT%u;\n",i,i);
