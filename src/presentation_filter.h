@@ -3,7 +3,7 @@
 /* Original dependency-free five-tap spatial presentation filter. No temporal
  * state or additional pass. Set LINEAR + CLAMP_TO_EDGE on u_source, draw only
  * the aspect-correct viewport, disable blend/depth and preserve alpha.
- * u_sharpness=0 is exactly bilinear; recommended optional strength=0.25.
+ * u_sharpness=0 is exactly bilinear; menu strengths are0.25/0.5/0.75.
  * RGB filtering is in texture code-value space; no implicit gamma conversion.
  * This is not AMD CAS/FSR and contains no third-party implementation. */
 static const char wrath_presentation_filter_glsl[] =

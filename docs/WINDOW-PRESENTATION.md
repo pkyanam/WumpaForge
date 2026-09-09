@@ -120,3 +120,24 @@ The Retina window requests produced exact1280×720,1920×1080 and2560×1440
 drawables, and native action/checkmark/title/fullscreen and displayed-pixel
 assertions passed. The graphics patch reverse-apply check also passed. No new
 live-game validation or game-performance measurement is implied by these controls.
+
+## All sharpening strengths checked
+
+The standalone hidden CGL fixture now covers Off/Light/Medium/Strong at all three
+exact output sizes. In addition to the independent numerical samples, every
+nonzero strength must change at least one sampled RGB edge pixel relative to
+bilinear output. Alpha stays93/255 and bars stay opaque black. All assertions
+pass in `local/reports/presentation-strengths66.log` on Apple M3 / GL4.1 Metal90.5.
+
+At2560x1440, the isolated GPU-pass medians were0.0438ms (Light),0.0522ms (Medium),
+and0.0441ms (Strong). Three batches of eight passes are a small, noisy sample:
+the Medium range was0.0521–1.1239ms. The existing game could still be running on
+the same Mac; no controlled whole-game comparison or input-latency measurement
+was made. The strength-zero fixture uses the same shader for mathematical
+comparison, while production Off uses a linear blit, so these numbers must not
+be presented as the performance difference between production Off and On.
+
+```sh
+clang -std=c11 -O2 -Wall -Wextra tools/test_presentation_filter.c -framework OpenGL -o build/input/test_presentation_filter
+build/input/test_presentation_filter
+```

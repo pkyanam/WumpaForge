@@ -56,16 +56,25 @@ int main(void){
   glBindTexture(GL_TEXTURE_2D,textures[1]);glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
   glBindFramebuffer(GL_FRAMEBUFFER,fb);glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,textures[1],0);assert(glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE);
   glBindTexture(GL_TEXTURE_2D,textures[0]);glViewport(left,0,view,height);
-  for(unsigned mode=0;mode<2;++mode){
-   float strength=mode?.25f:0;glUniform1f(sharp,strength);glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT);glDrawArrays(GL_TRIANGLES,0,3);
+  const float strengths[]={0,.25f,.5f,.75f};
+  uint8_t baseline[6][4]={{0}};
+  for(unsigned mode=0;mode<4;++mode){
+   unsigned changed=0;
+   float strength=strengths[mode];glUniform1f(sharp,strength);glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT);glDrawArrays(GL_TRIANGLES,0,3);
    /* Sample source boundaries, sharp grid edges, interior gradients and alpha. */
    const float uv[][2]={{0,0},{1,1},{.5f,.5f},{.02f,.2f},{.8125f,.8f},{.4f,.022f}};
    for(unsigned p=0;p<6;++p){
     int x=(int)(uv[p][0]*(view-1)),y=(int)(uv[p][1]*(height-1));uint8_t actual[4];
     glReadPixels(left+x,y,1,1,GL_RGBA,GL_UNSIGNED_BYTE,actual);
+    for(int ch=0;ch<4;++ch){
+     if(!mode)baseline[p][ch]=actual[ch];
+     else if(ch<3 && actual[ch]!=baseline[p][ch])++changed;
+     if(ch==3)assert(actual[ch]==93);
+    }
     for(int ch=0;ch<4;++ch){float expected=reference((x+.5f)/view,(y+.5f)/height,ch,strength)*255;
      if(fabsf(actual[ch]-expected)>2.1f){fprintf(stderr,"size%u mode%u p%u ch%d actual%d expected%f\n",size,mode,p,ch,actual[ch],expected);abort();}}
    }
+   if(mode)assert(changed>0); /* Every menu strength actually changes edge pixels. */
    uint8_t bar[4];glReadPixels(0,height/2,1,1,GL_RGBA,GL_UNSIGNED_BYTE,bar);assert(!bar[0]&&!bar[1]&&!bar[2]&&bar[3]==255);
    /* Timer query measures GPU work only. Bounded warmup and eight passes;
     * readback here is fixture instrumentation, never required by the module. */
