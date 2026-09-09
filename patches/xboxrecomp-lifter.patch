@@ -298,7 +298,7 @@ index 55fec47..a1d3c6c 100644
      ranked = sorted(unimplemented.items(),
                      key=lambda kv: (-len(kv[1]), kv[0]))
 diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
-index 468312d..cac5388 100644
+index 468312d..d079a66 100644
 --- a/tools/recomp/lifter.py
 +++ b/tools/recomp/lifter.py
 @@ -254,6 +254,7 @@ FLAG_SETTERS = frozenset({
@@ -447,6 +447,29 @@ index 468312d..cac5388 100644
          return None
 
      # ── rol/ror/rcl/rcr: rotation, only CF/OF affected ──
+@@ -745,11 +801,11 @@ def _emit_cond_goto(cond_expr, jcc, desc, target, lifter):
+         # Conditional tail call: same frame bridge as the unconditional tail
+         # jmp in _lift_jmp, applied only on the taken path.
+         if target in lifter.manual_functions:
+-            return (f"if ({cond_expr}) {{ g_seh_ebp = ebp; "
++            return (f"if ({cond_expr}) {{ g_ebp = g_seh_ebp = ebp; "
+                     f"RECOMP_ITAIL(0x{target:08X}u); return; }}"
+                     f" /* {jcc}: {desc}, manual tail */")
+         name = lifter._call_target_name(target)
+-        return (f"if ({cond_expr}) {{ g_seh_ebp = ebp; {name}(); return; }}"
++        return (f"if ({cond_expr}) {{ g_ebp = g_seh_ebp = ebp; {name}(); return; }}"
+                 f" /* {jcc}: {desc} */")
+     return f"if ({cond_expr}) goto loc_{target:08X}; /* {jcc}: {desc} */"
+
+@@ -939,7 +995,7 @@ class Lifter:
+         self.func_start = 0  # Set per-function by translator
+         self.func_end = 0
+         self.needs_cf = False  # Set per-function by translator (has adc/sbb)
+-        self.publishes_ebp = False  # Set per-function: has a real frame
++        self.publishes_ebp = False  # Set per-function: has a local architectural EBP
+         self.trace_exit_name = None  # Set per-function when traced
+         # Every direct call target we emit a name for, as {addr: name}. The
+         # batch translator diffs this against the functions it actually defined
 @@ -1045,6 +1101,8 @@ class Lifter:
              return self._lift_sar(insn, ops)
          if m in ("rol", "ror"):
@@ -672,7 +695,101 @@ index 468312d..cac5388 100644
          # A cmp sets the carry flag too, and sbb/adc/setc/rcl read it directly
          # rather than through _fa/_fb. Leaving CF alone here let those pick up
          # whatever an earlier instruction had left in it.
-@@ -2263,21 +2362,13 @@ class Lifter:
+@@ -1759,14 +1858,8 @@ class Lifter:
+         if insn.call_target:
+             name = self._call_target_name(insn.call_target)
+             lines = []
+-            # Re-publish this function's frame before every call, not just once
+-            # at `mov ebp, esp`. g_ebp is "the last frame established anywhere",
+-            # so a callee that sets up its own frame overwrites it and leaves it
+-            # stale on return. A frameless helper called afterwards then
+-            # inherits the wrong frame -- in Halo, sub_001E1BA0 called one
+-            # function, returned, then called the frameless sub_001DEC07, which
+-            # inherited a long-dead frame of ~0xA6 and wrote [ebp-0xa2] and
+-            # [ebp-0xa0] onto Xbox VA 4 and 6: exactly the fs:[4] corruption.
++            # Publish the actual local register, including nonstandard EBP
++            # arguments, before crossing a compiled-function boundary.
+             if self.publishes_ebp:
+                 lines.append("g_ebp = ebp; /* frame stays current across calls */")
+                 lines.append("g_seh_ebp = ebp;")
+@@ -1856,7 +1949,8 @@ class Lifter:
+             # target -- `call dword ptr [esp+8]`, the shape MSVC gives a
+             # callback invoked through a stack argument -- is read four bytes
+             # low and dispatches through the wrong slot.
+-            return [f"{{ uint32_t _icall_target = {target}; "
++            prefix = "g_ebp = g_seh_ebp = ebp; " if self.publishes_ebp else ""
++            return [f"{prefix}{{ uint32_t _icall_target = {target}; "
+                     f"PUSH32(esp, 0x{ret_va:08X}u); "
+                     "RECOMP_ICALL_SAFE(_icall_target, _icall_esp); }"
+                     " /* indirect call */"]
+@@ -1865,11 +1959,13 @@ class Lifter:
+     def _lift_ret(self, insn, ops):
+         # x86 'ret' pops return address from stack.
+         # 'ret N' also pops N extra bytes (stdcall cleanup).
+-        # If this function IS __SEH_prolog or __SEH_epilog, bridge ebp
+-        # so the caller can read back the frame pointer.
++        # Publish the register after the original POP/LEAVE epilog. Relays
++        # without a local EBP then inherit the restored frame, not a dead child.
++        # SEH helpers deliberately return a changed frame; keep that exchange.
+         prefix = ""
+-        if self.func_start in (self.SEH_PROLOG, self.SEH_EPILOG):
+-            prefix = "g_seh_ebp = ebp; "
++        if (self.publishes_ebp
++                or self.func_start in (self.SEH_PROLOG, self.SEH_EPILOG)):
++            prefix = "g_ebp = g_seh_ebp = ebp; "
+         # Exit trace, for functions that return with a register the caller
+         # relied on holding something else. Entry tracing alone cannot show
+         # that: it tells you what went in, never what came back. Emitted at the
+@@ -1958,7 +2054,7 @@ class Lifter:
+                 # Bridge ebp so the target function can inherit our frame pointer.
+                 if insn.jump_target in self.manual_functions:
+                     tail = (
+-                        f"g_seh_ebp = ebp; "
++                        f"g_ebp = g_seh_ebp = ebp; "
+                         f"RECOMP_ITAIL(0x{insn.jump_target:08X}u); return; "
+                         f"/* manual tail jmp 0x{insn.jump_target:08X} */"
+                     )
+@@ -1970,7 +2066,7 @@ class Lifter:
+                         ]
+                     return [tail]
+                 name = self._call_target_name(insn.jump_target)
+-                tail = (f"g_seh_ebp = ebp; {name}(); return; "
++                tail = (f"g_ebp = g_seh_ebp = ebp; {name}(); return; "
+                         f"/* tail jmp 0x{insn.jump_target:08X} */")
+                 if self.trace_exit_name:
+                     # Tag the exit so a trace says which one was taken. A
+@@ -1990,10 +2086,10 @@ class Lifter:
+                 lines = [f"{{ uint32_t _jt = {target_expr}; /* switch: {len(switch_targets)} entries, {len(unique_targets)} targets */"]
+                 for t in unique_targets:
+                     lines.append(f"if (_jt == 0x{t:08X}u) goto loc_{t:08X};")
+-                lines.append(f"g_seh_ebp = ebp; RECOMP_ITAIL(_jt); return; }}")
++                lines.append(f"g_ebp = g_seh_ebp = ebp; RECOMP_ITAIL(_jt); return; }}")
+                 return lines
+             target = _fmt_operand_read(ops[0])
+-            return [f"g_seh_ebp = ebp; RECOMP_ITAIL({target}); return; /* indirect tail jmp */"]
++            return [f"g_ebp = g_seh_ebp = ebp; RECOMP_ITAIL({target}); return; /* indirect tail jmp */"]
+         return ["/* jmp: no target */"]
+
+     def _lift_jcc(self, insn):
+@@ -2007,7 +2103,7 @@ class Lifter:
+             if target:
+                 if self._is_external_target(target):
+                     name = self._call_target_name(target)
+-                    return [f"if ({cond}) {{ g_seh_ebp = ebp; {name}(); return; }} /* {jcc} */"]
++                    return [f"if ({cond}) {{ g_ebp = g_seh_ebp = ebp; {name}(); return; }} /* {jcc} */"]
+                 return [f"if ({cond}) goto loc_{target:08X}; /* {jcc} */"]
+             return [f"/* {jcc} - no target */"]
+
+@@ -2030,7 +2126,7 @@ class Lifter:
+         if target:
+             if self._is_external_target(target):
+                 name = self._call_target_name(target)
+-                return [f"if ({cond} /* {jcc}: {desc} */) {{ g_seh_ebp = ebp; {name}(); return; }}"]
++                return [f"if ({cond} /* {jcc}: {desc} */) {{ g_ebp = g_seh_ebp = ebp; {name}(); return; }}"]
+             return [f"if ({cond} /* {jcc}: {desc} */) goto loc_{target:08X};"]
+         return [f"/* {jcc}: {desc} - no target */"]
+
+@@ -2263,21 +2359,13 @@ class Lifter:
          if not ops:
              return [f"/* {m}: no operands */"]
 
@@ -695,7 +812,7 @@ index 468312d..cac5388 100644
              if is_mm(dst):
                  return [f"{dst.reg} = {self._MMX_BINARY[m]}({a}, {b}); /* {m} */"]
              return [f"/* TODO: {m} {insn.op_str} (dst not mm) */"]
-@@ -2291,7 +2382,7 @@ class Lifter:
+@@ -2291,7 +2379,7 @@ class Lifter:
              elif count.type == "mem":
                  cnt = f"MMX_MEM({_fmt_mem(count)}).q"
              else:
@@ -704,7 +821,7 @@ index 468312d..cac5388 100644
              return [f"{dst.reg} = {self._MMX_SHIFT[m]}({dst.reg}, {cnt}); /* {m} */"]
 
          # cvtps2pi / cvttps2pi: two singles in, two dwords out. The source is
-@@ -2306,20 +2397,20 @@ class Lifter:
+@@ -2306,20 +2394,20 @@ class Lifter:
                  addr = _fmt_mem(s_op)
                  lo, hi = f"MEMF({addr})", f"MEMF(({addr}) + 4)"
              else:
@@ -728,7 +845,7 @@ index 468312d..cac5388 100644
              return [f"{dst.reg} = MMX_PINSRW({dst.reg}, {v}, "
                      f"{ops[2].imm & 0xFF}u); /* pinsrw */"]
 
-@@ -2351,14 +2442,14 @@ class Lifter:
+@@ -2351,14 +2439,14 @@ class Lifter:
                               " /* movd */"])
                  if dst.type == "reg":
                      return [f"{dst.reg} = {ops[1].reg}.ud[0]; /* movd */"]
@@ -745,7 +862,7 @@ index 468312d..cac5388 100644
 
      def _lift_sse(self, insn, m, ops):
          """Translate SSE instructions to C float operations."""
-@@ -2758,6 +2849,10 @@ class Lifter:
+@@ -2758,6 +2846,10 @@ class Lifter:
                      dst = "fp_st1()" if idx == 1 else \
                            f"g_fp_stack[(g_fp_top + {idx}) & 7]"
                      parts.append(f"{dst} = fp_top();")
@@ -756,7 +873,7 @@ index 468312d..cac5388 100644
                  if m == "fstp":
                      parts.append("fp_pop();")
                  body = " ".join(parts) if parts else "(void)0;"
-@@ -2776,9 +2871,32 @@ class Lifter:
+@@ -2776,9 +2868,32 @@ class Lifter:
                  mem_acc = _smem_accessor(size)
                  int_type = {2: "int16_t", 4: "int32_t", 8: "int64_t"}.get(
                      size, "int32_t")
@@ -791,7 +908,7 @@ index 468312d..cac5388 100644
              return [f"/* {m} {insn.op_str} */"]
 
          if m in ("fadd", "faddp", "fsub", "fsubp", "fsubr", "fsubrp",
-@@ -2895,15 +3013,29 @@ class Lifter:
+@@ -2895,15 +3010,29 @@ class Lifter:
          if m == "f2xm1":
              return [f"fp_top() = exp2(fp_top()) - 1.0; /* f2xm1 */"]
          if m in ("fprem", "fprem1"):
@@ -827,7 +944,7 @@ index 468312d..cac5388 100644
          if m == "fldpi":
              return [f"fp_push(3.14159265358979323846); /* fldpi */"]
          if m == "fldl2e":
-@@ -2915,8 +3047,15 @@ class Lifter:
+@@ -2915,8 +3044,15 @@ class Lifter:
          if m == "fldln2":
              return [f"fp_push(0.69314718055994530942); /* fldln2 */"]
          if m == "ftst":
@@ -845,7 +962,7 @@ index 468312d..cac5388 100644
          if m == "fxch":
              # fxch st(i) swaps st0 with st(i); the bare form is st(1). Was
              # hardcoded to st1, so fxch st(2)/st(3)/st(4) (86/7/1 sites in Halo)
-@@ -2930,7 +3069,12 @@ class Lifter:
+@@ -2930,7 +3066,12 @@ class Lifter:
              i = (self._st_index(ops[-1].reg)
                   if (ops and ops[-1].type == "reg" and ops[-1].reg) else 1)
              dst = self._st_expr(i)
@@ -859,7 +976,7 @@ index 468312d..cac5388 100644
                      f" /* fxch {insn.op_str} */"]
          if m in ("fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp"):
              # Compare st0 against the operand, not always st1. `fcomp [mem]`
-@@ -2950,7 +3094,7 @@ class Lifter:
+@@ -2950,7 +3091,7 @@ class Lifter:
              npop = 2 if m.endswith("pp") else (1 if m.endswith("p") else 0)
              pops = " fp_pop();" * npop
              return [f"g_fp_cmp = RECOMP_FCMP(fp_top(), {rhs});"
@@ -868,7 +985,7 @@ index 468312d..cac5388 100644
          if m in ("fcompi", "fcomip", "fucomi", "fucompi", "fucomip", "fcomi"):
              # These set EFLAGS directly (CF, ZF, PF) from FPU comparison
              # fcompi/fucompi pop st(0) after comparing; fcomi/fucomi do not
-@@ -2976,10 +3120,7 @@ class Lifter:
+@@ -2976,10 +3117,7 @@ class Lifter:
              # `test ah, 0x44; jp` -- the standard isnan idiom -- reads exactly
              # those two bits. Reporting equal for a NaN compare sends every
              # float classification in a title down the wrong branch.
@@ -880,7 +997,7 @@ index 468312d..cac5388 100644
              if insn.op_str.strip() in ("ax", "eax"):
                  # `fnstsw ax` writes the whole of AX, not just AH.
                  return [f"eax = (eax & 0xFFFF0000u) | (uint32_t){status};"
-@@ -3015,7 +3156,96 @@ class Lifter:
+@@ -3015,7 +3153,96 @@ class Lifter:
          if m == "fld1":
              return [f"fp_push(1.0); /* fld1 */"]
 
@@ -978,7 +1095,7 @@ index 468312d..cac5388 100644
 
 
  def lift_basic_block(lifter, bb, flag_state=None):
-@@ -3131,56 +3361,17 @@ def lift_basic_block(lifter, bb, flag_state=None):
+@@ -3131,56 +3358,17 @@ def lift_basic_block(lifter, bb, flag_state=None):
              results = lifter._lift_neg(
                  curr, curr.operands, preserve_carry=preserve)
          else:
@@ -1044,7 +1161,7 @@ index 468312d..cac5388 100644
          i += 1
 
 diff --git a/tools/recomp/translator.py b/tools/recomp/translator.py
-index 978b319..61b17e1 100644
+index 978b319..149e2a1 100644
 --- a/tools/recomp/translator.py
 +++ b/tools/recomp/translator.py
 @@ -22,7 +22,7 @@ import struct
@@ -1077,7 +1194,41 @@ index 978b319..61b17e1 100644
                  return True
              cc = None
              if m.startswith("j") and len(m) > 1:
-@@ -851,6 +853,9 @@ class FunctionTranslator:
+@@ -774,30 +776,10 @@ class FunctionTranslator:
+         # and must NOT be declared locally, otherwise the local shadows
+         # the global and cross-function register passing breaks.
+         # Volatile registers (eax, ecx, edx, esp) are also global via macros.
+-        reg_decls = []
++        # Even a standard prologue first PUSHes the incoming architectural EBP.
++        # Initializing only frameless functions corrupts saved guest frame bytes.
+         if "ebp" in used_regs:
+-            reg_decls.append("ebp")
+-        if reg_decls:
+-            lines.append(f"    uint32_t {', '.join(reg_decls)};")
+-
+-        # A function with no `push ebp; mov ebp, esp` prologue that still reads
+-        # ebp is addressing its *caller's* frame. MSVC emits these for shared
+-        # tails and helpers; Halo's CRT float formatting (sub_001DEC07) opens
+-        # with `cmp byte ptr [edx+0xe], 5` and goes straight to [ebp-0xa4].
+-        #
+-        # ebp is a per-function local, so without this it starts as garbage and
+-        # every [ebp-N] store lands wherever that points. In Halo that was the
+-        # fake TIB at Xbox VA 0: `mov [ebp-0xa2], bx` destroyed fs:[4], and the
+-        # next TLS lookup faulted, thousands of calls away from the cause.
+-        #
+-        # Inherit it instead. Frame-establishing functions publish g_ebp when
+-        # they execute `mov ebp, esp` (see the lifter), so the value is the
+-        # nearest enclosing frame -- which is exactly what the hardware ebp
+-        # would still hold. Deliberately not the same as making ebp global:
+-        # that also changes save/restore, and a callee that fails to restore
+-        # then corrupts its caller (tried; esp underflowed inside XapiStartup).
+-        if "ebp" in used_regs and not self._func_has_prologue(instructions):
+-            lines.append("    ebp = g_ebp;  /* frameless: caller's frame */")
++            lines.append("    uint32_t ebp = g_ebp;")
+
+         # Add _flags variable if function has conditional instructions
+         has_conditionals = any(
+@@ -851,6 +833,9 @@ class FunctionTranslator:
          # setter a branch reads is the lifter's tracking rule, mirrored here so
          # only the functions that consume CF declare it: computing it beside
          # every add in the image would be a line per add in 48,000 functions.
@@ -1087,10 +1238,11 @@ index 978b319..61b17e1 100644
          has_carry = self._function_needs_cf(instructions)
          if has_carry:
              lines.append(f"    int _cf = 0; /* carry flag */")
-@@ -859,6 +864,13 @@ class FunctionTranslator:
+@@ -859,7 +844,14 @@ class FunctionTranslator:
          # corrupts multi-word arithmetic (add/adc pairs) and the shr/adc
          # idiom MSVC emits for odd trailing elements.
          self.lifter.needs_cf = has_carry
+-        self.lifter.publishes_ebp = self._func_owns_a_frame(instructions)
 +        self.lifter.needs_shift_snapshot = any(insn.mnemonic in ("shl", "shr", "shld", "shrd") for insn in instructions)
 +        if self.lifter.needs_shift_snapshot:
 +            lines.append("    uint32_t _shift_result = 0; (void)_shift_result;")
@@ -1098,10 +1250,11 @@ index 978b319..61b17e1 100644
 +        self.lifter.needs_rotate_snapshot = any(insn.mnemonic in ("rol", "ror", "rcl", "rcr") for insn in instructions)
 +        if self.lifter.needs_rotate_snapshot:
 +            lines.append("    uint32_t _rotate_result = 0; (void)_rotate_result;")
-         self.lifter.publishes_ebp = self._func_owns_a_frame(instructions)
++        self.lifter.publishes_ebp = "ebp" in used_regs
 
          # SSE and MMX are architectural state, declared globally by the
-@@ -914,19 +926,65 @@ class FunctionTranslator:
+         # runtime exactly like the GPRs and the x87 stack. Declaring either
+@@ -914,19 +906,65 @@ class FunctionTranslator:
          # whatever instruction happens to sit above it -- silently, and with a
          # perfectly plausible-looking condition.
          preds = {bb.start: set() for bb in blocks}
@@ -1168,7 +1321,7 @@ index 978b319..61b17e1 100644
          for bb in blocks:
              # Emit label if this block is a branch target
              if bb.start in label_addrs or bb.start == start:
-@@ -937,25 +995,8 @@ class FunctionTranslator:
+@@ -937,25 +975,8 @@ class FunctionTranslator:
                  # compile. The null statement costs nothing and is always valid.
                  lines.append(f"loc_{bb.start:08X}: ;")
 
@@ -1196,7 +1349,16 @@ index 978b319..61b17e1 100644
              for stmt in stmts:
                  lines.append(f"    {stmt}")
 
-@@ -1378,7 +1419,7 @@ class BatchTranslator:
+@@ -964,7 +985,7 @@ class FunctionTranslator:
+         # Continue into the next function when control runs off the bottom.
+         if fallthrough_target is not None:
+             ft_name = self.lifter._call_target_name(fallthrough_target)
+-            lines.append(f"    g_seh_ebp = ebp; {ft_name}(); return;"
++            lines.append(f"    g_ebp = g_seh_ebp = ebp; {ft_name}(); return;"
+                          f" /* fallthrough 0x{fallthrough_target:08X} */")
+             lines.append(f"")
+
+@@ -1378,7 +1399,7 @@ class BatchTranslator:
              "/**",
              f" * {_config.banner_name(getattr(self, 'title', None))}"
              f" - Recompiled Function Declarations",
@@ -1205,7 +1367,7 @@ index 978b319..61b17e1 100644
              " */",
              "",
              "#ifndef RECOMP_FUNCS_H",
-@@ -1387,23 +1428,15 @@ class BatchTranslator:
+@@ -1387,23 +1408,15 @@ class BatchTranslator:
              '#include "recomp_types.h"',
              "",
          ]
@@ -1235,7 +1397,7 @@ index 978b319..61b17e1 100644
          header_lines.extend(["", "#endif /* RECOMP_FUNCS_H */", ""])
 
          with open(header_path, "w", encoding="utf-8") as f:
-@@ -1461,8 +1494,12 @@ class BatchTranslator:
+@@ -1461,8 +1474,12 @@ class BatchTranslator:
 
          # Split translations into chunks and write .c files
          generated_files = [header_path]
@@ -1250,7 +1412,7 @@ index 978b319..61b17e1 100644
 
          # Remove chunk files a previous, larger run left behind. Projects glob
          # gen/*.c into their build, so a stale chunk keeps compiling: it still
-@@ -1485,8 +1522,8 @@ class BatchTranslator:
+@@ -1485,8 +1502,8 @@ class BatchTranslator:
                  "/**",
                  f" * {_config.banner_name(getattr(self, 'title', None))}"
                  f" - Recompiled code chunk {ci}",
@@ -1261,7 +1423,7 @@ index 978b319..61b17e1 100644
                  " */",
                  "",
                  "#define RECOMP_GENERATED_CODE",
-@@ -1541,7 +1578,7 @@ class BatchTranslator:
+@@ -1541,7 +1558,7 @@ class BatchTranslator:
                  popped = self.translator._stub_ret_bytes(addr)
                  note = (f"ret {popped}" if popped else "not detected")
                  stub_lines.append(
