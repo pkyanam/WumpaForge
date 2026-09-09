@@ -1,130 +1,95 @@
-# Native Wrath of Cortex workspace
+# WumpaForge contributor and agent guide
 
-## Objective and authorization
-Get the user's supplied Crash Bandicoot: The Wrath of Cortex ISO running as a native
-Apple Silicon macOS game, without emulation. The user authorizes local development,
-downloads of relevant tools/source, launches, and UI testing. Work resource efficiently.
-The user explicitly clarified that ahead-of-time ARM64 recompilation with Xbox
-graphics, audio, and system-call compatibility layers is acceptable. Use the
-xboxrecomp static pipeline and runtime as needed; no CPU interpreter/JIT fallback.
-Wireless Xbox One/Series X and PS5 DualSense controllers paired through macOS
-Bluetooth must be supported. SDL's game-controller mappings are the host interface.
-Keyboard and mouse controls are also required, scoped to the focused game window.
-The next playable milestone is at least one of the first five levels in the first
-realm; user now specifically requests the winter/penguin level in area1. Keep
-the original intro/story available to watch or skip. Maintain correct
-assets, audio synchronization and a 60 FPS performance target; report measured
-performance and unverified physical hardware honestly.
-After initial playability, the user also requests a resizable/maximizable window,
-fullscreen, and optional efficient sharpened upscaling to HD/FHD/QHD output.
-Keep original internal rendering and aspect ratio separate from output sizing;
-measure cost and latency rather than promising zero performance loss.
-The user permits subagents when they speed the work up; use bounded disjoint tasks.
-Do not equate a native emulator executable, title-screen mockup, asset viewer, or
-compilable console binary with a working native game.
+## Project scope
 
-## Continuity
-- Read `docs/STATUS.md` and recent `git log` when resuming.
-- Update status with concrete evidence, commands, blockers, and the next useful step.
-- Make small descriptive Git commits at meaningful milestones. Do not commit game
-  assets, the original ISO, binaries, build output, or dependency checkouts.
-- Preserve the supplied ISO in place and treat it as read-only.
+WumpaForge builds a native Apple Silicon macOS app from a user-supplied supported
+USA Xbox disc image of Crash Bandicoot: The Wrath of Cortex. The game CPU code is
+ahead-of-time recompiled to ARM64; Xbox graphics, audio and system calls use native
+compatibility layers. Do not add a CPU interpreter or JIT fallback, and do not
+present a native emulator executable or asset viewer as a native game port.
 
-## Layout
-- `tools/`: reproducible local tooling.
-- `docs/`: findings, source provenance, status, and plans.
-- `third_party/`: ignored upstream source checkouts; record URLs and revisions in docs.
-- `local/assets/`: ignored extracted assets, only as needed.
-- `local/reports/`: ignored generated inventories and diagnostics.
-- `build/`: ignored build products; `.venv/` for Python packages if needed.
+Read README.md for setup, docs/STATUS.md and recent Git history for current
+validation, and docs/LICENSING.md and THIRD_PARTY_NOTICES.md before distribution
+changes. The Android experiment is isolated under android/shield2019 and has its
+own AGENTS.md. The public release workflow focuses on macOS.
 
-## Resource and validation conventions
-- Prefer existing system/Homebrew tools, stdlib Python, shallow clones, and selective
-  extraction. Inspect before downloading SDKs or doing large builds.
-- Use at most two compile jobs initially on this fanless 24 GB M3 MacBook Air.
-- Validate actual native arm64 machine code and playable behavior before claiming
-  success. Record incomplete subsystems honestly; do not conceal stubs.
-- Ahead-of-time game-code translation and graphics/audio/system compatibility are
-  authorized. Verify that game CPU instructions execute as compiled ARM64 code.
-- Do not publish assets or contact others without user authorization.
+## User input and repository contents
 
-## Guest ABI and memory conventions
-- Guest pointer/size fields remain DWORDs on arm64. Read and write them explicitly;
-  never pass their addresses to host APIs expecting pointer-sized output fields.
-- Guest virtual releases return exact owned blocks through xbox_HeapFreeChecked.
-  Preserve tested heap splitting/coalescing and image-derived stack sizing.
-- Keep actual callback registration evidence with extra AOT function seeds.
+- Treat the supplied ISO as read-only. Never download or redistribute the game.
+- Keep the ISO, extracted assets, generated game C, game captures, executables,
+  dependency checkouts and credentials out of Git and release attachments.
+- Source releases contain tooling, compatibility source, patches, synthetic tests
+  and documentation. Locally built game apps contain user-supplied material and
+  are not public release artifacts.
+- Preserve upstream licenses and notices. A project license does not relicense
+  the retail game or override component-specific GPL/LGPL and other terms.
+- Newly generated project branding under assets/branding is intentionally tracked;
+  its provenance is documented in docs/BRANDING.md.
+
+## Workspace and resource conventions
+
+- `tools/`: reproducible setup, packaging, diagnostics and tests.
+- `src/`, `patches/`: native compatibility implementations and upstream changes.
+- `docs/`: architecture, provenance, measured validation and known limitations.
+- `third_party/`: ignored dependency checkouts at documented revisions.
+- `local/assets/`, `local/reports/`: ignored extraction and diagnostic outputs.
+- `build/`, `.venv/`: ignored build products and Python environment.
+- Use at most two compile jobs total, including parallel agents. Prefer incremental
+  builds, existing tools and bounded disjoint agent tasks where they save time.
+- Keep changes small and descriptive in Git. Never overwrite unrelated work.
+- Record concrete commands, results and remaining gaps in status documentation.
+  A passing fixture does not prove whole-game correctness or crash freedom.
+
+## Guest ABI and runtime correctness
+
+- Guest pointer and size fields remain 32-bit DWORDs on ARM64. Read/write them
+  explicitly; never pass their addresses to host APIs expecting pointer-sized
+  output fields.
+- Guest virtual releases must return exact owned blocks through
+  xbox_HeapFreeChecked. Preserve tested heap splitting/coalescing and image-derived
+  stack sizing.
+- Keep callback-registration evidence with additional AOT function seeds.
   Unresolved code must be compiled or implemented faithfully, never silently skipped.
+- Treat guest registers, dispatch selection and thread clocks according to their
+  actual thread ownership. Check both generated source and compiled symbols when
+  validating fixes that depend on thread-local storage.
+- Apply patches to their intended upstream revision and verify actual mutations;
+  successful command exit alone is insufficient when Git can discover a parent
+  repository and silently skip nested build-directory patches.
 
-## Native graphics conventions
-- The original game renders its loading screen from worker2BF30. Serialize native
-  graphics/resource access across game threads; do not reinstate a blanket main
-  thread-only guard or call SDL window APIs from workers. graphics.c acquires once
-  per SDK entry through arg()/graphics_thread() and releases in finish().
-- Keep SDL creation/events on the Cocoa main thread. The backend uses native CGL
-  for context handoff and worker presentation, plus a monotonic refresh deadline.
-- The graphics toolkit patch includes both src/d3d/d3d8_gl.c and its CMakeLists.txt
-  (OpenGL framework linkage). Preserve both when regenerating that patch.
-- See docs/STATUS.md for the current unimplemented boundary. Native component
-  tests and a correct splash do not prove title/menu/gameplay completion.
-- Read docs/research/README.md for the architecture audit and next diagnostic.
-  Pair original scene/fade/animation state with draw state and actual pixels before
-  changing timing or graphics conventions to explain a black frame.
+## Graphics, audio and input
 
-## Private staging and future platforms
-- Project name: WumpaForge. The user authorizes creating and pushing the private
-  `pkyanam/WumpaForge` GitHub repository via `gh`. Keep it private; public release
-  and prebuilt binary distribution are separate future decisions.
-- Audit tracked files and history before uploading. Never force-add the ISO,
-  extracted assets, generated game code, game captures, credentials or binaries.
-- Contributors bring their own supported Xbox ISO; extracted assets are needed
-  at runtime as well as during setup. Preserve existing upstream license notices.
-  A future restrictive commercial license must not be promised for third-party work.
-- macOS Apple Silicon is the only validated platform. Document future ARM64 OS
-  seams without claiming iOS/Android/Shield support from CPU compatibility alone.
-- The user completed Arctic Antics on build61. Retained physical vertex-fetch
-  bounds on return to the hub were fixed in build63 and need live verification.
-- Root coordinates full builds and game/UI tests. Run at most two compiler jobs
-  total. Parallel agents should own disjoint files and commit bounded changes.
+- Loading screens render from worker2BF30. Serialize graphics/resource access
+  across game threads; do not restore a blanket main-thread-only guard.
+  graphics.c acquires once per SDK entry through arg()/graphics_thread() and
+  releases in finish(). Never retain the native graphics lock across arbitrary
+  guest code without proving guest-lock and wait ordering.
+- Keep SDL creation/events on the Cocoa main thread. The Mac backend uses native
+  CGL context handoff and worker presentation with a monotonic refresh deadline.
+  Do not call SDL window APIs from workers.
+- The graphics toolkit patch includes src/d3d/d3d8_gl.c and its CMakeLists.txt
+  OpenGL framework linkage. Preserve both when regenerating the patch.
+- Pair original scene/fade/animation state with draw state and actual pixels before
+  changing timing or graphics conventions to explain a black frame. Consult
+  docs/research/README.md and relevant audit notes.
+- Keep original intro/story playback available to watch or skip. Preserve audio
+  synchronization, asset loading and controls while optimizing frame time.
+- Keyboard/mouse controls must remain scoped to the focused game window. Use SDL
+  controller mappings for Bluetooth Xbox One/Series and DualSense controllers;
+  synthetic input tests do not validate physical pairing or rumble.
+- Preserve resizable/fullscreen presentation. Keep original internal resolution
+  and aspect ratio separate from HD/FHD/QHD output sizing and sharpening.
 
-## September 8 evening wrap-up
-- The user requested continued work until midnight America/New_York, wrapping by
-  2026-09-09 00:00 EDT (04:00 UTC). Reserve the last15 minutes for validation,
-  packaging, private push and a candid handoff; avoid unreviewed late changes.
-- Add a generated fruit/crate app icon (root owns branding/package tooling),
-  discoverable1440p output and sharpening controls (mac_runtime owns presentation),
-  and test actual displayed pixels and performance. Output scaling is not new
-  internal scene detail; document actual drawable size on Retina/fullscreen.
-- Finish with a primary-source Shield/AndroidTV plan and small validated source
-  scaffolding only. No promised working APK or unrequested large SDK downloads.
-- Newly generated project branding in assets/branding is intentionally tracked;
-  original game assets, captures and binaries remain excluded.
+## Validation and release claims
 
-- Latest validation preference: the user reported a glitched attract demo and
-  requests source audits plus synthetic CPU/GPU tests instead of further live
-  game testing for now. Report per-path evidence, not a made-up99.5% guarantee.
-- Shield scope is specifically NVIDIA SHIELD TV Pro2019 (mdarcy), not other models.
+The 60 FPS target applies to gameplay, hub and transitions; report measured scene
+performance rather than promising zero lag or universal performance. Upscaling
+changes output presentation, not the original scene detail. Check ARM64 machine
+code and linked dependencies when packaging. Preserve known unimplemented paths
+and visual limitations in documentation.
 
-## Midnight handoff checkpoint
-- The September 8 evening work is wrapped. Build 68 is packaged from source
-  ab6d29d; later commits update packaging metadata and handoff documentation.
-- All implementation agents are finished. The requested first-level milestone
-  was demonstrated by the user's completed Arctic Antics run on build 61.
-  Build 68 passed CPU/GPU component checks but has not had another live play pass.
-- Keep the latest source-only validation preference until the user requests game
-  testing. Resume further development on user instruction; the elapsed midnight
-  deadline is not authorization for a recurring or indefinite background task.
-- Read current STATUS, README, CHANGELOG and Git history. Preserve known gaps;
-  do not reinterpret a passing fixture as whole-game correctness or crash freedom.
-
-## September 9 Shield follow-up
-- User authorized a few hours in a separate folder to advance the Shield build,
-  then clarified to stop early when meaningful progress needs device access.
-- Target remains 2019 Pro only. Device named SHIELD is unavailable until the user
-  provides access; do not discover/connect to it in the meantime.
-- Work lives in android/shield2019; read its AGENTS.md and README. Preserve Mac
-  runtime/build 68. Android patches apply only to disposable build-tree copies.
-- Weekly allowance must stay at least 20% remaining. Started at 35% remaining;
-  check the account tool and stop new work with a buffer (23% remaining).
-- Generic Android-recognized Bluetooth gamepads are in scope. Host synthetic
-  checks do not prove physical pairing, rumble or game performance on the Shield.
+Run focused checks appropriate to changed code. Asset-free CI covers source and
+synthetic checks; it cannot validate a complete game build or gameplay. Use only
+user-supplied game material for local validation. Document physical testing
+separately from offline tests and do not assume availability of someone's device
+or permission to interrupt its screen from a prior development session.

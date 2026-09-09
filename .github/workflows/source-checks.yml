@@ -1,0 +1,47 @@
+name: Source checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  asset-free:
+    name: Asset-free checks (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile tracked Python source
+        run: |
+          python - <<'PY'
+          import py_compile
+          import subprocess
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          for path in paths:
+              if path.endswith('.py'):
+                  py_compile.compile(path, doraise=True)
+          PY
+      - name: Check setup shell syntax
+        run: |
+          bash -n setup.sh
+          bash -n install.sh
+          bash -n "Build WumpaForge.command"
+      - name: Test source-only tooling
+        run: |
+          python tools/test_package.py
+          python tools/test_audio_probe.py
+          python android/test_preflight.py
+          python android/shield2019/test_artifacts.py
+          python android/shield2019/test_device.py

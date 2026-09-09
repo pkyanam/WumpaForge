@@ -1,75 +1,55 @@
-# Shield Pro 2019 development
+# Shield Pro 2019 contributor guide
 
-User authorized a few hours of Android build work on September 9, starting
-08:24 UTC, in this separate folder. Target only the 2019 Pro (`mdarcy`), ARM64.
-The user authorized network ADB to 192.168.1.46 on September 9; the device is
-verified NVIDIA mdarcy, Android 11/API30, ARM64. Use the explicit ADB serial.
+This directory preserves an experimental native Android build for NVIDIA SHIELD
+TV Pro 2019 (`mdarcy`), ARM64. It is outside the Mac-focused public setup promise.
+Read README.md, PERFORMANCE-AUDIT.md, RUNTIME-NOTES.md and the latest root
+`docs/STATUS.md` before changing it. Root AGENTS.md also applies.
 
-- Check account weekly usage before each substantial work chunk. Started at
-  65% used (35% remaining). The latest user instruction is to keep working efficiently and preserve20%
-  weekly remaining. Stop new work at77% used to reserve a documentation buffer;
-  do not intentionally cross80% used.
-  Account usage is shared, so recheck during builds and before final actions.
-- Aim to wrap by 11:24 UTC or the usage threshold, whichever comes first.
-- Source/configuration lives here. Downloads, copied runtime, generated loaders,
-  object files, APKs and local signing keys go under ignored build/shield2019.
-  Diagnostics go under ignored local/reports/shield2019.
-- Preserve the macOS source/runtime and build 68. Apply Android-only patches to
-  an isolated copy of the already patched runtime, never its macOS checkout.
-- At most two compiler jobs total. Reuse the installed SDK/NDK and pinned SDL2.
-- Native AOT ARM64 game code only; no CPU interpreter/JIT. No game assets in APK
-  or Git. A cross-compiled library/APK is not proof of a working Shield launch.
-- Use SDL mappings for Android-recognized gamepads of any brand. Reconnection,
-  stale input clearing and actual Bluetooth behavior need on-device validation.
-- Keep precise progress and remaining device gates in README.md and Git history.
+## Isolation and build limits
 
-## Handoff
-The user explicitly allowed stopping early rather than filling the time budget.
-Device testing has resumed with explicit authorization. Memory, desktop GL, full
-graphics components and PCM callback checks pass. Actual game opening renders,
-but initial performance was only about16FPS with severe audio/video desync.
-Do not describe it as playable. Root is measuring Android context overhead and
-adding a remote control scheme. Read README for the current evidence.
+- Keep Android-only source/configuration here. Apply Android patches to disposable
+  build-tree copies of the patched runtime; do not modify the Mac dependency
+  checkout or change working Mac behavior as an incidental Android optimization.
+- Downloads, copied runtime, generated GL loaders, objects, APKs and local signing
+  keys belong under ignored build/shield2019. Diagnostic outputs belong under
+  ignored local/reports/shield2019.
+- Run at most two compiler jobs total across all contributors/agents. Reuse existing
+  SDK/NDK installations and the documented pinned SDL dependency where possible.
+- Keep native AOT ARM64 game execution; no CPU interpreter/JIT fallback.
+- Never include original game assets in Git or an APK. A compiled APK or native
+  library is not evidence of a playable or performant Shield build.
 
-## Latest rendering continuation
-The user reiterated parallel Shield60FPS work. Three bounded agents audited
-context/draw submission, shader data, and presentation. Real GPU suite passes
-through vertex-uniform cache source9166913; installed latest APK. Mac untouched.
-Read PERFORMANCE-AUDIT.md and root docs/STATUS.md before further optimization.
-Do not mistake the earlier worker-held guestCS observation for a proven lock leak:
-33 traced outer worker releases reached depth0 with successfulpthread unlocks.
-A subsequent story-skip/hub load crashed in original heapEF72D atEF7DB, reading
-MEM16(ESI-8) withESI0; trace heapMEM32(9453B0), head+180, requestF1629.
-Do not bypass originalEndStateBlock or force-unlock locks to hide that corruption.
-Never keep native graphics mutex across arbitrary generated guest code without
-proving guest-lock/wait ordering. Current context release overhead remains large.
-Useful ignored reports: render-current.data/dump/report (indexed scan10.38%CPU),
-bounds-current-report (different later scene; do not claim controlledcomparison),
-uniform-values-graphics.log (fullphysicalGPU pass), hub-crash-logcat.txt.
-Latest weeklycheck77%used (23%remaining): new work paused at buffer. Finish
-source handoff only; preserve20%remaining. All implementation agents finished.
+## Device and input
 
-## Explicit resume authorization
-The user explicitly resumed after the77%buffer pause and requests parallel
-performance/allocation work plus primary-source Shield architecture research.
-Continue bounded work beyond the old77%buffer; preserve20%remaining and check
-before builds. The old clock deadline/pause is superseded. User reports hub
-movement and level selection, followed by endless green loading; not levelplay.
+Use an explicitly supplied ADB serial; do not discover or connect to a private
+network device from historical notes. Coordinate display testing with its owner.
+Offline work can continue while the TV is occupied. Record exact device model,
+Android version, graphics capabilities and observed behavior with test results.
 
-## Latest allowance authorization
-The user explicitly authorizes working past20% weekly remaining to get the game
-working. The earlier20%floor and77%buffer are superseded. Remain token/resource
-efficient; no arbitrary usage burn. Root owns device testing and two-job builds.
+Use SDL mappings for Android-recognized Bluetooth controllers. Preserve remote
+control mappings, focus handling and stale-input clearing. Physical pairing,
+reconnection, rumble and control usability require actual device validation.
 
-## Latest physical and integration checkpoint
-Arctic Antics loaded on actual-TLS run22299; no completed Shield level or60FPS
-claim. Read root STATUS latest section. The first TLS patch had silently skipped
-inside ignored build dirs; prepare.py now fences Git discovery and reverse-checks
-all applications. Verify symbol g_kernel_dispatch_slot is TLS, not OBJECT.
-Three newly requested researchers completed shader/CPU/timing work. Whole shader
-RPC and GPU-copy physical fixtures pass. New indexed shader path/O2 APK compiles
-but awaits physical validation. Actual driver context is GL4.1 NVIDIA495.00; gate
-GL4.3-only states by real version/extension. Default AOT optimization remains1;
-experimental build flag `--aot-opt 2` enables2.
-The user explicitly asked to leave the TV free after it switched to Hulu. Do not
-resume on-screen tests until the user makes it available; offline checks remain authorized.
+## Correctness before performance claims
+
+- Preserve guest-lock/native-graphics-lock ordering. Never force-unlock locks or
+  skip guest work to hide a loading failure.
+- Kernel service dispatch selection is thread-local. Verify
+  `g_kernel_dispatch_slot` is a TLS symbol in the built native library. The first
+  historical fix silently skipped inside an ignored build directory: prepare.py
+  now fences Git discovery and reverse-checks patch applications.
+- Keep experimental GL RPC, indexed shader and AOT optimization switches explicit.
+  Compare equivalent scene windows, count actual presented frames, and separate
+  CPU, GPU, synchronization and loading costs.
+- Use the real context version/extensions before enabling graphics states. The
+  tested driver exposed OpenGL 4.1; do not assume GL 4.3 states are available.
+- Borrowed vertex/index memory must remain valid until rendering completes. Keep
+  serialization, resource lifetime and thread-local profiling behavior intact
+  when moving work onto a persistent GL owner thread.
+- Root owns complete builds and device tests during parallel development; agents
+  should use bounded disjoint source audits or host fixtures.
+
+Arctic Antics reached gameplay on the Shield during development, but stable
+60 FPS and a completed level were not demonstrated. Later experimental paths may
+have only offline or component evidence. Preserve these distinctions and consult
+current status rather than promoting an old checkpoint into a release claim.
