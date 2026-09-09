@@ -64,3 +64,51 @@ the manager's cached selection, and the original draw-job candidate saved on
 the audited A5D40 stack. Its TLS variable read disables LLDB target JIT. This
 extra capture has only a Python syntax check so far. No renderer behavior has
 been changed or missing tangent data invented.
+
+## Confirmed SDK null-address retention
+
+Original102580 stores the requested stride and NULL handle in the stream table,
+and releases the prior stream reference. It marks dirty40 when stride is unchanged,
+or70 when changed (1025DA..102608). It does not clear stream byte offset+4.
+
+Deferred108F40 independently programs vertex-array format and address methods:
+
+- Dirty10 writes all16 format/stride words at NV2A method1760
+  (108FB6..108FED). Stride comes from the newly selected declaration's stream,
+  even when its handle is NULL. Thus retaining an address does **not** retain
+  the prior stride or input type.
+- Address methods1720..175C are emitted only when the declaration format is not
+  disabled2 and its stream handle is nonzero (10900D..109039,109073..1090AA).
+  NULL leaves the physical input attribute's previous address intact. This is
+  per GPU attribute, not per stream number: a new declaration can move v4 from
+  stream0 to stream1 while its address remains from the old v4 binding.
+- Bound address is `Data + declarationOffset + streamOffset + base*stride`.
+  DrawIndexedVertices101BC0 passes device+1C baseVertex to108F40 at101BCE..D8,
+  then submits literal16-bit indices. NULL therefore retains the **old** baked
+  baseVertex address; adding the new indexed base again would be incorrect.
+- DrawVertices101B20 passes base0 to108F40 at101B29..2D. Its startVertex is
+  encoded into DRAW_ARRAYS separately at101B63..BA3. A retained address therefore
+  still receives the **current** non-indexed startVertex through GPU indexing.
+- 108F40 skips address regeneration if no dirty40 and the cached prior base
+  matches (108F74..108F94). Nonzero dirty bits from declaration/binding changes
+  are therefore important when reproducing writes; merely observing SetStreamSource
+  is insufficient because actual address commits happen at draws.
+
+A faithful native implementation, if this path is confirmed, needs an address
+cache per physical attribute, updated by original array draws for **all declared
+attributes**, including shader-dead ones. The existing exact dead-input proof may
+avoid fetching bytes but must not suppress those original address updates. It
+must separate indexed baseVertex from non-indexed firstVertex. Inline immediate
+vertex data does not itself establish a new array address. Fixed-function array
+draws can establish addresses too, and declaration hardware slot remapping needs
+to agree with original1B11C8/1B11D8 tables.
+
+Bounds and lifetime remain required: record the actual resource allocation that
+owns each committed address, validate every retained fetch with the new stride
+and type, and detect release/reuse. The original release marks GPU usage time and
+may defer deletion until queued work completes; a native address cache must not
+silently extend game references or resurrect freed memory. A still-live pooled
+resource permits real retained-byte reads. Missing history, expired ownership or
+an out-of-allocation fetch remains explicit until independently established.
+Overlapping physical allocations or recycled handles need allocation-generation
+identity, not handle equality alone. No zero/default attributes are implied.

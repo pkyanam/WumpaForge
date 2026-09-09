@@ -89,6 +89,17 @@ def dump(debugger, destination):
         'g_esp', options)
     stack = (words(stack_value.GetValueAsUnsigned(), 32)
              if stack_value.IsValid() and stack_value.GetError().Success() else None)
+    queued_materials = []
+    queue_count = words(0x37EA24, 1)
+    queue_address = 0x36CA98
+    for _ in range(min(queue_count[0] if queue_count else 0, 512)):
+        row = words(queue_address, 3)
+        if not row:
+            break
+        if stack and row[1] == stack[4]:
+            queued_materials.append({'entry': queue_address, 'words': row,
+                                     'material': words(row[2], 32)})
+        queue_address = row[0]
     out = {'stream_records': streams, 'registry_matches': matches,
            'active_pools': active_pools, 'errors': errors,
            'scene_address': scene_pointer, 'scene_header': scene,
@@ -98,6 +109,8 @@ def dump(debugger, destination):
            'shader_manager_current': words(0x426CB8, 4),
            'guest_stack': stack,
            'candidate_draw_job': words(stack[4], 16) if stack else None,
+           'reflection_queue_count': queue_count,
+           'matching_queue_materials': queued_materials,
            'reflection_manager_record': words(0x426CB8 + 27 * 20 + 16, 5)}
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
