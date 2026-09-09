@@ -205,3 +205,13 @@ the physical aperture end rejects before any memory read (the smoke allocation
 itself is smaller than production RAM). Never-initialized, released and exact
 same-address recycled-generation tests remain intact. Root owns build63 and live
 post-level hub/save verification.
+
+The follow-up integration fixture now invokes the original indexed-draw bridge
+with NULL stream1, current primary base230 and retained secondary offset44328.
+Its first GPU pixel contains the real neighboring allocation's green/blue values;
+changing only those adjacent bytes to red makes the next indexed draw's pixel
+red. This replaces manual stream0 repacking and checks the complete retained
+secondary-input route. Root ran `build/input/test_retained_dma_integration`
+successfully; `local/reports/retained-dma-integration.log` records this assertion
+and the full renderer suite, including2046 resource allocations/cache/reuse.
+Both component builds used strict warnings; no production behavior changed.

@@ -76,3 +76,11 @@ resize/fullscreen/filter tests (`presentation-swap-fixed.log`). Main and worker
 regression additionally checks the displayed front pixels after all6 actual swaps;
 48 internal readbacks and all6 displayed images pass (`presentation-swap-threads.log`).
 The patch reverse-apply check passes. Root owns build61/live-window verification.
+
+The follow-up fixture checks actual GL_FRONT pixels and black bars after every
+resize, fullscreen entry/repeated key/exit and F10 filter toggle. It also verifies
+that Present restores both read/draw FBOs and buffer selections. Root ran
+`build/input/test_presentation_integration` successfully; the assertions are in
+`local/reports/presentation-transition-integration.log`. This extends displayed
+pixel coverage beyond the earlier single windowed swap. No production behavior
+changed, and these component checks do not measure game performance or latency.

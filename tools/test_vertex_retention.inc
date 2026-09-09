@@ -87,23 +87,29 @@ static void test_vertex_retention(void)
     struct VertexFetch dma_fetch={.first=230,.indices=(const uint8_t *)dma_indices};
     assert(!gather_retained_vertex_attribute(4,&dma_slot,3,&dma_fetch,&gathered));
     assert(!memcmp(gathered,dma_colors,sizeof(dma_colors)));free(gathered);gathered=NULL;
-    /* The same actual bytes feed a native shader, including both vertices in
-     * the neighboring allocation. Preserve the original retained address. */
+    /* Exercise the complete indexed bridge with NULL stream1, including both
+     * neighboring-allocation elements. Stream0 uses the new base230 while the
+     * retained address keeps its previously baked base1847. */
+    dma_create[0]=(230+325+1)*16;call(0x100D70,dma_create,5);assert(g_eax==0);
+    uint32_t dma_primary=read32(dma_create[4]);
+    for(unsigned i=0;i<3;++i)
+        memcpy(guest_ptr(read32(dma_primary+4)+(230+dma_indices[i])*16),triangle[i],16);
+    uint32_t dma_stream[]={0,dma_primary,16};call(0x102580,dma_stream,3);
+    dma_stream[0]=1;dma_stream[1]=0;dma_stream[2]=24;call(0x102580,dma_stream,3);
     write32(object+0x1c+4*16,0x32);call(0x102940,shader,1);
-    struct VertexFetch sequential={0};
-    uint8_t *expanded=NULL;
-    assert(!gather_retained_vertex_attribute(4,&dma_slot,3,&dma_fetch,&expanded));
-    /* Use constant source positions but the real gathered color attribute. */
-    float gpu_vertices[3][7];
-    for(unsigned i=0;i<3;++i){memcpy(gpu_vertices[i],triangle[i],16);memcpy(gpu_vertices[i]+4,expanded+i*12,12);}
-    free(expanded);
-    Nv2aVertexSlot saved_slot=s_vertex_object.slots[4];
-    s_vertex_object.slots[4].stream=0;s_vertex_object.slots[4].offset=16;
-    call(0x100EA0,clear,6);
-    assert(!shader_draw(GL_TRIANGLES,3,gpu_vertices,sizeof(gpu_vertices[0]),&sequential));
+    bind[1]=230;call(0xFFEA0,bind,2);
+    memcpy(guest_ptr(0x20460),dma_indices,sizeof(dma_indices));
+    uint32_t dma_draw[]={5,3,0x20460};
+    call(0x100EA0,clear,6);call(0x101BC0,dma_draw,3);assert(g_eax==0);
     glReadPixels(50,240-50,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
     assert(pixel[0]>100 && pixel[1]>40 && pixel[2]>40); /* interpolated actual RGB */
-    s_vertex_object.slots[4]=saved_slot;
+    assert(!read32(0x10F294) && s_vertex_arrays[4].handle==dma_owner &&
+           s_vertex_arrays[4].offset==44328 && s_vertex_arrays[4].stride==24);
+    /* Only adjacent bytes change; the next real draw must observe them. */
+    for(unsigned i=1;i<3;++i)memcpy(guest_ptr(dma_data+44328+dma_indices[i]*24),red,12);
+    call(0x100EA0,clear,6);call(0x101BC0,dma_draw,3);assert(g_eax==0);
+    glReadPixels(50,240-50,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+    assert(pixel[0]==255 && pixel[1]==0 && pixel[2]==0);
     struct VertexArrayAddress live=s_vertex_arrays[4];
     s_vertex_arrays[4].offset=0x4000000ull-dma_data-8;
     const uint16_t zero_index[]={0};struct VertexFetch at_end={.indices=(const uint8_t *)zero_index};
@@ -112,6 +118,10 @@ static void test_vertex_retention(void)
     uint32_t dma_release[]={dma_owner};call(0x103AD0,dma_release,1);
     assert(gather_retained_vertex_attribute(4,&dma_slot,3,&dma_fetch,&gathered)==D3DERR_INVALIDCALL);
     dma_release[0]=neighbor;call(0x103AD0,dma_release,1);
+    dma_stream[0]=0;dma_stream[1]=primary;dma_stream[2]=16;call(0x102580,dma_stream,3);
+    dma_release[0]=dma_primary;call(0x103AD0,dma_release,1);assert(!resource(dma_primary));
+    bind[1]=3;call(0xFFEA0,bind,2);
+    stream[2]=4;call(0x102580,stream,3);
     s_vertex_arrays[4]=previous;
     write32(object+0x1c+4*16,0x40);call(0x102940,shader,1);
     /* Release must invalidate even if the guest heap later recycles the exact
@@ -147,5 +157,5 @@ static void test_vertex_retention(void)
     stream[0]=0;stream[1]=0;call(0x102580,stream,3);assert(!resource(primary));
     write32(0x10F284,0);write32(0x10F290,0);
     assert(glGetError()==GL_NO_ERROR);
-    puts("PASS: native retained attribute bytes; dead declaration writes, new stride/type, old indexed base, current array start, strict bounds and same-address allocation generations");
+    puts("PASS: native retained attribute bytes; NULL-stream indexed DMA draw observes changed adjacent bytes, dead declaration writes, new stride/type, old indexed base, current array start, strict bounds and same-address allocation generations");
 }

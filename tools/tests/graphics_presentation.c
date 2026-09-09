@@ -18,7 +18,27 @@ static void pixel(int x,int y,unsigned r,unsigned green,unsigned b)
     if(p[0]!=r || p[1]!=green || p[2]!=b)fprintf(stderr,"pixel%d,%d actual%u,%u,%u expected%u,%u,%u\n",x,y,p[0],p[1],p[2],r,green,b);
     assert(p[0]==r && p[1]==green && p[2]==b);
 }
-static void resized(SDL_Window *window,int w,int h)
+static void presented(IDirect3DDevice8 *device,SDL_Window *window)
+{
+    GLint read_fbo,read_buffer,draw_fbo,draw_buffer,actual;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&read_fbo);glGetIntegerv(GL_READ_BUFFER,&read_buffer);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw_fbo);glGetIntegerv(GL_DRAW_BUFFER,&draw_buffer);
+    assert(!device->lpVtbl->Present(device,NULL,NULL,NULL,NULL));
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&actual);assert(actual==draw_fbo);
+    glGetIntegerv(GL_DRAW_BUFFER,&actual);assert(actual==draw_buffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&actual);assert(actual==read_fbo);
+    glGetIntegerv(GL_READ_BUFFER,&actual);assert(actual==read_buffer);
+    int dw,dh;SDL_GL_GetDrawableSize(window,&dw,&dh);assert(dw>0 && dh>0);
+    int width=dw,height=dw*3/4;if(height>dh){height=dh;width=dh*4/3;}
+    int x=(dw-width)/2,y=(dh-height)/2;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,0);glReadBuffer(GL_FRONT);
+    pixel(x+width/4,y+height/4,255,0,0);pixel(x+3*width/4,y+3*height/4,0,255,0);
+    if(x>2)pixel(0,dh/2,0,0,0);
+    if(y>2)pixel(dw/2,0,0,0,0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,read_fbo);glReadBuffer(read_buffer);
+    assert(glGetError()==GL_NO_ERROR);
+}
+static void resized(IDirect3DDevice8 *device,SDL_Window *window,int w,int h)
 {
     SDL_SetWindowSize(window,w,h);
     SDL_Delay(30); xbox_D3D8GLPumpEvents();
@@ -54,6 +74,7 @@ static void resized(SDL_Window *window,int w,int h)
     float depth;glReadPixels(16,12,1,1,GL_DEPTH_COMPONENT,GL_FLOAT,&depth);
     assert(depth>.249 && depth<.251);
     assert(glGetError()==GL_NO_ERROR);
+    presented(device,window);
 }
 int main(void)
 {
@@ -67,30 +88,27 @@ int main(void)
     glDisable(GL_SCISSOR_TEST);glClearColor(1,0,0,1);glClearDepth(.25);
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
     glEnable(GL_SCISSOR_TEST);glScissor(32,24,32,24);glClearColor(0,1,0,1);glClear(GL_COLOR_BUFFER_BIT);
-    resized(window,320,180); resized(window,160,240); resized(window,400,300);
-    assert(!device->lpVtbl->Present(device,NULL,NULL,NULL,NULL));
-    GLint bound;glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&bound);assert((GLuint)bound==xbox_D3D8GLBackBuffer(0));
-    glBindFramebuffer(GL_READ_FRAMEBUFFER,0);glReadBuffer(GL_FRONT);
-    int shown_width,shown_height;SDL_GL_GetDrawableSize(window,&shown_width,&shown_height);
-    pixel(shown_width/4,shown_height/4,255,0,0);
-    pixel(3*shown_width/4,3*shown_height/4,0,255,0);
-    assert(glGetError()==GL_NO_ERROR);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER,xbox_D3D8GLBackBuffer(0));glReadBuffer(GL_COLOR_ATTACHMENT0);
+    resized(device,window,320,180); resized(device,window,160,240); resized(device,window,400,300);
     /* Same public keyboard event path as F11; repeat keydowns must not toggle. */
     SDL_Event key={0};key.type=SDL_KEYDOWN;key.key.windowID=SDL_GetWindowID(window);key.key.keysym.sym=SDLK_F11;
     assert(SDL_PushEvent(&key)==1);SDL_Delay(20);xbox_D3D8GLPumpEvents();
     assert(SDL_GetWindowFlags(window)&SDL_WINDOW_FULLSCREEN_DESKTOP);
+    presented(device,window);
     key.key.repeat=1;assert(SDL_PushEvent(&key)==1);SDL_Delay(20);xbox_D3D8GLPumpEvents();
     assert(SDL_GetWindowFlags(window)&SDL_WINDOW_FULLSCREEN_DESKTOP);
+    presented(device,window);
     key.key.repeat=0;assert(SDL_PushEvent(&key)==1);SDL_Delay(20);xbox_D3D8GLPumpEvents();
     assert(!(SDL_GetWindowFlags(window)&SDL_WINDOW_FULLSCREEN_DESKTOP));
-    resized(window,320,240);
+    presented(device,window);
+    resized(device,window,320,240);
     assert(xbox_D3D8GLSetPresentationFilter(wrath_presentation_filter_glsl,0));
     key.key.keysym.sym=SDLK_F10;
     assert(SDL_PushEvent(&key)==1);SDL_Delay(20);xbox_D3D8GLPumpEvents();
-    resized(window,1280,720);resized(window,1920,1080);resized(window,2560,1440);
+    presented(device,window);
+    resized(device,window,1280,720);resized(device,window,1920,1080);resized(device,window,2560,1440);
     assert(SDL_PushEvent(&key)==1);SDL_Delay(20);xbox_D3D8GLPumpEvents();
-    resized(window,320,240);
+    presented(device,window);
+    resized(device,window,320,240);
     xbox_D3D8GLRelease();SDL_Quit();
-    puts("PASS native resize/fullscreen/letterbox and preserved internal color/depth/GL state");
+    puts("PASS native resize/fullscreen/filter transitions with displayed front pixels/letterbox and preserved internal color/depth/GL state");
 }
