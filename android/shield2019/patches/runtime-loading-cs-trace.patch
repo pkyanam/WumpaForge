@@ -9,7 +9,7 @@
  
  /* ============================================================================
   * String Initialization
-@@ -449,6 +451,37 @@
+@@ -449,6 +451,63 @@
  
  extern RECOMP_TLS uint32_t g_xbox_kernel_caller;
  
@@ -25,6 +25,31 @@
 +    enabled=v && !strcmp(v,"outer") ? 2 : v && !strcmp(v,"1");
 +    atomic_store_explicit(&cached,enabled,memory_order_relaxed);return enabled;
 +}
++/* Retain nested sites without per-event I/O. Each thread owns its ring; only
++ * the first bad outer leave in the process emits at most64 extra records. */
++static void wumpa_cs_trace_ring(const char *event,long depth,int result)
++{
++    struct Entry {const char *event;uint32_t site;long depth;int result;};
++    static _Thread_local struct Entry entries[64];
++    static _Thread_local unsigned next,count;
++    static _Atomic unsigned dumped;
++    if(atomic_load_explicit(&dumped,memory_order_relaxed))return;
++    entries[next]=(struct Entry){event,g_xbox_kernel_caller,depth,result};
++    next=(next+1)%64;
++    if(count<64)++count;
++    if(g_xbox_kernel_caller!=0x2BFF6u || strcmp(event,"leave") || depth==1 ||
++       atomic_exchange_explicit(&dumped,1,memory_order_relaxed))return;
++    unsigned guest_tid=GetCurrentThreadId();
++    int native_tid=(int)gettid();
++    fprintf(stderr,"[shield cs ring] first_bad_outer_leave guest_tid=%u native_tid=%d depth=%ld records=%u\n",
++            guest_tid,native_tid,depth,count);
++    unsigned first=(next+64-count)%64;
++    for(unsigned i=0;i<count;++i) {
++        const struct Entry *entry=&entries[(first+i)%64];
++        fprintf(stderr,"[shield cs ring] i=%u %s guest_tid=%u native_tid=%d site=0x%08X depth=%ld result=%d\n",
++                i,entry->event,guest_tid,native_tid,entry->site,entry->depth,entry->result);
++    }
++}
 +static void wumpa_cs_trace(const char *event, PRTL_CRITICAL_SECTION guest,
 +                           long depth, int result)
 +{
@@ -32,12 +57,13 @@
 +    if((uint32_t)((uintptr_t)guest-(uintptr_t)g_xbox_mem_offset)!=0x4EA440u)return;
 +    int mode=wumpa_cs_trace_enabled();
 +    if(!mode)return;
-+    /* Keep the outer worker ownership pairs across later level loads. Nested
-+     * render calls must not consume this diagnostic mode's record budget. */
-+    if(mode==2 && g_xbox_kernel_caller!=0x2BF67u &&
-+       g_xbox_kernel_caller!=0x2BFF6u)return;
 +    if(g_xbox_kernel_caller==0x2BF67u)atomic_store_explicit(&armed,1,memory_order_relaxed);
 +    if(!atomic_load_explicit(&armed,memory_order_relaxed))return;
++    if(mode==2) {
++        wumpa_cs_trace_ring(event,depth,result);
++        /* Nested events enter the ring but do not consume the outer budget. */
++        if(g_xbox_kernel_caller!=0x2BF67u && g_xbox_kernel_caller!=0x2BFF6u)return;
++    }
 +    unsigned record=atomic_fetch_add_explicit(&records,1,memory_order_relaxed);
 +    if(record>=3000)return;
 +    fprintf(stderr,"[shield cs] n=%u %s guest_tid=%u native_tid=%d site=0x%08X depth=%ld result=%d\n",
@@ -47,7 +73,7 @@
  static void xbox_cs_note_owner(CRITICAL_SECTION* cs)
  {
      XBOX_CS_SLOT* slot = xbox_cs_slot_of(cs);
-@@ -457,6 +490,7 @@
+@@ -457,6 +516,7 @@
      slot->owner_site = g_xbox_kernel_caller;
      slot->owner_tid  = GetCurrentThreadId();
      slot->depth++;
@@ -55,7 +81,7 @@
  }
  
  static void xbox_cs_clear_owner(CRITICAL_SECTION* cs)
-@@ -527,8 +561,12 @@
+@@ -527,8 +587,12 @@
      if (cs) {
          InterlockedIncrement(&g_cs_leaves);
          crt_lock_trace("drop", CriticalSection);
