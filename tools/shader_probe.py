@@ -73,6 +73,14 @@ def dump(debugger, destination):
         return [struct.unpack("<f", word.to_bytes(4, "little"))[0]
                 for word in words(address, count)]
 
+    fvf = target.FindFirstGlobalVariable("s_fvf")
+    if fvf.IsValid():
+        out["fixed_fvf"] = integers(fvf)
+    out["fixed_transform_matrices"] = {
+        name: floats(0x10C110 + 0x750 + index * 64, 16)
+        for name, index in (("world", 6), ("view", 0), ("projection", 1))
+    }
+
     out["hub_state"] = {
         "hub": words(0x19A838, 1)[0],
         "selected_slot": words(0x560F1C, 1)[0],

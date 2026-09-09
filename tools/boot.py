@@ -33,7 +33,8 @@ def main():
     if args.probe_shader:
         command += ["-o", f"command script import {ROOT / 'tools/shader_probe.py'}",
                     "-o", "breakpoint set -n shader_error"]
-        shader_dump = [f"script shader_probe.dump(lldb.debugger, {str(reports / (args.name + '-shader.json'))!r})"]
+        shader_dump = ["script import importlib; importlib.reload(shader_probe)",
+                       f"script shader_probe.dump(lldb.debugger, {str(reports / (args.name + '-shader.json'))!r})"]
     if args.probe_story:
         command += ["-o", f"command script import {ROOT / 'tools/story_probe.py'}",
                     "-o", "script story_probe.install(lldb.debugger)"]
