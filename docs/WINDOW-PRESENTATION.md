@@ -131,9 +131,9 @@ pass in `local/reports/presentation-strengths66.log` on Apple M3 / GL4.1 Metal90
 
 At2560x1440, the isolated GPU-pass medians were0.0438ms (Light),0.0522ms (Medium),
 and0.0441ms (Strong). Three batches of eight passes are a small, noisy sample:
-the Medium range was0.0521–1.1239ms. The existing game could still be running on
-the same Mac; no controlled whole-game comparison or input-latency measurement
-was made. The strength-zero fixture uses the same shader for mathematical
+the Medium range was0.0521–1.1239ms. Other host workload was not isolated; no
+controlled whole-game comparison or input-latency measurement was made. The
+strength-zero fixture uses the same shader for mathematical
 comparison, while production Off uses a linear blit, so these numbers must not
 be presented as the performance difference between production Off and On.
 

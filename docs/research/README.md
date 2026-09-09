@@ -1,4 +1,10 @@
-# Native port research checkpoint — 2026-09-08
+# Initial native port research checkpoint — 2026-09-08
+
+**Historical checkpoint.** The startup/title limitations below have since been
+superseded: the user completed Arctic Antics on native ARM64. Read
+[STATUS](../STATUS.md) for current artifacts, validation and outstanding issues.
+The linked architecture research remains useful; the next-step section records
+what was needed at the time of this initial investigation.
 
 The requested research pause is complete. Three bounded subagents examined
 decompilation alternatives, Xbox graphics, and startup/runtime behavior; root
