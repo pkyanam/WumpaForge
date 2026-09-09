@@ -70,3 +70,19 @@ compilable console binary with a working native game.
 - Read docs/research/README.md for the architecture audit and next diagnostic.
   Pair original scene/fade/animation state with draw state and actual pixels before
   changing timing or graphics conventions to explain a black frame.
+
+## Private staging and future platforms
+- Project name: WumpaForge. The user authorizes creating and pushing the private
+  `pkyanam/WumpaForge` GitHub repository via `gh`. Keep it private; public release
+  and prebuilt binary distribution are separate future decisions.
+- Audit tracked files and history before uploading. Never force-add the ISO,
+  extracted assets, generated game code, game captures, credentials or binaries.
+- Contributors bring their own supported Xbox ISO; extracted assets are needed
+  at runtime as well as during setup. Preserve existing upstream license notices.
+  A future restrictive commercial license must not be promised for third-party work.
+- macOS Apple Silicon is the only validated platform. Document future ARM64 OS
+  seams without claiming iOS/Android/Shield support from CPU compatibility alone.
+- The user completed Arctic Antics on build61. Retained physical vertex-fetch
+  bounds on return to the hub were fixed in build63 and need live verification.
+- Root coordinates full builds and game/UI tests. Run at most two compiler jobs
+  total. Parallel agents should own disjoint files and commit bounded changes.

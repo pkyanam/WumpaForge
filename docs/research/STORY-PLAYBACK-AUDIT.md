@@ -110,7 +110,7 @@ completion. `sub_0002C330` is the animation update, but avoid expensive repeated
 per-frame debugger stops. `tools/story_probe.py` exposes:
 
 ```text
-command script import /Users/preetham/Code/wrath-of-cortex-decomp/tools/story_probe.py
+command script import tools/story_probe.py
 script story_probe.install(lldb.debugger)
 ```
 

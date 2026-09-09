@@ -1,28 +1,37 @@
 # Status — 2026-09-08
 
-## Current: build60 preparation; snow fog and presentation tests pass
-- Build59/story21 reached Arctic Antics, Level7/Demo0, and passed the fixed XYZ
-  fog boundary. It then stopped on transformed FVF0x144 fog. PID4981/session40898
-  ended at the diagnostic breakpoint; no game is running. Packaged app is build59.
-- All three original transformed fog paths are now implemented: specular alpha
-  for table NONE, original Z for affine projection, and reciprocal original RHW
-  for perspective. The original values survive native clip-coordinate conversion.
-  Original102850 selects the microprogram; Projection setter FEA20 controls flag2.
-- Combined GPU tests pass: both fixed fog paths, programmable fog, retained vertex
-  addresses, native fences, textures, internal render targets and presentation.
-  Reports: presentation-combined-build.log and presentation-combined-smoke.log.
-  Controller is finishing thread/presentation checks and the cumulative patch.
-- Fullscreen work keeps internal color/depth buffers at640x480, with resizable
-  output and aspect-preserving borders. F11 toggles fullscreen; F10 toggles the
-  optional sharpening filter. Its isolated720p/1080p/1440p GPU tests pass. Actual
-  game fullscreen, visual quality and frame timing still need verification.
-- Earlier story19's queued reflection override/retained bounds fault remains open;
-  it did not recur in story20/21. The stop probe now records cached addresses,
-  allocation generations, FVF and matrices. Intermittent hologram distortion
-  remains an open visual issue. Do not fabricate tangent data or relax bounds.
-- Next: build60/package, original New Game/skip, enter Arctic Antics, verify real
-  movement/jump/spin/pause, then compare fullscreen and sharpening. Root owns all
-  full builds and game launches; at most two compiler jobs total. Goal stays active.
+## Current: WumpaForge private staging; build63 normal run
+- The user completed Arctic Antics on build61/story23 using keyboard controls.
+  Actual Level7/Demo0 gameplay and fullscreen were visible; the user reported
+  smooth play. This is the first confirmed full-level completion, not a demo.
+- Return to Level37 hub then hit the retained secondary vertex bound guard.
+  f0c6a6c fixes only retained NULL-stream fetches to follow original physical DMA
+  RAM bounds, preserving live owner/generation/data checks. Real adjacent-byte
+  GPU tests, exact failed span and physical-end rejection all pass. See
+  docs/research/RETAINED-VERTEX-DMA-BOUNDS.md. Live hub-return verification remains.
+- Build63 includes this fix plus ff6b781's validated 4KiB resource lookup cache.
+  Built with two compiler jobs, packaged and verified Mach-O arm64. Normal run
+  PID62888 logs to local/reports/play-24.log with WRATH_PROFILE=1 and no watchdog.
+  Check PID before UI calls; Computer Use may auto-launch a closed app.
+- Build61 fixed macOS presentation by keeping default FBO0 bound through swap.
+  Actual fullscreen3420x2146 and F10 sharpening toggles were observed. Internal
+  rendering remains640x480 with original4:3 aspect. Isolated720p/1080p/1440p filter
+  tests pass; no zero-overhead or constant60FPS claim. Build61 snow sample median
+  was42.35FPS in a heavier area and60FPS later. Cache improvement needs live data.
+- Intermittent story/hologram distortion and one earlier sporadic audio startup
+  fault remain open. Physical Bluetooth controllers remain untested; virtual
+  SDL/input ABI tests pass. Story can play or be skipped through original logic.
+- User authorized private GitHub staging as pkyanam/WumpaForge, BYO supported
+  Xbox ISO, clear setup/agent docs and future ARM64 platform foundations. Repo
+  created private; root owns audit, push and visibility verification. No public
+  release or prebuilt distribution is authorized by this request.
+- repo_audit found no ISO/assets/generated game code/binaries/common secret
+  signatures in reachable history. Ignore rules now cover misplaced outputs
+  and environment files. Licenses must preserve upstream GPL/LGPL notices;
+  future commercial restrictive distribution needs a separate review.
+- Agent waves: controller hub fix, mac DMA audit, repository audit, onboarding,
+  license inventory, portability. Root owns full builds, packaging and live UI;
+  at most two compiler jobs total. Keep the goal active during outstanding work.
 
 ## Earlier: build55/story15 reflection passes; Xbox address5 is next hub setting
 - b951812 implements actual[PROJECT2D,DOT,DOT,DOT_RFLCT_SPEC] shader chain, signed

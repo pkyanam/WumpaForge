@@ -6,3 +6,23 @@ build/
 .venv/
 __pycache__/
 third_party/
+
+# Keep private inputs and local outputs out of source staging.
+*.[iI][sS][oO]
+*.[xX][bB][eE]
+*.xiso
+.env
+.env.*
+!.env.example
+*.o
+*.a
+*.dylib
+*.so
+*.app/
+*.dSYM/
+*.ips
+*.crash
+core
+core.*
+screenshots/
+captures/
