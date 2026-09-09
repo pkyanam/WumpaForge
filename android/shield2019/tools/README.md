@@ -32,3 +32,15 @@ Changing game focus clears the game's remote state if recovery is needed.
 Host tests cover event ordering, release on interruption/down failure, input-key
 allowlisting and duration limits. They do not validate Android reflection or TV
 injection; that requires the authorized physical device.
+
+For an A/B test against the remote mapping, use keyboard source explicitly:
+
+```sh
+adb -s 192.168.1.46:5555 shell 'CLASSPATH=/data/local/tmp/wumpa-keyhold.jar app_process /system/bin WumpaKeyHold W 1500 keyboard'
+```
+
+Keyboard mode allows `W A S D I J K L SPACE C X E ENTER BACKSPACE Q R SHIFT CTRL`.
+Its events use `SOURCE_KEYBOARD`; normal remote mode retains `SOURCE_DPAD`.
+Both use flags zero, matching stock shell key injection. Output reports the key,
+source, device, flags, down/up event times and dispatch-completion times so an
+input trace can distinguish Android dispatch from game-frame consumption.

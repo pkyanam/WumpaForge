@@ -11,6 +11,9 @@ public final class WumpaKeyHoldTest {
         assert WumpaKeyHold.duration("10000")==10000;
         for(String s:new String[]{"0","-1","10001"})try{WumpaKeyHold.duration(s);throw new AssertionError();}catch(IllegalArgumentException expected){}
         assert WumpaKeyHold.keyCode("up")==19;
+        assert WumpaKeyHold.keyboardCode("w")==51;
+        assert WumpaKeyHold.keyboardCode("SPACE")==62;
+        try{WumpaKeyHold.keyboardCode("HOME");throw new AssertionError();}catch(IllegalArgumentException expected){}
         try{WumpaKeyHold.keyCode("HOME");throw new AssertionError();}catch(IllegalArgumentException expected){}
         System.out.println("PASS real hold ordering, interruption/down-error release, bounded duration and remote-only keys");
     }
