@@ -101,6 +101,10 @@ Setup composes the existing tools: `bootstrap.py`, the `prepare`, `assets`,
 `package.py`. Pipeline diagnostics are written to `local/reports/`. Run
 `python3 tools/setup.py --help` for options.
 
+For CPU-only source regressions after setup, run `.venv/bin/python tools/check.py`.
+See [testing instructions](docs/TESTING.md) for original-function checks, GPU/audio
+fixtures, and the limits of source-based validation.
+
 An AI coding agent is optional. Open this checkout in your agent, ask it to read
 [AGENTS.md](AGENTS.md) and [STATUS](docs/STATUS.md), and give it the local ISO path
 and a concrete task. For example: “Read AGENTS.md and STATUS.md, then help me run
