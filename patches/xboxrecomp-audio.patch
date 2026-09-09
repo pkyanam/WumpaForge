@@ -12,10 +12,18 @@ index 68d44ef..a6c0471 100644
      target_link_libraries(xbox_apu PRIVATE platform SDL2::SDL2 m)
  endif()
 diff --git a/src/apu/apu.h b/src/apu/apu.h
-index f7b9f8f..2c9ff03 100644
+index f7b9f8f..6982a14 100644
 --- a/src/apu/apu.h
 +++ b/src/apu/apu.h
-@@ -68,9 +68,24 @@ int apu_mixer_set_position(int slot, uint32_t byte_offset);
+@@ -50,6 +50,7 @@ typedef struct APUMixerVoice {
+     uint32_t         sample_rate;   /* e.g. 22050, 44100, 48000 */
+     uint64_t         play_offset; /* Source frame position, 16 fractional bits */
+     float            volume;       /* 0.0 to 1.0 */
++    float            gain_left, gain_right; /* spatial gains; default1 */
+ } APUMixerVoice;
+ 
+ /* Allocate a mixer voice slot. Returns slot index or -1 if full. */
+@@ -68,9 +69,27 @@ int apu_mixer_set_position(int slot, uint32_t byte_offset);
  void apu_mixer_get_state(int slot, uint32_t *byte_offset, int *active, int *looping);
  
  /* Start/resume or stop playback without changing the current position. */
@@ -25,6 +33,9 @@ index f7b9f8f..2c9ff03 100644
  
 +/* Update active voice parameters under the mixer lock. */
 +void apu_mixer_set_parameters(int slot, uint32_t rate, float volume);
++typedef struct APUSpatialGain { int slot; float left, right; } APUSpatialGain;
++/* Publish one listener/source commit atomically with respect to a mixer frame. */
++void apu_mixer_set_spatial_gains(const APUSpatialGain *gains, unsigned count);
 +/* Atomically replace a reserved voice source, retaining active/looping/volume. */
 +int apu_mixer_set_source(int slot, const int16_t *pcm, uint32_t bytes,
 +                         uint32_t channels, uint32_t rate, uint32_t byte_offset);
@@ -42,7 +53,7 @@ index f7b9f8f..2c9ff03 100644
  }
  #endif
 diff --git a/src/apu/apu_core.c b/src/apu/apu_core.c
-index 459be77..964096b 100644
+index 459be77..8b7bbea 100644
 --- a/src/apu/apu_core.c
 +++ b/src/apu/apu_core.c
 @@ -36,6 +36,19 @@ MCPXAPUState *g_state = NULL;
@@ -128,7 +139,7 @@ index 459be77..964096b 100644
      qatomic_set(&d->exiting, true);
      qemu_cond_signal(&d->cond);
      qemu_mutex_unlock(&d->lock);
-@@ -708,7 +759,8 @@ int apu_mixer_alloc_voice(void)
+@@ -708,8 +759,10 @@ int apu_mixer_alloc_voice(void)
      if (!g_mixer_initialized) mixer_init();
      EnterCriticalSection(&g_mixer_cs);
      for (int i = 0; i < APU_MIXER_MAX_VOICES; i++) {
@@ -136,9 +147,11 @@ index 459be77..964096b 100644
 +        if (!g_mixer_reserved[i] && !g_mixer_voices[i].active && !g_mixer_voices[i].pcm_data) {
 +            g_mixer_reserved[i] = true;
              g_mixer_voices[i].volume = 1.0f;
++            g_mixer_voices[i].gain_left = g_mixer_voices[i].gain_right = 1.0f;
              g_mixer_voices[i].sample_rate = 44100;
              g_mixer_voices[i].num_channels = 2;
-@@ -724,10 +776,12 @@ void apu_mixer_free_voice(int slot)
+             LeaveCriticalSection(&g_mixer_cs);
+@@ -724,10 +777,12 @@ void apu_mixer_free_voice(int slot)
  {
      if (slot < 0 || slot >= APU_MIXER_MAX_VOICES) return;
      EnterCriticalSection(&g_mixer_cs);
@@ -152,7 +165,7 @@ index 459be77..964096b 100644
      LeaveCriticalSection(&g_mixer_cs);
  }
  
-@@ -766,16 +820,110 @@ void apu_mixer_get_state(int slot, uint32_t *byte_offset, int *active, int *loop
+@@ -766,16 +821,123 @@ void apu_mixer_get_state(int slot, uint32_t *byte_offset, int *active, int *loop
      LeaveCriticalSection(&g_mixer_cs);
  }
  
@@ -163,6 +176,19 @@ index 459be77..964096b 100644
 +    EnterCriticalSection(&g_mixer_cs);
 +    g_mixer_voices[slot].sample_rate = rate;
 +    g_mixer_voices[slot].volume = volume;
++    LeaveCriticalSection(&g_mixer_cs);
++}
++
++void apu_mixer_set_spatial_gains(const APUSpatialGain *gains, unsigned count)
++{
++    if (!count || !gains || count > APU_MIXER_MAX_VOICES) return;
++    EnterCriticalSection(&g_mixer_cs);
++    for (unsigned i = 0; i < count; ++i) {
++        int slot = gains[i].slot;
++        if (slot < 0 || slot >= APU_MIXER_MAX_VOICES || !g_mixer_reserved[slot]) continue;
++        g_mixer_voices[slot].gain_left = gains[i].left;
++        g_mixer_voices[slot].gain_right = gains[i].right;
++    }
 +    LeaveCriticalSection(&g_mixer_cs);
 +}
 +
@@ -268,7 +294,7 @@ index 459be77..964096b 100644
      }
      v->looping = looping;
      if (!v->active) InterlockedIncrement((volatile LONG *)&g_mixer_active_count);
-@@ -797,6 +945,7 @@ void apu_mixer_play(int slot, int looping)
+@@ -797,6 +959,7 @@ void apu_mixer_play(int slot, int looping)
          qemu_cond_signal(&g_state->cond);
          qemu_mutex_unlock(&g_state->lock);
      }
@@ -276,7 +302,7 @@ index 459be77..964096b 100644
  }
  
  void apu_mixer_stop(int slot)
-@@ -819,6 +968,32 @@ static void mixer_render(int16_t frame_buf[][2], int num_samples)
+@@ -819,6 +982,34 @@ static void mixer_render(int16_t frame_buf[][2], int num_samples)
  
      for (int v = 0; v < APU_MIXER_MAX_VOICES; v++) {
          APUMixerVoice *voice = &g_mixer_voices[v];
@@ -284,12 +310,14 @@ index 459be77..964096b 100644
 +        if (voice->active && q->capacity) {
 +            uint64_t pos = voice->play_offset;
 +            uint64_t inc = ((uint64_t)voice->sample_rate << 16) / 48000;
++            float left_gain=voice->volume*voice->gain_left, right_gain=voice->volume*voice->gain_right;
 +            for (int i = 0; i < num_samples && q->count; ++i) {
 +                APUPacket *p = &q->packets[q->head];
 +                uint32_t f = (uint32_t)(pos >> 16);
-+                int32_t l = (int32_t)(p->pcm[f * voice->num_channels] * voice->volume);
++                int32_t l = (int32_t)(p->pcm[f * voice->num_channels] * left_gain);
 +                int32_t r = voice->num_channels == 2 ?
-+                    (int32_t)(p->pcm[f * 2 + 1] * voice->volume) : l;
++                    (int32_t)(p->pcm[f * 2 + 1] * right_gain) :
++                    (int32_t)(p->pcm[f] * right_gain);
 +                l += frame_buf[i][0]; r += frame_buf[i][1];
 +                frame_buf[i][0] = l > 32767 ? 32767 : l < -32768 ? -32768 : l;
 +                frame_buf[i][1] = r > 32767 ? 32767 : r < -32768 ? -32768 : r;
@@ -309,6 +337,30 @@ index 459be77..964096b 100644
          if (!voice->active || !voice->pcm_data || voice->pcm_bytes == 0)
              continue;
  
+@@ -830,7 +1021,7 @@ static void mixer_render(int16_t frame_buf[][2], int num_samples)
+         uint64_t inc = ((uint64_t)voice->sample_rate << 16) / 48000;
+         uint64_t pos = voice->play_offset;
+         uint64_t end = (uint64_t)total_frames << 16;
+-        float vol = voice->volume;
++        float left_gain=voice->volume*voice->gain_left, right_gain=voice->volume*voice->gain_right;
+ 
+         for (int i = 0; i < num_samples; i++) {
+             uint32_t src_frame = pos >> 16;
+@@ -849,10 +1040,11 @@ static void mixer_render(int16_t frame_buf[][2], int num_samples)
+ 
+             int32_t left, right;
+             if (voice->num_channels >= 2) {
+-                left  = (int32_t)(voice->pcm_data[src_frame * 2] * vol);
+-                right = (int32_t)(voice->pcm_data[src_frame * 2 + 1] * vol);
++                left  = (int32_t)(voice->pcm_data[src_frame * 2] * left_gain);
++                right = (int32_t)(voice->pcm_data[src_frame * 2 + 1] * right_gain);
+             } else {
+-                left = right = (int32_t)(voice->pcm_data[src_frame] * vol);
++                left = (int32_t)(voice->pcm_data[src_frame] * left_gain);
++                right = (int32_t)(voice->pcm_data[src_frame] * right_gain);
+             }
+ 
+             /* Accumulate (mix) into frame_buf with clamping */
 diff --git a/src/apu/apu_shim.h b/src/apu/apu_shim.h
 index dd6bec1..37fa951 100644
 --- a/src/apu/apu_shim.h
@@ -546,10 +598,10 @@ index f2a3b78..52a7bf3 100644
  
  target_include_directories(xbox_dsound PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 diff --git a/src/audio/dsound_device.c b/src/audio/dsound_device.c
-index f467511..b3d90e1 100644
+index f467511..d583753 100644
 --- a/src/audio/dsound_device.c
 +++ b/src/audio/dsound_device.c
-@@ -1,216 +1,363 @@
+@@ -1,239 +1,627 @@
 -/**
 - * Xbox DirectSound → XAudio2 Compatibility Layer
 - *
@@ -567,7 +619,8 @@ index f467511..b3d90e1 100644
 +/* Native DirectSound buffers: PCM16/Xbox ADPCM -> bounded APU software voices.
 + * Creation owns only buffer metadata/data. Mixer slots are allocated on Play
 + * and released on Stop, destruction, or reclamation after natural completion.
-+ * Streams use bounded owned PCM packet queues; spatial effects remain incomplete. */
++ * Streams use bounded owned PCM packet queues; mono spatial buffers support
++ * distance and stereo panning. HRTF, cones, Doppler and reverb remain incomplete. */
  #include "dsound_xbox.h"
 +#include "xbox_adpcm.h"
  #include "../apu/apu.h"
@@ -586,6 +639,11 @@ index f467511..b3d90e1 100644
 +#define DSERR_BADFORMAT ((HRESULT)0x88780064u)
 +#define DSERR_ALLOCATED ((HRESULT)0x8878000Au)
 +extern MCPXAPUState *g_state;
++
++typedef struct SpatialSource { float position[3], minimum, maximum; } SpatialSource;
++typedef struct SpatialListener { float position[3], front[3], top[3], rolloff; } SpatialListener;
++static SpatialListener s_listener = {{0,0,0},{0,0,1},{0,1,0},1};
++static SpatialListener s_listener_pending = {{0,0,0},{0,0,1},{0,1,0},1};
  
  typedef struct DSoundBuffer {
      IDirectSoundBuffer8 iface;
@@ -603,6 +661,8 @@ index f467511..b3d90e1 100644
 +    int16_t *pcm_data;
 +    DWORD pcm_frames, cursor_frames;
 +    LONG volume;
++    DWORD flags;
++    SpatialSource spatial, pending;
 +    DWORD frequency, original_frequency;
 +    WORD channels, bits_per_sample, format_tag, block_align;
 +    int mixer_slot, dirty, locked;
@@ -622,28 +682,43 @@ index f467511..b3d90e1 100644
  }
 -
 -static HRESULT __stdcall buf_QueryInterface(IDirectSoundBuffer8 *self, const IID *riid, void **ppv)
-+static DWORD source_bytes(const DSoundBuffer *buf, DWORD frames)
++/* Documented inverse-distance behavior; stereo energy panning is a speaker
++ * compatibility approximation, not Xbox HRTF/cone/reverb emulation. */
++static APUSpatialGain spatial_gain(const DSoundBuffer *buf)
  {
 -    (void)self; (void)riid; (void)ppv;
 -    return E_NOINTERFACE;
-+    return buf->format_tag == 0x69 ? frames / 64 * buf->block_align
-+                                 : frames * buf->block_align;
++    APUSpatialGain gain = {buf->mixer_slot, 1, 1};
++    if (!(buf->flags & DSBCAPS_CTRL3D)) return gain;
++    double d[3], distance = 0, right[3];
++    for (unsigned i=0;i<3;++i) { d[i]=(double)buf->spatial.position[i]-s_listener.position[i]; distance+=d[i]*d[i]; }
++    distance=sqrt(distance);
++    right[0]=(double)s_listener.top[1]*s_listener.front[2]-(double)s_listener.top[2]*s_listener.front[1];
++    right[1]=(double)s_listener.top[2]*s_listener.front[0]-(double)s_listener.top[0]*s_listener.front[2];
++    right[2]=(double)s_listener.top[0]*s_listener.front[1]-(double)s_listener.top[1]*s_listener.front[0];
++    double pan=0;
++    if (distance>0) for(unsigned i=0;i<3;++i)pan+=d[i]*right[i]/distance;
++    pan=fmax(-1.0,fmin(1.0,pan));
++    double minimum=buf->spatial.minimum;
++    double clamped=fmax(minimum,fmin(distance,buf->spatial.maximum));
++    double attenuation=minimum/(minimum+(clamped-minimum)*s_listener.rolloff);
++    gain.left=(float)(attenuation*sqrt(0.5*(1-pan)));
++    gain.right=(float)(attenuation*sqrt(0.5*(1+pan)));
++    return gain;
  }
 -
 -static ULONG __stdcall buf_AddRef(IDirectSoundBuffer8 *self)
-+static void release_voice(DSoundBuffer *buf)
++static void publish_spatial(void)
  {
 -    return (ULONG)InterlockedIncrement(&buf_from_iface(self)->ref_count);
-+    if (buf->mixer_slot < 0) return;
-+    uint32_t position;
-+    apu_mixer_get_state(buf->mixer_slot, &position, NULL, NULL);
-+    buf->cursor_frames = position / (buf->channels * 2u);
-+    apu_mixer_free_voice(buf->mixer_slot); /* stops under the mixer lock */
-+    buf->mixer_slot = -1;
++    APUSpatialGain changes[64]; unsigned n=0;
++    for(DSoundBuffer *b=s_buffers;b;b=b->next)
++        if(b->mixer_slot>=0 && (b->flags&DSBCAPS_CTRL3D)) changes[n++]=spatial_gain(b);
++    apu_mixer_set_spatial_gains(changes,n);
  }
 -
 -static ULONG __stdcall buf_Release(IDirectSoundBuffer8 *self)
-+static void reap_finished(void)
++static void publish_source(DSoundBuffer *b)
  {
 -    DSoundBuffer *buf = buf_from_iface(self);
 -    LONG ref = InterlockedDecrement(&buf->ref_count);
@@ -654,6 +729,34 @@ index f467511..b3d90e1 100644
 -        }
 -        free(buf->buffer_data);
 -        free(buf);
++    if(b->mixer_slot<0)return;
++    APUSpatialGain gain=spatial_gain(b);apu_mixer_set_spatial_gains(&gain,1);
++}
++static int finite_vector(float x,float y,float z)
++{ return isfinite(x)&&isfinite(y)&&isfinite(z); }
++static int normalize_vector(float v[3])
++{
++    double length=sqrt((double)v[0]*v[0]+(double)v[1]*v[1]+(double)v[2]*v[2]);
++    if(!isfinite(length)||length<1e-20)return 0;
++    for(unsigned i=0;i<3;++i)v[i]=(float)(v[i]/length);
++    return 1;
++}
++static DWORD source_bytes(const DSoundBuffer *buf, DWORD frames)
++{
++    return buf->format_tag == 0x69 ? frames / 64 * buf->block_align
++                                 : frames * buf->block_align;
++}
++static void release_voice(DSoundBuffer *buf)
++{
++    if (buf->mixer_slot < 0) return;
++    uint32_t position;
++    apu_mixer_get_state(buf->mixer_slot, &position, NULL, NULL);
++    buf->cursor_frames = position / (buf->channels * 2u);
++    apu_mixer_free_voice(buf->mixer_slot); /* stops under the mixer lock */
++    buf->mixer_slot = -1;
++}
++static void reap_finished(void)
++{
 +    for (DSoundBuffer *buf = s_buffers; buf; buf = buf->next) {
 +        if (buf->mixer_slot < 0) continue;
 +        int active;
@@ -788,6 +891,7 @@ index f467511..b3d90e1 100644
 +    HRESULT hr = validate_format(format);
 +    if (hr != S_OK) return hr;
 +    if (buf->locked) return E_INVALIDARG;
++    if ((buf->flags & DSBCAPS_CTRL3D) && format->nChannels != 1) return DSERR_BADFORMAT;
 +    if (buf->buffer_size % format->nBlockAlign) return DSERR_BADFORMAT;
 +    DSoundBuffer replacement = *buf;
 +    apply_format(&replacement, format);
@@ -1014,6 +1118,8 @@ index f467511..b3d90e1 100644
 +        voice->volume = linear_volume(buf->volume);
 +        voice->play_offset = (uint64_t)buf->cursor_frames << 16;
 +    }
++    APUSpatialGain gain=spatial_gain(buf);
++    apu_mixer_set_spatial_gains(&gain,1);
 +    /* A tiny source can finish on the producer before Play returns. Report
 +     * whether playback started, not a racing later active-state snapshot. */
 +    if (!apu_mixer_play(buf->mixer_slot, (flags & DSBPLAY_LOOPING) != 0)) {
@@ -1054,8 +1160,37 @@ index f467511..b3d90e1 100644
      return S_OK;
  }
  
-@@ -222,18 +369,186 @@ static HRESULT __stdcall buf_SetConeAngles(IDirectSoundBuffer8 *self, DWORD in,
- static HRESULT __stdcall buf_SetConeOutsideVolume(IDirectSoundBuffer8 *self, LONG vol, DWORD dw) { (void)self; (void)vol; (void)dw; return S_OK; }
+-static HRESULT __stdcall buf_SetMaxDistance(IDirectSoundBuffer8 *self, float f, DWORD dw) { (void)self; (void)f; (void)dw; return S_OK; }
+-static HRESULT __stdcall buf_SetMinDistance(IDirectSoundBuffer8 *self, float f, DWORD dw) { (void)self; (void)f; (void)dw; return S_OK; }
+-static HRESULT __stdcall buf_SetPosition(IDirectSoundBuffer8 *self, float x, float y, float z, DWORD dw) { (void)self; (void)x; (void)y; (void)z; (void)dw; return S_OK; }
+-static HRESULT __stdcall buf_SetVelocity(IDirectSoundBuffer8 *self, float x, float y, float z, DWORD dw) { (void)self; (void)x; (void)y; (void)z; (void)dw; return S_OK; }
+-static HRESULT __stdcall buf_SetConeAngles(IDirectSoundBuffer8 *self, DWORD in, DWORD out, DWORD dw) { (void)self; (void)in; (void)out; (void)dw; return S_OK; }
+-static HRESULT __stdcall buf_SetConeOutsideVolume(IDirectSoundBuffer8 *self, LONG vol, DWORD dw) { (void)self; (void)vol; (void)dw; return S_OK; }
++static HRESULT buffer_distance(IDirectSoundBuffer8 *self,float distance,DWORD apply,int maximum)
++{
++    DSoundBuffer *b=buf_from_iface(self);
++    if (!(b->flags&DSBCAPS_CTRL3D)) return E_INVALIDARG;
++    if(apply>1||!isfinite(distance)||distance<=0)return E_INVALIDARG;
++    if(maximum){b->pending.maximum=distance;if(!apply)b->spatial.maximum=distance;}
++    else{b->pending.minimum=distance;if(!apply)b->spatial.minimum=distance;}
++    if(!apply)publish_source(b);
++    return S_OK;
++}
++static HRESULT __stdcall buf_SetMaxDistance(IDirectSoundBuffer8 *self,float f,DWORD dw)
++{ return buffer_distance(self,f,dw,1); }
++static HRESULT __stdcall buf_SetMinDistance(IDirectSoundBuffer8 *self,float f,DWORD dw)
++{ return buffer_distance(self,f,dw,0); }
++static HRESULT __stdcall buf_SetPosition(IDirectSoundBuffer8 *self,float x,float y,float z,DWORD apply)
++{
++    DSoundBuffer *b=buf_from_iface(self);
++    if(!(b->flags&DSBCAPS_CTRL3D)||apply>1||!finite_vector(x,y,z))return E_INVALIDARG;
++    float v[3]={x,y,z};memcpy(b->pending.position,v,sizeof(v));
++    if(!apply){memcpy(b->spatial.position,v,sizeof(v));publish_source(b);}
++    return S_OK;
++}
++static HRESULT __stdcall buf_SetVelocity(IDirectSoundBuffer8 *self, float x, float y, float z, DWORD dw) { (void)self; (void)x; (void)y; (void)z; (void)dw; return E_NOTIMPL; }
++static HRESULT __stdcall buf_SetConeAngles(IDirectSoundBuffer8 *self, DWORD in, DWORD out, DWORD dw) { (void)self; (void)in; (void)out; (void)dw; return E_NOTIMPL; }
++static HRESULT __stdcall buf_SetConeOutsideVolume(IDirectSoundBuffer8 *self, LONG vol, DWORD dw) { (void)self; (void)vol; (void)dw; return E_NOTIMPL; }
  static HRESULT __stdcall buf_SetMixBins(IDirectSoundBuffer8 *self, const DSMIXBINS *pMixBins) { (void)self; (void)pMixBins; return S_OK; }
  
 +static HRESULT __stdcall locked_buf_QueryInterface(IDirectSoundBuffer8 *self, const IID *riid, void **ppv)
@@ -1252,7 +1387,7 @@ index f467511..b3d90e1 100644
  };
  
  /* ================================================================
-@@ -249,64 +564,185 @@ static HRESULT __stdcall ds_QueryInterface(IDirectSound8 *self, const IID *riid,
+@@ -249,120 +637,243 @@ static HRESULT __stdcall ds_QueryInterface(IDirectSound8 *self, const IID *riid,
  static ULONG __stdcall ds_AddRef(IDirectSound8 *self)  { (void)self; return 1; }
  static ULONG __stdcall ds_Release(IDirectSound8 *self) { (void)self; return 0; }
  
@@ -1290,15 +1425,44 @@ index f467511..b3d90e1 100644
 -        buf->frequency = wfx->nSamplesPerSec;
 -        buf->bits_per_sample = wfx->wBitsPerSample;
 -    }
+-
+-    /* Allocate a mixer voice slot */
+-    buf->mixer_slot = apu_mixer_alloc_voice();
+-    if (buf->mixer_slot >= 0) {
+-        APUMixerVoice *v = apu_mixer_get_voice(buf->mixer_slot);
+-        if (v) {
+-            v->num_channels = buf->channels;
+-            v->sample_rate = buf->frequency;
+-        }
+-    }
+-
+-    /* Pre-allocate buffer if size specified */
+-    if (desc && desc->dwBufferBytes > 0) {
+-        buf->buffer_data = calloc(1, desc->dwBufferBytes);
+-        buf->buffer_size = desc->dwBufferBytes;
+-    }
+-
+-    static int create_log_count = 0;
+-    if (create_log_count < 30) {
+-        fprintf(stderr, "[DSOUND] CreateSoundBuffer: %u bytes, %d ch, %u Hz, %d-bit → mixer slot %d\n",
+-                desc ? desc->dwBufferBytes : 0, buf->channels, buf->frequency,
+-                buf->bits_per_sample, buf->mixer_slot);
+-        create_log_count++;
+-    }
+-
+-    *ppBuffer = &buf->iface;
 +    buf->mixer_slot = -1;
++    buf->flags = desc->dwFlags;
++    if ((buf->flags&DSBCAPS_CTRL3D) && format->nChannels!=1) { free(buf); return DSERR_BADFORMAT; }
++    buf->spatial.minimum=1;buf->spatial.maximum=1e9f;buf->pending=buf->spatial;
 +    apply_format(buf, format);
 +    HRESULT result = replace_data(buf, NULL, desc->dwBufferBytes, 1);
 +    if (result != S_OK) { free(buf); return result; }
 +    buf->next = s_buffers;
 +    s_buffers = buf;
 +    *output = &buf->iface;
-+    return S_OK;
-+}
+     return S_OK;
+ }
 +static HRESULT __stdcall locked_ds_CreateSoundBuffer(IDirectSound8 *self, const DSBUFFERDESC *desc,
 +    IDirectSoundBuffer8 **output, void *outer)
 +{
@@ -1308,13 +1472,7 @@ index f467511..b3d90e1 100644
 +    return result;
 +}
  
--    /* Allocate a mixer voice slot */
--    buf->mixer_slot = apu_mixer_alloc_voice();
--    if (buf->mixer_slot >= 0) {
--        APUMixerVoice *v = apu_mixer_get_voice(buf->mixer_slot);
--        if (v) {
--            v->num_channels = buf->channels;
--            v->sample_rate = buf->frequency;
+-static HRESULT __stdcall ds_CreateSoundStream(IDirectSound8 *self, const DSSTREAMDESC *desc, IDirectSoundStream **ppStream, void *pUnkOuter)
 +
 +struct IDirectSoundStream {
 +    ULONG refs;
@@ -1325,7 +1483,10 @@ index f467511..b3d90e1 100644
 +};
 +static HRESULT __stdcall ds_CreateSoundStream(IDirectSound8 *self, const DSSTREAMDESC *desc,
 +    IDirectSoundStream **output, void *outer)
-+{
+ {
+-    (void)self; (void)desc; (void)pUnkOuter;
+-    /* Streams are more complex - stub for now */
+-    if (ppStream) *ppStream = NULL;
 +    (void)self;
 +    if (!output) return E_INVALIDARG;
 +    *output = NULL;
@@ -1340,10 +1501,13 @@ index f467511..b3d90e1 100644
 +    s->refs = 1; s->capacity = desc->dwMaxAttachedPackets; s->slot = -1;
 +    memcpy(&s->format, desc->lpwfxFormat, sizeof(s->format));
 +    *output = s;
-+    return S_OK;
-+}
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall ds_SetMixBinHeadroom(IDirectSound8 *self, DWORD dwMixBin, DWORD dwHeadroom)
 +ULONG xbox_DirectSoundStreamAddRef(IDirectSoundStream *s)
-+{
+ {
+-    (void)self; (void)dwMixBin; (void)dwHeadroom;
 +    AcquireSRWLockExclusive(&s_buffers_lock);
 +    ULONG refs = ++s->refs;
 +    ReleaseSRWLockExclusive(&s_buffers_lock);
@@ -1361,10 +1525,13 @@ index f467511..b3d90e1 100644
 +{
 +    if (!s || !info) return E_INVALIDARG;
 +    info[0] = 5; info[1] = s->format.nBlockAlign; info[2] = 0; info[3] = 0;
-+    return S_OK;
-+}
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall ds_SetPosition(IDirectSound8 *self, float x, float y, float z, DWORD dwApply)
 +HRESULT xbox_DirectSoundStreamStatus(IDirectSoundStream *s, uint32_t *status)
-+{
+ {
+-    (void)self; (void)x; (void)y; (void)z; (void)dwApply;
 +    if (!s || !status) return E_INVALIDARG;
 +    AcquireSRWLockExclusive(&s_buffers_lock);
 +    uint32_t count, bytes;
@@ -1374,11 +1541,14 @@ index f467511..b3d90e1 100644
 +    else if (count) *status |= 0x10000;
 +    else if (s->slot >= 0 && !s->discontinuity) *status |= 0x40000;
 +    ReleaseSRWLockExclusive(&s_buffers_lock);
-+    return S_OK;
-+}
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall ds_SetVelocity(IDirectSound8 *self, float x, float y, float z, DWORD dwApply)
 +HRESULT xbox_DirectSoundStreamProcess(IDirectSoundStream *s, const void *data,
 +    uint32_t bytes, DSStreamCompletion completion, void *context)
-+{
+ {
+-    (void)self; (void)x; (void)y; (void)z; (void)dwApply;
 +    if (!s || (!data && bytes)) return E_INVALIDARG;
 +    if (bytes % s->format.nBlockAlign) return DSERR_BADFORMAT;
 +    uint64_t frames = bytes / s->format.nBlockAlign;
@@ -1405,13 +1575,8 @@ index f467511..b3d90e1 100644
 +            fprintf(stderr, "[AUDIO-DECODE] tag=%X channels=%u rate=%u bytes=%u frames=%llu nonzero=%u peak=%u volume=%d paused=%u\n",
 +                s->format.wFormatTag, s->format.nChannels, s->format.nSamplesPerSec,
 +                bytes, (unsigned long long)frames, nonzero, peak, (int)s->volume, s->paused);
-         }
-     }
--
--    /* Pre-allocate buffer if size specified */
--    if (desc && desc->dwBufferBytes > 0) {
--        buf->buffer_data = calloc(1, desc->dwBufferBytes);
--        buf->buffer_size = desc->dwBufferBytes;
++        }
++    }
 +    AcquireSRWLockExclusive(&s_buffers_lock);
 +    if (s->slot < 0) {
 +        reap_finished();
@@ -1421,14 +1586,7 @@ index f467511..b3d90e1 100644
 +                                 s->format.nSamplesPerSec, s->capacity);
 +            apu_mixer_set_parameters(s->slot, s->format.nSamplesPerSec, linear_volume(s->volume));
 +        }
-     }
--
--    static int create_log_count = 0;
--    if (create_log_count < 30) {
--        fprintf(stderr, "[DSOUND] CreateSoundBuffer: %u bytes, %d ch, %u Hz, %d-bit → mixer slot %d\n",
--                desc ? desc->dwBufferBytes : 0, buf->channels, buf->frequency,
--                buf->bits_per_sample, buf->mixer_slot);
--        create_log_count++;
++    }
 +    HRESULT hr = s->slot < 0 ? DSERR_ALLOCATED : S_OK;
 +    if (hr == S_OK && !apu_mixer_queue_submit(s->slot, pcm, (uint32_t)frames,
 +                                             bytes, completion, context)) hr = E_FAIL;
@@ -1436,9 +1594,7 @@ index f467511..b3d90e1 100644
 +    else {
 +        s->discontinuity = 0;
 +        if (!s->paused) apu_mixer_play(s->slot, 0);
-     }
--
--    *ppBuffer = &buf->iface;
++    }
 +    ReleaseSRWLockExclusive(&s_buffers_lock);
 +    return hr;
 +}
@@ -1451,30 +1607,34 @@ index f467511..b3d90e1 100644
      return S_OK;
  }
 -
--static HRESULT __stdcall ds_CreateSoundStream(IDirectSound8 *self, const DSSTREAMDESC *desc, IDirectSoundStream **ppStream, void *pUnkOuter)
+-static HRESULT __stdcall ds_SetDistanceFactor(IDirectSound8 *self, float f, DWORD dwApply)
 +HRESULT xbox_DirectSoundStreamFlush(IDirectSoundStream *s)
-+{
+ {
+-    (void)self; (void)f; (void)dwApply;
 +    if (!s) return E_INVALIDARG;
 +    AcquireSRWLockExclusive(&s_buffers_lock);
 +    if (s->slot >= 0) { apu_mixer_free_voice(s->slot); s->slot = -1; }
 +    s->discontinuity = 0;
 +    ReleaseSRWLockExclusive(&s_buffers_lock);
-+    return S_OK;
-+}
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall ds_SetRolloffFactor(IDirectSound8 *self, float f, DWORD dwApply)
 +HRESULT xbox_DirectSoundStreamVolume(IDirectSoundStream *s, int32_t volume)
-+{
+ {
+-    (void)self; (void)f; (void)dwApply;
 +    if (!s || volume < -10000 || volume > 0) return E_INVALIDARG;
 +    AcquireSRWLockExclusive(&s_buffers_lock);
 +    s->volume = volume;
 +    apu_mixer_set_parameters(s->slot, s->format.nSamplesPerSec, linear_volume(volume));
 +    ReleaseSRWLockExclusive(&s_buffers_lock);
-+    return S_OK;
-+}
+     return S_OK;
+ }
+-
+-static HRESULT __stdcall ds_SetDopplerFactor(IDirectSound8 *self, float f, DWORD dwApply)
 +HRESULT xbox_DirectSoundStreamPause(IDirectSoundStream *s, uint32_t pause)
  {
--    (void)self; (void)desc; (void)pUnkOuter;
--    /* Streams are more complex - stub for now */
--    if (ppStream) *ppStream = NULL;
+-    (void)self; (void)f; (void)dwApply;
 +    if (!s) return E_INVALIDARG;
 +    if (pause > 1) return E_NOTIMPL; /* synchronized activation requires its device API */
 +    AcquireSRWLockExclusive(&s_buffers_lock);
@@ -1484,7 +1644,58 @@ index f467511..b3d90e1 100644
      return S_OK;
  }
  
-@@ -362,7 +798,7 @@ static const IDirectSound8Vtbl g_ds_vtbl = {
+-static HRESULT __stdcall ds_SetOrientation(IDirectSound8 *self, float xf, float yf, float zf, float xt, float yt, float zt, DWORD dwApply)
++static HRESULT __stdcall ds_SetMixBinHeadroom(IDirectSound8 *self, DWORD dwMixBin, DWORD dwHeadroom)
+ {
+-    (void)self; (void)xf; (void)yf; (void)zf; (void)xt; (void)yt; (void)zt; (void)dwApply;
++    (void)self; (void)dwMixBin; (void)dwHeadroom;
+     return S_OK;
+ }
+ 
++static HRESULT __stdcall ds_SetPosition(IDirectSound8 *self,float x,float y,float z,DWORD apply)
++{
++    (void)self;if(apply>1||!finite_vector(x,y,z))return E_INVALIDARG;
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    float v[3]={x,y,z};memcpy(s_listener_pending.position,v,sizeof(v));
++    if(!apply){memcpy(s_listener.position,v,sizeof(v));publish_spatial();}
++    ReleaseSRWLockExclusive(&s_buffers_lock);return S_OK;
++}
++static HRESULT __stdcall ds_SetVelocity(IDirectSound8 *self,float x,float y,float z,DWORD apply)
++{ (void)self;(void)x;(void)y;(void)z;(void)apply;return E_NOTIMPL; }
++static HRESULT __stdcall ds_SetDistanceFactor(IDirectSound8 *self,float f,DWORD apply)
++{ (void)self;(void)f;(void)apply;return E_NOTIMPL; }
++static HRESULT __stdcall ds_SetRolloffFactor(IDirectSound8 *self,float f,DWORD apply)
++{
++    (void)self;if(apply>1||!isfinite(f)||f<0||f>10)return E_INVALIDARG;
++    AcquireSRWLockExclusive(&s_buffers_lock);s_listener_pending.rolloff=f;
++    if(!apply){s_listener.rolloff=f;publish_spatial();}
++    ReleaseSRWLockExclusive(&s_buffers_lock);return S_OK;
++}
++static HRESULT __stdcall ds_SetDopplerFactor(IDirectSound8 *self,float f,DWORD apply)
++{ (void)self;(void)f;(void)apply;return E_NOTIMPL; }
++static HRESULT __stdcall ds_SetOrientation(IDirectSound8 *self,float xf,float yf,float zf,float xt,float yt,float zt,DWORD apply)
++{
++    (void)self;if(apply>1||!finite_vector(xf,yf,zf)||!finite_vector(xt,yt,zt))return E_INVALIDARG;
++    float front[3]={xf,yf,zf},top[3]={xt,yt,zt};
++    if(!normalize_vector(front)||!normalize_vector(top))return E_INVALIDARG;
++    double dot=(double)front[0]*top[0]+(double)front[1]*top[1]+(double)front[2]*top[2];
++    for(unsigned i=0;i<3;++i)front[i]=(float)(front[i]-dot*top[i]);
++    if(!normalize_vector(front))return E_INVALIDARG;
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    memcpy(s_listener_pending.front,front,sizeof(front));memcpy(s_listener_pending.top,top,sizeof(top));
++    if(!apply){memcpy(s_listener.front,front,sizeof(front));memcpy(s_listener.top,top,sizeof(top));publish_spatial();}
++    ReleaseSRWLockExclusive(&s_buffers_lock);return S_OK;
++}
+ static HRESULT __stdcall ds_CommitDeferredSettings(IDirectSound8 *self)
+ {
+-    (void)self;
+-    return S_OK;
++    (void)self;AcquireSRWLockExclusive(&s_buffers_lock);s_listener=s_listener_pending;
++    for(DSoundBuffer *b=s_buffers;b;b=b->next)b->spatial=b->pending;
++    publish_spatial();ReleaseSRWLockExclusive(&s_buffers_lock);return S_OK;
+ }
+ 
+ static const IDirectSound8Vtbl g_ds_vtbl = {
      ds_QueryInterface,
      ds_AddRef,
      ds_Release,
@@ -1493,9 +1704,13 @@ index f467511..b3d90e1 100644
      ds_CreateSoundStream,
      ds_SetMixBinHeadroom,
      ds_SetPosition,
-@@ -381,6 +817,6 @@ HRESULT xbox_DirectSoundCreate(void *pGuid, IDirectSound8 **ppDS, void *pUnkOute
+@@ -380,7 +891,10 @@ HRESULT xbox_DirectSoundCreate(void *pGuid, IDirectSound8 **ppDS, void *pUnkOute
+ {
      (void)pGuid; (void)pUnkOuter;
      if (!ppDS) return E_INVALIDARG;
++    AcquireSRWLockExclusive(&s_buffers_lock);
++    if(!s_buffers){SpatialListener defaults={{0,0,0},{0,0,1},{0,1,0},1};s_listener=s_listener_pending=defaults;}
++    ReleaseSRWLockExclusive(&s_buffers_lock);
      *ppDS = &g_dsound;
 -    fprintf(stderr, "Audio: DirectSound created (stub - no audio output)\n");
 +    fprintf(stderr, "Audio: DirectSound PCM16/Xbox ADPCM buffers and packet streams (spatial effects incomplete)\n");

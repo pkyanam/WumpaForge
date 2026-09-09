@@ -522,3 +522,14 @@ in-game story-to-hub-to-level transition.
 The documented clang command above passed under UndefinedBehaviorSanitizer with
 one compiler job. Result: `local/reports/audio-transition-test.log`. It emits no
 audio and uses no game assets. No implementation source changed.
+
+## Native spatial buffer behavior added (2026-09-08)
+
+The seven reached distance/source/listener/rolloff/commit calls now apply real
+mono spatial buffer gains. See [AUDIO-SPATIAL.md](AUDIO-SPATIAL.md) for exact ABI,
+current/deferred state, concurrent mixer tests and the stereo approximation's
+limits. Music, ordinary stereo, packet lifetimes and rates remain unchanged.
+HRTF, DSP effect images and I3DL2 still return explicit unsupported results.
+Focused spatial, stream-overlap and252-buffer/producer UBSan regressions pass.
+Full game rebuild and in-game spatial balance verification are pending root
+integration; no native audio success claim is inferred merely from API success.

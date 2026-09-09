@@ -16,6 +16,11 @@ establish audio quality, underrun counts or absence of faults outside this path.
 
 ## First implementable feature: actual spatial sound
 
+Update: native distance and stereo spatial behavior is now implemented and component
+tested; see [AUDIO-SPATIAL.md](AUDIO-SPATIAL.md). Full build and in-game validation
+are pending. The following call-site audit describes the pre-change failure
+that motivated it; HRTF/DSP/reverb remain unsupported.
+
 The current run reaches these public ABI boundaries and returns E_NOTIMPL:
 
 | Operation | Original SDK address | Logged guest return |

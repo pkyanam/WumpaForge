@@ -202,6 +202,30 @@ static void buffer_pitch(void)
     finish(8, b->native->lpVtbl->SetFrequency(b->native, (DWORD)lround(rate)));
 }
 
+static float float_arg(unsigned index) { uint32_t bits=arg(index);float value;memcpy(&value,&bits,4);return value; }
+static void buffer_distance(int maximum)
+{
+    struct Buffer *b=buffer(arg(0));
+    finish(12,b ? (maximum ? b->native->lpVtbl->SetMaxDistance(b->native,float_arg(1),arg(2)) :
+                            b->native->lpVtbl->SetMinDistance(b->native,float_arg(1),arg(2))) : E_INVALIDARG);
+}
+static void buffer_spatial_position(void)
+{
+    struct Buffer *b=buffer(arg(0));
+    finish(20,b ? b->native->lpVtbl->SetPosition(b->native,float_arg(1),float_arg(2),float_arg(3),arg(4)) : E_INVALIDARG);
+}
+static void listener_spatial(unsigned operation)
+{
+    unsigned bytes=operation==0?20:operation==1?32:operation==2?12:4;
+    if(!s_device||arg(0)!=s_device_guest||!s_device_refs){finish(bytes,E_INVALIDARG);return;}
+    HRESULT hr;
+    if(operation==0)hr=s_device->lpVtbl->SetPosition(s_device,float_arg(1),float_arg(2),float_arg(3),arg(4));
+    else if(operation==1)hr=s_device->lpVtbl->SetOrientation(s_device,float_arg(1),float_arg(2),float_arg(3),float_arg(4),float_arg(5),float_arg(6),arg(7));
+    else if(operation==2)hr=s_device->lpVtbl->SetRolloffFactor(s_device,float_arg(1),arg(2));
+    else hr=s_device->lpVtbl->CommitDeferredSettings(s_device);
+    finish(bytes,hr);
+}
+
 static void buffer_seek(void)
 {
     struct Buffer *b = buffer(arg(0));
@@ -376,14 +400,14 @@ BRIDGE(00136605, effects())
 BRIDGE(00137AA4, stream())
 BRIDGE(00135C14, unsupported("full HRTF"); g_esp += 4)
 BRIDGE(00136648, buffer_pitch())
-BRIDGE(00136D3D, finish(12, unsupported("buffer maximum distance")))
-BRIDGE(00136D61, finish(12, unsupported("buffer minimum distance")))
-BRIDGE(00136D85, finish(20, unsupported("buffer spatial position")))
+BRIDGE(00136D3D, buffer_distance(1))
+BRIDGE(00136D61, buffer_distance(0))
+BRIDGE(00136D85, buffer_spatial_position())
 BRIDGE(00136CED, finish(8, unsupported("headphone HRTF")))
-BRIDGE(00136D09, finish(4, unsupported("deferred spatial settings")))
-BRIDGE(00137497, finish(32, unsupported("listener orientation")))
-BRIDGE(001374E1, finish(20, unsupported("listener position")))
-BRIDGE(00137516, finish(12, unsupported("listener rolloff")))
+BRIDGE(00136D09, listener_spatial(3))
+BRIDGE(00137497, listener_spatial(1))
+BRIDGE(001374E1, listener_spatial(0))
+BRIDGE(00137516, listener_spatial(2))
 BRIDGE(0013753A, finish(12, unsupported("I3DL2 listener")))
 BRIDGE(001366F8, stream_control(2))
 BRIDGE(001366FD, stream_control(3))
