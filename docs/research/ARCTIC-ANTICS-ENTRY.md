@@ -118,3 +118,21 @@ the asset pointer. Original instructions are in
 `local/reports/disasm/asm/text.asm`; no proprietary bytes need to be committed.
 `strings local/assets/Crashdat/levels/a/snow_m/snowchars.dat` independently
 shows the penguin asset names above.
+
+## Actual story18 hub navigation
+
+Build57/story18 accepted original New Game, then Space skipped the backstory
+and Space ended the hub hologram. Repeated Computer Use press_key calls work
+for movement despite isolated taps barely moving: observed route from spawn
+was D20, W20, W30, W25, A25, W20, W10. Recheck the actual picture after each
+batch because timing and user input vary. Portal1 visibly displayed ARCTIC
+ANTICS and its original snow preview before a native graphics fence hang.
+
+The stopped snapshot verified Hub0/slot0/available1, player
+(9.456724,7.949531,9.005916), portal center(9.253139,7.804840,9.579517),
+and dwell3. Current Level37/Demo0 and both target levels remained−1: the
+warp/level load had not actually started. The main thread was spinning in
+103330 via103420/1035C0, reached from original InsertFence FED90 after the
+portal draw3AF90. Audio continued independently. Root intentionally stopped
+PID66826 with SIGSTOP for capture; debugger then closed the run. The exit
+was diagnostic, not a second unexplained crash. Full report story-18.log.

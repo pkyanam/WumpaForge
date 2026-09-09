@@ -1,21 +1,23 @@
 # Status — 2026-09-08
 
-## Current: build57/story17 hub movement; reflection input fault and texture-copy cost
-- Build57 reaches visible hub and accepts keyboard jumping/movement after original
-  story skip. Arctic Antics remains unverified; target is Level7/Demo0 via Hub0 portal0.
-- Story17 stops on live reflection v4/v5 stream1 NULL, stride24. Actual bounded
-  buffer probe succeeds: game handle374 pool explicitly lacks tangent storage;
-  matching materials have shader selector0 and reflection manager flag1 intact.
-  Next investigate current draw job/material override versus stale shader selection;
-  do not substitute tangent data or relax live-input bounds. Controller owns analysis.
-- Actual hub median32.6FPS with context timer overhead disabled. Disjoint upload,
-  CopyRects and target resolve work totals about16ms/frame; readback is nested.
-  mac_runtime implements exact linear BGRA8 fastpaths first. See performance report.
-- Build57 includes MIRRORONCE and low-overhead profiling; all19 original static
-  pixel shader definitions pass generation (76 fog/specular variants).
-- Story18 diagnostic PID66826/session42667 is running with extended selection,
-  buffer, shader and audio probes. Root owns UI/build/package; max2 compile jobs.
-  Next consume stop evidence, fix selection/buffer cause, then build58 and enter snow.
+## Current: build57/story18 reaches Arctic Antics portal; native fence hang
+- Normal keyboard navigation reached Hub0/portal0, displayed ARCTIC ANTICS and
+  snow preview. Portal dwell3, Level37/Demo0, target levels−1: no level load yet.
+  Actual route and snapshot are in research/ARCTIC-ANTICS-ENTRY.md.
+- Main thread spins in original103330 via103420/1035C0, called by FED90 after
+  DrawVertices101B20 in3AF90. Missing native fence boundary is next priority;
+  mac_runtime owns faithful API implementation. Root SIGSTOP captured all
+  threads then debugger closed PID66826/session42667; no game running.
+- 34b7452 linear BGRA8 upload/copy/row-flip fastpath passes full native GPU suite.
+  It is not in packaged build57 yet; measure actual performance after build58.
+- Controller implements original per-attribute address retention for NULL stream
+  binds, preserving new stride/type and strict allocation/bounds semantics.
+  Audited original deferred SDK explicitly skips only address writes for NULL.
+  This addresses prior story16/17 reflection fault without inventing tangents.
+- Audio continues at portal hang; native_audio audits transition test coverage.
+  Sporadic story13 null audio call remains unproven; retain on-stop audio probe.
+- Next freeze fixes, max2-job build58/package, story19 navigate original portal
+  and verify Level7/Demo0 plus movement/jump/spin in snow. Goal remains active.
 
 ## Earlier: build55/story15 reflection passes; Xbox address5 is next hub setting
 - b951812 implements actual[PROJECT2D,DOT,DOT,DOT_RFLCT_SPEC] shader chain, signed
