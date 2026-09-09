@@ -1,19 +1,21 @@
 diff --git a/src/d3d/CMakeLists.txt b/src/d3d/CMakeLists.txt
-index f1b3606..4f014dc 100644
+index f1b3606..4c36b3e 100644
 --- a/src/d3d/CMakeLists.txt
 +++ b/src/d3d/CMakeLists.txt
-@@ -25,6 +25,9 @@ else()
+@@ -25,6 +25,11 @@ else()
      pkg_check_modules(EPOXY REQUIRED epoxy)
      target_include_directories(xbox_d3d8 PRIVATE ${EPOXY_INCLUDE_DIRS})
      target_link_libraries(xbox_d3d8 PUBLIC platform SDL2::SDL2 ${EPOXY_LIBRARIES})
 +    if(APPLE)
-+        target_link_libraries(xbox_d3d8 PUBLIC "-framework OpenGL")
++        enable_language(OBJC)
++        target_sources(xbox_d3d8 PRIVATE d3d8_macos_menu.m)
++        target_link_libraries(xbox_d3d8 PUBLIC "-framework OpenGL" "-framework AppKit")
 +    endif()
  endif()
  
  target_include_directories(xbox_d3d8 PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 diff --git a/src/d3d/d3d8_gl.c b/src/d3d/d3d8_gl.c
-index 7888785..a63b5b7 100644
+index 7888785..d574a38 100644
 --- a/src/d3d/d3d8_gl.c
 +++ b/src/d3d/d3d8_gl.c
 @@ -31,6 +31,12 @@
@@ -536,7 +538,7 @@ index 7888785..a63b5b7 100644
      if (!g.window) {
          fprintf(stderr, "[d3d8_gl] SDL_CreateWindow failed: %s\n", SDL_GetError());
          return D3DERR_INVALIDCALL;
-@@ -1006,11 +1335,28 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -1006,11 +1335,29 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
          return D3DERR_INVALIDCALL;
      }
      SDL_GL_MakeCurrent(g.window, g.glctx);
@@ -562,10 +564,11 @@ index 7888785..a63b5b7 100644
  
 +    if (!init_output_buffers()) return D3DERR_INVALIDCALL;
 +    refresh_output_size();
++    install_output_menu();
      init_gl_pipeline();
  
      /* Reasonable default states */
-@@ -1018,9 +1364,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
+@@ -1018,9 +1365,13 @@ static HRESULT __stdcall d3d_CreateDevice(IDirect3D8 *s, UINT adapter, DWORD dev
      mat4_identity(&g.m_view);
      mat4_identity(&g.m_proj);
      g.rs[D3DRS_ZENABLE]            = 1;
@@ -579,12 +582,102 @@ index 7888785..a63b5b7 100644
      g.rs[D3DRS_SRCBLEND]           = D3DBLEND_SRCALPHA;
      g.rs[D3DRS_DESTBLEND]          = D3DBLEND_INVSRCALPHA;
      g.rs[D3DRS_CULLMODE]           = D3DCULL_CCW;
+diff --git a/src/d3d/d3d8_macos_menu.m b/src/d3d/d3d8_macos_menu.m
+new file mode 100644
+index 0000000..cab0a3d
+--- /dev/null
++++ b/src/d3d/d3d8_macos_menu.m
+@@ -0,0 +1,84 @@
++/* macOS-only presentation controls. Menu actions enqueue SDL commands; they do
++ * not enter GL, the guest runtime or worker-thread graphics from AppKit. */
++#import <AppKit/AppKit.h>
++#include <SDL.h>
++#include <math.h>
++static Uint32 s_event;
++static NSMenu *s_display;
++static NSMenuItem *s_output_status,*s_scale_status;
++@interface WumpaForgeDisplayActions : NSObject
++- (void)choose:(NSMenuItem *)item;
++@end
++@implementation WumpaForgeDisplayActions
++- (void)choose:(NSMenuItem *)item
++{
++    SDL_Event event={0};event.type=s_event;event.user.code=(int)item.tag;
++    SDL_PushEvent(&event);
++}
++@end
++static WumpaForgeDisplayActions *s_actions;
++static NSMenuItem *choice(NSMenu *menu,NSString *title,NSInteger code)
++{
++    NSMenuItem *item=[[NSMenuItem alloc] initWithTitle:title action:@selector(choose:) keyEquivalent:@""];
++    item.target=s_actions;item.tag=code;[menu addItem:item];[item release];return item;
++}
++static NSMenu *submenu(NSString *title)
++{
++    NSMenuItem *item=[[NSMenuItem alloc] initWithTitle:title action:NULL keyEquivalent:@""];
++    NSMenu *menu=[[NSMenu alloc] initWithTitle:title];menu.autoenablesItems=NO;
++    item.submenu=menu;[s_display addItem:item];[menu release];[item release];return menu;
++}
++void xbox_MacDisplayMenuInstall(Uint32 event_type)
++{
++    NSCAssert([NSThread isMainThread],@"Display menu is main-thread only");s_event=event_type;
++    if(s_display)return;
++    s_actions=[[WumpaForgeDisplayActions alloc] init];
++    s_display=[[NSMenu alloc] initWithTitle:@"Display"];s_display.autoenablesItems=NO;
++    NSMenuItem *root=[[NSMenuItem alloc] initWithTitle:@"Display" action:NULL keyEquivalent:@""];
++    root.submenu=s_display;
++    NSMenu *main=[NSApp mainMenu];[main insertItem:root atIndex:MIN((NSInteger)2,main.numberOfItems)];[root release];
++    s_output_status=[[NSMenuItem alloc] initWithTitle:@"Output" action:NULL keyEquivalent:@""];s_output_status.enabled=NO;[s_display addItem:s_output_status];
++    s_scale_status=[[NSMenuItem alloc] initWithTitle:@"Original aspect ratio · Scaled output" action:NULL keyEquivalent:@""];s_scale_status.enabled=NO;[s_display addItem:s_scale_status];
++    [s_display addItem:[NSMenuItem separatorItem]];
++    NSMenu *sizes=submenu(@"Window Size");
++    choice(sizes,@"720p — 1280 × 720",720);choice(sizes,@"1080p — 1920 × 1080",1080);choice(sizes,@"1440p — 2560 × 1440",1440);
++    NSMenuItem *full=choice(s_display,@"Enter Full Screen",1);full.keyEquivalent=@"f";full.keyEquivalentModifierMask=NSEventModifierFlagCommand|NSEventModifierFlagControl;
++    NSMenu *sharp=submenu(@"Sharpening");
++    choice(sharp,@"Off",1000);choice(sharp,@"Light",1025);choice(sharp,@"Medium",1050);choice(sharp,@"Strong",1075);
++}
++static void update_menu(NSMenu *menu,int width,int height,float strength,int fullscreen)
++{
++    for(NSMenuItem *item in menu.itemArray) {
++        if(item.submenu){update_menu(item.submenu,width,height,strength,fullscreen);continue;}
++        NSInteger tag=item.tag;
++        if(tag==720 || tag==1080 || tag==1440)item.state=(!fullscreen && height==tag && width==tag*16/9)?NSControlStateValueOn:NSControlStateValueOff;
++        if(tag>=1000 && tag<=1075)item.state=(fabsf(strength-(tag-1000)/100.0f)<.001f)?NSControlStateValueOn:NSControlStateValueOff;
++        if(tag==1){item.title=fullscreen?@"Exit Full Screen":@"Enter Full Screen";item.state=fullscreen?NSControlStateValueOn:NSControlStateValueOff;}
++    }
++}
++void xbox_MacDisplayMenuUpdate(int width,int height,float sharpness,int fullscreen)
++{
++    if(!s_display)return;
++    NSCAssert([NSThread isMainThread],@"Display menu is main-thread only");
++    NSString *name=sharpness<=0?@"Off":sharpness<=.25f?@"Light":sharpness<=.5f?@"Medium":@"Strong";
++    s_output_status.title=[NSString stringWithFormat:@"Output: %d × %d · Sharpening %@",width,height,name];
++    update_menu(s_display,width,height,sharpness,fullscreen);
++}
++#ifdef WRATH_PRESENTATION_MENU_TEST
++/* Test the actual native target/action path rather than fabricating an SDL key. */
++static int activate(NSMenu *menu,int command)
++{
++    for(NSInteger i=0;i<menu.numberOfItems;++i){NSMenuItem *item=[menu itemAtIndex:i];
++        if(item.submenu && activate(item.submenu,command))return 1;
++        if(item.tag==command){[menu performActionForItemAtIndex:i];return 1;}}
++    return 0;
++}
++int xbox_MacDisplayMenuTestActivate(int command){return activate(s_display,command);}
++int xbox_MacDisplayMenuTestChecked(int command)
++{
++    for(NSMenuItem *item in s_display.itemArray){
++        if(item.tag==command)return item.state==NSControlStateValueOn;
++        for(NSMenuItem *child in item.submenu.itemArray)if(child.tag==command)return child.state==NSControlStateValueOn;}
++    return 0;
++}
++#endif
 diff --git a/src/d3d/d3d8_present.inc b/src/d3d/d3d8_present.inc
 new file mode 100644
-index 0000000..6c8378e
+index 0000000..030a13d
 --- /dev/null
 +++ b/src/d3d/d3d8_present.inc
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,240 @@
 +/* Native output presentation. Internal game pixels/depth never resize with the
 + * Cocoa drawable; only the final image is scaled. Included after D3DGL globals. */
 +static struct {
@@ -594,7 +687,18 @@ index 0000000..6c8378e
 +    GLint u_source,u_size,u_sharpness;
 +    const char *filter_source;
 +    float sharpness;
++    float preferred_sharpness;
++    Uint32 menu_event;
++    int feedback_width,feedback_height,feedback_fullscreen;
++    float feedback_sharpness;
 +} g_output;
++
++#ifdef __APPLE__
++void xbox_MacDisplayMenuInstall(Uint32 event_type);
++void xbox_MacDisplayMenuUpdate(int width,int height,float sharpness,int fullscreen);
++#endif
++static void update_output_feedback(void);
++static void refresh_output_size(void);
 +
 +GLuint xbox_D3D8GLBackBuffer(unsigned index)
 +{ return index < 2 ? g_output.fbo[index] : 0; }
@@ -630,6 +734,8 @@ index 0000000..6c8378e
 +        g_output.u_sharpness=glGetUniformLocation(program,"u_sharpness");
 +    }
 +    g_output.sharpness=strength;
++    if(strength>0)g_output.preferred_sharpness=strength;
++    update_output_feedback();
 +    fprintf(stderr,"[d3d8_gl] output filter %s (strength%.2f)\n",strength>0?"bounded sharpening":"bilinear",strength);
 +    return 1;
 +}
@@ -688,6 +794,26 @@ index 0000000..6c8378e
 +    return valid;
 +}
 +
++static const char *output_sharpening_name(float strength)
++{ return strength<=0?"Off":strength<=.25f?"Light":strength<=.5f?"Medium":"Strong"; }
++static void update_output_feedback(void)
++{
++#ifdef __APPLE__
++    if(!pthread_main_np())return;
++#endif
++    if(!g.window)return;
++    int full=(SDL_GetWindowFlags(g.window)&SDL_WINDOW_FULLSCREEN_DESKTOP)!=0;
++    if(g_output.feedback_width==g_output.width && g_output.feedback_height==g_output.height &&
++       g_output.feedback_sharpness==g_output.sharpness && g_output.feedback_fullscreen==full)return;
++    g_output.feedback_width=g_output.width;g_output.feedback_height=g_output.height;
++    g_output.feedback_sharpness=g_output.sharpness;g_output.feedback_fullscreen=full;
++    char title[256];
++    snprintf(title,sizeof(title),"%s — %d × %d · Sharpening %s",g_window_title,g_output.width,g_output.height,output_sharpening_name(g_output.sharpness));
++    SDL_SetWindowTitle(g.window,title);
++#ifdef __APPLE__
++    xbox_MacDisplayMenuUpdate(g_output.width,g_output.height,g_output.sharpness,full);
++#endif
++}
 +/* Caller is Cocoa main and owns the recursive native device lock. Workers use
 + * only these cached pixel dimensions, never SDL window/view APIs. */
 +static void refresh_output_size(void)
@@ -701,24 +827,62 @@ index 0000000..6c8378e
 +#endif
 +        g_output.width=width; g_output.height=height;
 +    }
++    update_output_feedback();
 +}
 +
-+static void output_event(const SDL_Event *event)
++/* Presets describe output pixels, not SDL logical points or game render size.
++ * Measure both axes on the current display so Retina does not double the request.
++ * Window-manager constraints remain authoritative and visible in feedback. */
++static int output_pixel_preset(int height)
 +{
-+    if (event->type!=SDL_KEYDOWN || event->key.repeat ||
-+        event->key.windowID!=SDL_GetWindowID(g.window)) return;
-+    SDL_Keycode key=event->key.keysym.sym;
-+    SDL_Keymod mods=(SDL_Keymod)event->key.keysym.mod;
-+    if (key==SDLK_F10 && g_output.filter_source) {
-+        if (!xbox_D3D8GLSetPresentationFilter(g_output.filter_source,g_output.sharpness>0?0:.25f))
-+            fprintf(stderr,"[d3d8_gl] output filter toggle failed\n");
-+    }
-+    if (key==SDLK_F11 || (key==SDLK_f && (mods&KMOD_GUI) && (mods&KMOD_CTRL))) {
++    if(height!=720 && height!=1080 && height!=1440)return 0;
++    int logical_w,logical_h,pixels_w,pixels_h;
++    SDL_GetWindowSize(g.window,&logical_w,&logical_h);SDL_GL_GetDrawableSize(g.window,&pixels_w,&pixels_h);
++    if(logical_w<=0 || logical_h<=0 || pixels_w<=0 || pixels_h<=0)return 0;
++    int width=height*16/9;
++    int requested_w=(int)(((int64_t)width*logical_w+pixels_w/2)/pixels_w);
++    int requested_h=(int)(((int64_t)height*logical_h+pixels_h/2)/pixels_h);
++    if(SDL_GetWindowFlags(g.window)&SDL_WINDOW_FULLSCREEN_DESKTOP)
++        if(SDL_SetWindowFullscreen(g.window,0)<0)return 0;
++    SDL_SetWindowSize(g.window,requested_w,requested_h);
++    SDL_SetWindowPosition(g.window,SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED);
++    refresh_output_size();return 1;
++}
++static void output_command(int command)
++{
++    if(command==720 || command==1080 || command==1440) {
++        if(!output_pixel_preset(command))fprintf(stderr,"[d3d8_gl] output size request failed: %s\n",SDL_GetError());
++    } else if(command==1) {
 +        Uint32 mode=SDL_GetWindowFlags(g.window)&SDL_WINDOW_FULLSCREEN_DESKTOP;
-+        if (SDL_SetWindowFullscreen(g.window,mode?0:SDL_WINDOW_FULLSCREEN_DESKTOP)<0)
++        if(SDL_SetWindowFullscreen(g.window,mode?0:SDL_WINDOW_FULLSCREEN_DESKTOP)<0)
 +            fprintf(stderr,"[d3d8_gl] fullscreen toggle failed: %s\n",SDL_GetError());
 +        refresh_output_size();
++    } else if(command==1000 || command==1025 || command==1050 || command==1075) {
++        if(g_output.filter_source && !xbox_D3D8GLSetPresentationFilter(g_output.filter_source,(command-1000)/100.0f))
++            fprintf(stderr,"[d3d8_gl] output filter change failed\n");
 +    }
++}
++static void output_event(const SDL_Event *event)
++{
++    if(g_output.menu_event && event->type==g_output.menu_event) {
++        output_command(event->user.code);return;
++    }
++    if(event->type!=SDL_KEYDOWN || event->key.repeat || event->key.windowID!=SDL_GetWindowID(g.window))return;
++    SDL_Keycode key=event->key.keysym.sym;SDL_Keymod mods=(SDL_Keymod)event->key.keysym.mod;
++    if(key==SDLK_F10 && g_output.filter_source) {
++        float strength=g_output.sharpness>0?0:(g_output.preferred_sharpness>0?g_output.preferred_sharpness:.5f);
++        if(!xbox_D3D8GLSetPresentationFilter(g_output.filter_source,strength))fprintf(stderr,"[d3d8_gl] output filter toggle failed\n");
++    }
++    if(key==SDLK_F11 || (key==SDLK_f && (mods&KMOD_GUI) && (mods&KMOD_CTRL)))output_command(1);
++}
++static void install_output_menu(void)
++{
++#ifdef __APPLE__
++    g_output.menu_event=SDL_RegisterEvents(1);
++    if(g_output.menu_event==(Uint32)-1){g_output.menu_event=0;return;}
++    xbox_MacDisplayMenuInstall(g_output.menu_event);
++    g_output.feedback_width=-1;update_output_feedback();
++#endif
 +}
 +
 +/* Also exported for a focused GPU readback before the window swap. This draws

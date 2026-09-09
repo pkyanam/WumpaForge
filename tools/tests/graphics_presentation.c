@@ -5,6 +5,11 @@
 #include <epoxy/gl.h>
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
+#ifdef WRATH_PRESENTATION_MENU_TEST
+extern int xbox_MacDisplayMenuTestActivate(int);
+extern int xbox_MacDisplayMenuTestChecked(int);
+#endif
 extern int xbox_D3D8GLAcquire(void);
 extern void xbox_D3D8GLRelease(void);
 extern void xbox_D3D8GLPumpEvents(void);
@@ -109,6 +114,34 @@ int main(void)
     assert(SDL_PushEvent(&key)==1);SDL_Delay(20);xbox_D3D8GLPumpEvents();
     presented(device,window);
     resized(device,window,320,240);
+#ifdef WRATH_PRESENTATION_MENU_TEST
+    /* Native AppKit target/actions queue commands; SDL/Cocoa consumes them on
+     * the same locked main-thread path as the real game. */
+    const int presets[]={720,1080,1440};
+    for(unsigned i=0;i<3;++i){
+        assert(xbox_MacDisplayMenuTestActivate(presets[i]));
+        SDL_Delay(30);xbox_D3D8GLPumpEvents();SDL_Delay(30);xbox_D3D8GLPumpEvents();
+        int lw,lh,dw,dh;SDL_GetWindowSize(window,&lw,&lh);SDL_GL_GetDrawableSize(window,&dw,&dh);
+        printf("PRESET %dp logical=%dx%d drawable=%dx%d\n",presets[i],lw,lh,dw,dh);
+        assert(dw==presets[i]*16/9 && dh==presets[i]);
+        assert(xbox_MacDisplayMenuTestChecked(presets[i]));
+        char expected[64];snprintf(expected,sizeof(expected),"%d × %d",dw,dh);assert(strstr(SDL_GetWindowTitle(window),expected));
+        presented(device,window);
+    }
+    const int choices[]={1025,1050,1075,1000};const char *names[]={"Light","Medium","Strong","Off"};
+    for(unsigned i=0;i<4;++i){
+        assert(xbox_MacDisplayMenuTestActivate(choices[i]));SDL_Delay(30);xbox_D3D8GLPumpEvents();
+        assert(xbox_MacDisplayMenuTestChecked(choices[i]) && strstr(SDL_GetWindowTitle(window),names[i]));presented(device,window);
+    }
+    /* F10 remembers the last chosen strength, while its visible state agrees. */
+    key.key.keysym.sym=SDLK_F10;assert(SDL_PushEvent(&key)==1);SDL_Delay(30);xbox_D3D8GLPumpEvents();
+    assert(xbox_MacDisplayMenuTestChecked(1075) && strstr(SDL_GetWindowTitle(window),"Strong"));
+    assert(xbox_MacDisplayMenuTestActivate(1));SDL_Delay(30);xbox_D3D8GLPumpEvents();
+    assert(SDL_GetWindowFlags(window)&SDL_WINDOW_FULLSCREEN_DESKTOP);assert(xbox_MacDisplayMenuTestChecked(1));presented(device,window);
+    assert(xbox_MacDisplayMenuTestActivate(1440));SDL_Delay(30);xbox_D3D8GLPumpEvents();SDL_Delay(30);xbox_D3D8GLPumpEvents();
+    assert(!(SDL_GetWindowFlags(window)&SDL_WINDOW_FULLSCREEN_DESKTOP));assert(xbox_MacDisplayMenuTestChecked(1440));presented(device,window);
+    puts("PASS native Display menu actions, exact Retina720/1080/1440 pixels, visible sharpening levels/checks, fullscreen exit and displayed4:3 pixels");
+#endif
     xbox_D3D8GLRelease();SDL_Quit();
     puts("PASS native resize/fullscreen/filter transitions with displayed front pixels/letterbox and preserved internal color/depth/GL state");
 }

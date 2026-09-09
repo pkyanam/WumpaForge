@@ -9,8 +9,8 @@ motion, so they do not need a mapping from window coordinates to game pixels.
 
 The SDL window is resizable and supports the normal macOS maximize/fullscreen
 window controls. F11 or Control–Command–F toggles desktop fullscreen; repeated
-keydown events are ignored. F10 toggles optional bounded sharpening at strength0.25;
-it starts off. Mac keyboards configured for media keys may require Fn with F10/F11.
+keydown events are ignored. F10 toggles optional bounded sharpening; it starts
+off and enables Medium (strength0.5) unless a different strength was selected. Mac keyboards configured for media keys may require Fn with F10/F11.
 `WRATH_SHARPNESS=0.25` can select it at launch (accepted range0..1).
 Fullscreen preserves the desktop display mode. Escape
 remains the game's Start/pause binding. The main thread alone handles SDL window
@@ -84,3 +84,39 @@ that Present restores both read/draw FBOs and buffer selections. Root ran
 `local/reports/presentation-transition-integration.log`. This extends displayed
 pixel coverage beyond the earlier single windowed swap. No production behavior
 changed, and these component checks do not measure game performance or latency.
+
+
+## Discoverable output controls
+
+The native macOS **Display** menu provides **Window Size → 720p / 1080p / 1440p**,
+fullscreen, and **Sharpening → Off / Light / Medium / Strong**. Presets describe
+1280×720, 1920×1080 and2560×1440 output pixels. The renderer measures the ratio
+between SDL logical window points and Retina drawable pixels before resizing;
+it does not mistake2560 logical points for2560 output pixels. A preset exits
+fullscreen. Manual resizing remains available, and fullscreen already scales to
+the available display pixels without increasing internal rendering resolution.
+
+The window title and menu status report the measured output dimensions and
+current sharpening. Checkmarks use actual dimensions, so a display/window-manager
+constraint is not mislabeled as a successful1440p switch. The640×480 game image
+remains4:3 inside the output canvas. The menu also labels this as scaled output;
+no new game detail or internal HD rendering is implied.
+
+Light/Medium/Strong use strengths0.25/0.5/0.75. F10 toggles off and back to the last
+chosen nonzero strength, or Medium by default. AppKit menu actions only enqueue
+SDL commands. Window changes, filter setup and feedback updates run on the locked
+Cocoa main-thread path. Worker presentation uses cached dimensions. Menu and title
+updates occur when output settings change, not on every draw.
+
+The macOS adapter is `d3d8_macos_menu.m`; the cumulative graphics patch includes
+its Objective-C/AppKit CMake setup. Other platforms retain their existing SDL
+keyboard controls. The component binary `build/input/test_presentation_menu`
+adds `WRATH_PRESENTATION_MENU_TEST` to exercise real native target/action dispatch,
+Retina output sizes, title/checkmark consistency, sharpening levels and preset
+selection from fullscreen, alongside the existing displayed pixel/GL-state tests.
+Root ran the synthetic window test successfully (exit0):
+`local/reports/presentation-menu-build.log` and `presentation-menu-smoke.log`.
+The Retina window requests produced exact1280×720,1920×1080 and2560×1440
+drawables, and native action/checkmark/title/fullscreen and displayed-pixel
+assertions passed. The graphics patch reverse-apply check also passed. No new
+live-game validation or game-performance measurement is implied by these controls.
