@@ -1478,8 +1478,16 @@ static HRESULT draw_vertices_data_fetch(uint32_t type, uint32_t count, const voi
             free(converted); return D3DERR_INVALIDCALL;
         }
     }
-    if (read32(0x10EF60))
-        shader_error("fixed fog", "enabled FVF fog requires original fixed-function distance generation");
+    float fog_parameters[2],fog_color[4];
+    int fog_mode=shader_fog_parameters(fog_parameters);
+    if (fog_mode && (s_fvf&0xE)==D3DFVF_XYZRHW)
+        shader_error("fixed fog", "transformed FVF fog requires original SDK102850 microprogram distance");
+    /* Original108000 selects specular alpha for tableNONE, otherwise radial
+     * or signed planar view-space distance. Physical c57 is SET_FOG_PLANE. */
+    int fog_distance=read32(0x10EF64)==0?0:read32(0x10EF74)?1:2;
+    shader_rgba(read32(0x10EFF4),fog_color);
+    extern void xbox_D3D8GLSetFixedFog(int,int,const float *,const float *,const float *);
+    xbox_D3D8GLSetFixedFog(fog_mode,fog_distance,fog_parameters,s_vertex_constants[57],fog_color);
     apply_fixed_transforms();
     if ((s_fvf & 0xE) == D3DFVF_XYZRHW) {
         if (stride < 16 || !s_viewport.Width || !s_viewport.Height) { free(converted); return D3DERR_INVALIDCALL; }
@@ -2206,6 +2214,7 @@ static void test_shader_bridge(void)
 #include "../tools/test_vertex_retention.inc"
 #include "../tools/test_shader_constant_mode.inc"
 #include "../tools/test_native_fog.inc"
+#include "../tools/test_fixed_fog.inc"
 #include "../tools/test_dot_reflection.inc"
 #include "../tools/test_mirror_once.inc"
 #include "../tools/test_linear_bgra.inc"
@@ -2547,6 +2556,7 @@ int main(void)
     test_vertex_retention();
     test_shader_constant_mode();
     test_native_fog();
+    test_fixed_fog();
     test_dot_reflection();
     test_mirror_once();
     test_linear_bgra();

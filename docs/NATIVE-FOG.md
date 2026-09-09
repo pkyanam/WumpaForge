@@ -1,4 +1,4 @@
-# Programmable native fog
+# Native programmable and fixed fog
 
 Story06 reached the real Level7 snow draw with fog enabled and stopped at the
 previous explicit fog guard. The vertex program has69 instructions. The native
@@ -64,15 +64,12 @@ added to Git. The new GLSL uniform contract is integer u_nv2a_fog_mode (0 disabl
 
 ## Explicit boundary
 
-Enabled fog with an FVF/fixed vertex pipeline remains an explicit error. The
-primary [fixed vertex reference](https://github.com/xemu-project/xemu/blob/fdfb5a8f481b2f870c57080e74ec8d3a31a47053/hw/xbox/nv2a/pgraph/glsl/vsh-ff.c)
-uses distinct distance sources: transformed view-space plane/radial distance,
-specular alpha, or v5.x according to the original fog-generation mode. That
-contract is not the programmed oFog.x contract. It would be incorrect to substitute
-screen depth or silently omit fog. The verified Level7 failure uses programmed
-vertices; further fixed-fog support needs the reached FVF/mode/matrix evidence.
-NV2A ABS fog modes are not emitted by the audited original SDK and are not exposed
-by the supported D3D table-mode values. Unknown D3D modes fail explicitly.
+Fixed XYZ vertices now use the original fixed distance contract, described below.
+Enabled XYZRHW remains explicit: original102850 uploads a separate SDK vertex
+microprogram for transformed coordinates. Its fog distance cannot be assumed to
+be the untransformed world/view contract. Fixed-vertex/programmed-pixel pairing
+also retains its existing explicit boundary. NV2A ABS fog modes are not emitted
+by the audited original SDK; unknown D3D table modes still fail explicitly.
 
 ## Validation
 
@@ -89,3 +86,41 @@ resource-lifetime and shader tests. All passed. Logs are ignored:
 Command: the graphics smoke command in RESOURCE-REGISTRY.md, with output
 `build/input/test_native_fog`. No game launch or full AOT build was performed by
 this component task; actual Level7 fog still needs the parent's integration run.
+
+## Reached fixed XYZ fog: story20 / Arctic Antics
+
+Build58/story20 actually loaded Level7/Demo0, `levels/a/snow_m/snow`. The native
+fixed pipeline stopped before the first snow frame with enable1, tableLINEAR3,
+start1, end35, range0 and live physical c57=(0,0,1,0). This is separate from the
+earlier programmed-vertex Level7 fog implementation.
+
+Original108031..10804E computes fog generation mode as `1 + !rangeEnabled`.
+Original108053..108068 overrides it to0 when table mode is NONE. The resulting
+NV2A modes are0 SPEC_ALPHA,1 RADIAL,2 PLANAR. The original coefficient path is
+shared with programmed fog. The [pinned fixed vertex reference](https://github.com/xemu-project/xemu/blob/fdfb5a8f481b2f870c57080e74ec8d3a31a47053/hw/xbox/nv2a/pgraph/glsl/vsh-ff.c)
+confirms the three distances: clamped input specular alpha, length of view-space
+XYZ, or the signed plane dot product plus plane offset. This reference is LGPL2
+or later; this implementation uses the documented equations and register
+semantics, with independently written native shader integration.
+
+The title bridge passes coefficients, generation mode, RGB fog color and actual
+physical c57 to `xbox_D3D8GLSetFixedFog`. The backend computes world*view separately
+from world*view*projection, so projection/viewport/depth normalization cannot
+change eye distance. Its fixed vertex shader computes the original factor before
+interpolation without prematurely clamping0..1. The fragment shader clamps the
+interpolated factor and blends RGB with fog color; original alpha and alpha test
+remain unchanged. Specular alpha is fetched from its actual FVF field even when
+specular lighting is disabled. No new guest shader, synthetic fog data, hardware
+wait bypass or game logic change is used.
+
+`tools/test_fixed_fog.inc` adds asset-free GPU readback for planar versus radial,
+specular-alpha/tableNONE, LINEAR/EXP/EXP2, separate world and view translations,
+projection independence, negative signed eye distance, live plane scaling and
+offset, unchanged alpha and fog disable. The full combined renderer smoke passed
+on its first run, including all existing programmable fog, shader, resource,
+retained vertex address and native fence tests. Logs:
+`local/reports/fixed-fog-build.log` and `fixed-fog-smoke.log`; binary
+`build/input/test_fixed_fog`. Cumulative graphics patch reverse-apply validation
+and `git diff --check` passed, including the existing CMake Apple OpenGL linkage.
+Production was frozen before parent build59. Actual snow playability remains the
+parent's integration/visual test, not something the component fixture proves.
