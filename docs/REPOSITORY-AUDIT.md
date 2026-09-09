@@ -72,3 +72,11 @@ outputs and are not part of a normal Git push. Unreachable objects, reflog-only
 history, remote GitHub state, and files added after this checkpoint are outside
 this snapshot. Recheck staged paths and `git diff --cached --stat` immediately
 before pushing; never use `git add -f` for ignored game or build material.
+
+## Authorized later artwork
+
+The later `assets/branding/wumpaforge-icon.png` is newly generated project artwork
+explicitly requested by the user. It is intentionally tracked and is not an ISO
+extraction. Its [prompt/provenance](BRANDING.md) is recorded; generated `.icns`
+and app bundles stay under ignored `build/`. The no-binary result above describes
+the earlier audit checkpoint, not a claim that this later artwork is absent.

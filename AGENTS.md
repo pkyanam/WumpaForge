@@ -99,3 +99,8 @@ compilable console binary with a working native game.
   scaffolding only. No promised working APK or unrequested large SDK downloads.
 - Newly generated project branding in assets/branding is intentionally tracked;
   original game assets, captures and binaries remain excluded.
+
+- Latest validation preference: the user reported a glitched attract demo and
+  requests source audits plus synthetic CPU/GPU tests instead of further live
+  game testing for now. Report per-path evidence, not a made-up99.5% guarantee.
+- Shield scope is specifically NVIDIA SHIELD TV Pro2019 (mdarcy), not other models.
