@@ -1,61 +1,102 @@
-# Wrath of Cortex — native Apple Silicon port in progress
+# WumpaForge
 
-**Development build; gameplay validation is in progress.** This workspace statically translates the
-supplied original Xbox executable into C and compiles it to native ARM64. The user
-approved Xbox graphics/audio/system compatibility layers; no Xbox CPU interpreter
-or JIT is used. See [current status](docs/STATUS.md) and `git log` for progress.
+An experimental native Apple Silicon macOS port of **Crash Bandicoot: The Wrath of
+Cortex**, built from your own original USA Xbox disc image. The original Xbox game
+code is translated ahead of time to C and compiled to ARM64, with compatibility
+layers for graphics, audio, input, and system calls. There is no CPU interpreter
+or JIT fallback.
 
-The original ISO stays read-only at the workspace root. Game assets, generated
-sources, build outputs, virtual environments, and upstream clones are ignored by Git.
+The user has completed **Arctic Antics**, the first winter/penguin level. Bugs
+remain, and the rest of the game has not been validated. The target is 60 FPS;
+performance varies by scene and this is not a finished release. Development
+evidence and known issues are in [STATUS](docs/STATUS.md).
 
-## Launch the local build
+## Setup
 
-After building, run `python3 tools/package.py`, then open `build/Wrath Native.app`.
-The app finds the local extracted assets automatically and has no diagnostic
-watchdog unless one is explicitly enabled in the environment. The bundle links
-to this workspace's assets and currently relies on its local native libraries.
-
-Use WASD to move, Space to jump/confirm, X to spin, and Enter to pause. Space can
-skip the story and hub hologram. Walk into portal1 and wait to enter Arctic Antics.
-See [all controls](docs/CONTROLS.md) for mouse and gamepad mappings.
-
-The window can be resized or maximized. F11 (or Control–Command–F) toggles
-fullscreen; F10 toggles sharpening. Output preserves the original4:3 aspect
-ratio. The game still renders internally at640x480; larger output is scaled.
-See [presentation](docs/WINDOW-PRESENTATION.md) for validation and limitations.
-
-## Reproduce
-
-Existing host tools: Xcode Command Line Tools, Python 3.11+, CMake, Homebrew SDL2,
-libepoxy, pkg-config, and OpenSSL. If missing, the Homebrew packages are `sdl2
-libepoxy pkg-config openssl@3 cmake`.
+You need an Apple Silicon Mac running macOS 14 or newer, Xcode Command Line Tools
+(`xcode-select --install`), and native [Homebrew](https://brew.sh) at
+`/opt/homebrew`. Run Terminal natively, without Rosetta. Install the build tools:
 
 ```sh
-python3 tools/bootstrap.py
-.venv/bin/python tools/pipeline.py prepare
-.venv/bin/python tools/pipeline.py analyze
-.venv/bin/python tools/pipeline.py lift
-.venv/bin/python tools/pipeline.py assets
-cmake -S . -B build/native -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_OSX_ARCHITECTURES=arm64
-cmake --build build/native --parallel 2
-file build/native/wrath_native
+brew install gh python cmake sdl2 libepoxy pkg-config openssl@3
 ```
 
-`prepare` extracts only `default.xbe` and inventories/hashes the disc; `assets`
-extracts the remaining files when ready to run. Existing extracted files are
-preserved. All stage logs go into `local/reports/`.
+Python 3.11 or newer is required. This repository is currently private: your GitHub
+account needs access, and `gh auth login` must succeed first. Obtain your own
+original **USA Xbox** ISO; no game files or download links are provided here.
+Other regions and console versions are unsupported. The setup script checks the
+original executable's SHA-256 before extraction.
 
-## Diagnose startup
+From the directory where you want the checkout, replace the quoted ISO path with
+your own absolute path and run this one line:
 
 ```sh
-python3 tools/boot.py boot-next
+gh repo clone pkyanam/WumpaForge && python3 WumpaForge/tools/setup.py "/absolute/path/Crash Bandicoot - The Wrath of Cortex (USA).iso"
 ```
 
-The helper captures crash backtraces in `local/reports/boot-next.log` and bounds
-development runs. It is not a playable launcher. Reaching
-missing generated code deliberately stops with the original Xbox address; it must
-be fixed before claiming functional behavior.
+Setup downloads the pinned xboxrecomp toolkit, applies this repository's patches,
+creates a Python virtual environment, extracts and verifies your local game
+files, generates the translated sources, builds with at most two compiler jobs,
+and packages the app. The first build can take a while. The ISO is read-only and
+can remain anywhere on your disk. Extraction and build products stay ignored by
+Git. Keep several GB of free disk space for the assets, generated code and build.
 
-Controller and audio backend tests are documented in [CONTROLLERS](docs/CONTROLLERS.md)
-and [AUDIO](docs/AUDIO.md). Both are independently tested; game integration remains
-in progress. Source URLs, versions, and attribution are in [UPSTREAM](docs/UPSTREAM.md).
+To preview the steps without downloading, extracting, or compiling:
+
+```sh
+python3 WumpaForge/tools/setup.py --dry-run "/absolute/path/game.iso"
+```
+
+If you already cloned the repository, run `python3 tools/setup.py "/absolute/path/game.iso"`
+from its root. Reruns preserve existing files and verify the extracted assets;
+use a fresh checkout for a different disc image. A successful build does not
+validate every level or feature.
+
+## Play
+
+Open `build/Wrath Native.app` inside the checkout, or run from its root:
+
+```sh
+open "build/Wrath Native.app"
+```
+
+The app currently uses a link to `local/assets` and local Homebrew libraries.
+Keep the checkout and dependencies in place; the app is not a standalone,
+redistributable bundle. **Extracted game assets are required at runtime.**
+
+Focus the game window, then use WASD to move, Space to jump/confirm, X or left
+mouse to spin, C or right mouse to crouch/slide, and Enter to pause. The original
+story can be watched or skipped with Space or Enter. From the first hub, walk
+into portal 1 and wait to enter Arctic Antics. See [all controls](docs/CONTROLS.md).
+
+Xbox One/Series and PS5 DualSense mappings use SDL's game-controller interface.
+Pair the controller through macOS Bluetooth settings. Physical Bluetooth testing
+for both controller families remains unverified; keyboard and mouse are available.
+
+Resize or maximize the window normally. F11 (or Control–Command–F) toggles
+fullscreen; F10 toggles optional sharpening. Internal rendering remains 640×480
+with a 4:3 aspect ratio; larger output is scaled with borders as needed. See
+[presentation details and limitations](docs/WINDOW-PRESENTATION.md).
+
+## Development and AI agents
+
+Setup composes the existing tools: `bootstrap.py`, the `prepare`, `assets`,
+`analyze` and `lift` stages of `pipeline.py`, `verify_assets.py`, CMake, and
+`package.py`. Pipeline diagnostics are written to `local/reports/`. Run
+`python3 tools/setup.py --help` for options.
+
+An AI coding agent is optional. Open this checkout in your agent, ask it to read
+[AGENTS.md](AGENTS.md) and [STATUS](docs/STATUS.md), and give it the local ISO path
+and a concrete task. For example: “Read AGENTS.md and STATUS.md, then help me run
+the setup script with my ISO at `/absolute/path/game.iso`.” No agent subscription
+or API key is required to build or play.
+
+macOS Apple Silicon is the only current development target. There is no mobile
+or NVIDIA Shield build or tested port. Sharing an ARM64 CPU does not make the
+operating system, graphics or packaging compatible. See the
+[future portability notes](docs/PORTABILITY.md).
+
+Game content, extracted executables, translated game sources, binaries, build
+outputs, and dependency checkouts must stay out of commits. Upstream provenance
+and license notes are in [UPSTREAM](docs/UPSTREAM.md). Private source access does
+not grant rights to redistribute the original game or its derived build products.
