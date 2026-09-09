@@ -12,7 +12,7 @@ index 4cf3d79..7437e9a 100644
  /* MSVC's __forceinline -> gcc/clang equivalent on POSIX. */
  #if !defined(_MSC_VER) && !defined(__forceinline)
 diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
-index 468312d..8788134 100644
+index 468312d..d25e6c8 100644
 --- a/tools/recomp/lifter.py
 +++ b/tools/recomp/lifter.py
 @@ -342,6 +342,10 @@ def _make_condition(jcc, flag_setter, flag_ops):
@@ -155,7 +155,44 @@ index 468312d..8788134 100644
              return [f"/* {m} {insn.op_str} */"]
  
          if m in ("fadd", "faddp", "fsub", "fsubp", "fsubr", "fsubrp",
-@@ -3018,6 +3051,71 @@ class Lifter:
+@@ -2903,7 +2936,25 @@ class Lifter:
+         if m == "fscale":
+             return [f"fp_top() = ldexp(fp_top(), (int)fp_st1()); /* fscale */"]
+         if m == "frndint":
+-            return [f"fp_top() = rint(fp_top()); /* frndint */"]
++            # FLDCW only updates the guest control word. Host rint therefore
++            # follows an unrelated rounding mode. Every finite binary64 value
++            # at or above2^52 is already integral; preserve NaNs/Inf and zeros.
++            return [
++                "{ double _round_value = fp_top(), _round_result = _round_value;",
++                "  if (isfinite(_round_value) && fabs(_round_value) < 0x1p52) {",
++                "    switch ((g_fp_control_word >> 10) & 3u) {",
++                "    case 1: _round_result = floor(_round_value); break;",
++                "    case 2: _round_result = ceil(_round_value); break;",
++                "    case 3: _round_result = trunc(_round_value); break;",
++                "    default: { double _round_floor = floor(_round_value);",
++                "      double _round_fraction = _round_value - _round_floor;",
++                "      _round_result = _round_floor + (_round_fraction > 0.5 ||",
++                "        (_round_fraction == 0.5 && fmod(_round_floor, 2.0) != 0.0)); break; }",
++                "    }",
++                "    _round_result = copysign(_round_result, _round_value);",
++                "  }",
++                "  fp_top() = _round_result; } /* frndint: guest x87 RC */",
++            ]
+         if m == "fldpi":
+             return [f"fp_push(3.14159265358979323846); /* fldpi */"]
+         if m == "fldl2e":
+@@ -2915,8 +2966,7 @@ class Lifter:
+         if m == "fldln2":
+             return [f"fp_push(0.69314718055994530942); /* fldln2 */"]
+         if m == "ftst":
+-            return [f"g_fp_cmp = (fp_top() < 0.0) ? -1 : "
+-                    f"(fp_top() > 0.0) ? 1 : 0; /* ftst */"]
++            return ["g_fp_cmp = RECOMP_FCMP(fp_top(), 0.0); /* ftst */"]
+         if m == "fxch":
+             # fxch st(i) swaps st0 with st(i); the bare form is st(1). Was
+             # hardcoded to st1, so fxch st(2)/st(3)/st(4) (86/7/1 sites in Halo)
+@@ -3018,6 +3068,71 @@ class Lifter:
          return [f"/* FPU: {m} {insn.op_str} */"]
  
  
@@ -227,7 +264,7 @@ index 468312d..8788134 100644
  def lift_basic_block(lifter, bb, flag_state=None):
      """
      Lift a basic block to C statements.
-@@ -3134,53 +3232,9 @@ def lift_basic_block(lifter, bb, flag_state=None):
+@@ -3134,53 +3249,9 @@ def lift_basic_block(lifter, bb, flag_state=None):
              results = lifter.lift_instruction(insns[i])
          stmts.extend(results)
  
