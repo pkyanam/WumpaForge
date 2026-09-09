@@ -15,6 +15,7 @@ def main():
     parser.add_argument('--sdk',type=Path,default=Path.home()/'Library/Android/sdk')
     parser.add_argument('--ndk',type=Path)
     parser.add_argument('--java-home',type=Path,default=Path('/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home'))
+    parser.add_argument('--aot-opt',choices=('1','2'),default='1',help='Generated native game optimization level (default:1)')
     parser.add_argument('--package-only',action='store_true')
     args=parser.parse_args()
     sdk=args.sdk.resolve(); ndk=(args.ndk or sdk/'ndk/27.1.12297006').resolve()
@@ -24,7 +25,7 @@ def main():
         if not required.exists(): parser.error(f'Missing installed tool: {required}')
     if not args.package_only:
         run([sys.executable,HERE/'prepare.py'])
-        run(['cmake','-Wno-author','-Wno-deprecated','-S',HERE,'-B',WORK/'native',f'-DCMAKE_TOOLCHAIN_FILE={ndk}/build/cmake/android.toolchain.cmake','-DANDROID_ABI=arm64-v8a','-DANDROID_PLATFORM=android-30','-DCMAKE_BUILD_TYPE=RelWithDebInfo'])
+        run(['cmake','-Wno-author','-Wno-deprecated','-S',HERE,'-B',WORK/'native',f'-DCMAKE_TOOLCHAIN_FILE={ndk}/build/cmake/android.toolchain.cmake','-DANDROID_ABI=arm64-v8a','-DANDROID_PLATFORM=android-30','-DCMAKE_BUILD_TYPE=RelWithDebInfo',f'-DWUMPA_AOT_OPT={args.aot_opt}'])
         run(['cmake','--build',WORK/'native','--parallel','2'])
     package=WORK/'package'; package.mkdir(parents=True,exist_ok=True)
     classes=package/'classes'; dex=package/'dex'; resources=package/'res'
