@@ -944,7 +944,7 @@ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint n
         fprintf(stderr, "[wrath graphics] texture upload failed GL0x%X\n", error);
         return D3DERR_INVALIDCALL;
     }
-    wrath_profile_upload(profile_start,profile_bytes);
+    wrath_profile_upload(profile_start,profile_bytes,r->handle,r->format,r->width,r->height);
     r->snapshot_valid=r->encoded_snapshot!=NULL; ++r->upload_serial;
     r->dirty = 0; return 0;
 }
@@ -1642,6 +1642,7 @@ static uint32_t encode_color(uint32_t color, uint32_t format)
 static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
 {
     if (r->framebuffer || (r->target_fbo && read32(GUEST_DEVICE+0x2070)==r->handle)) {
+        uint64_t profile_start=wrath_profile_begin();
         GLint old_fbo, old_buffer, old_pack, old_alignment, old_row, old_rows, old_pixels;
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &old_fbo);
         glGetIntegerv(GL_READ_BUFFER, &old_buffer);
@@ -1665,6 +1666,7 @@ static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
                 unsigned top = y * r->width + x, bottom = (r->height - 1 - y) * r->width + x;
                 uint32_t swap = pixels[top]; pixels[top] = pixels[bottom]; pixels[bottom] = swap;
             }
+        wrath_profile_surface(WRATH_PROFILE_READBACK,profile_start,(uint64_t)r->width*r->height*4);
         return 0;
     }
     int linear, bpp = format_info(r->format, &linear);
@@ -1690,6 +1692,7 @@ static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
  * keeps row orientation explicit without a shader-specific texture flip. */
 static HRESULT resolve_texture_target(struct Resource *r)
 {
+    uint64_t profile_start=wrath_profile_begin();
     int linear, bpp=format_info(r->format,&linear);
     if (bpp<=0) return D3DERR_INVALIDCALL;
     uint32_t *pixels=malloc((size_t)r->width*r->height*4);
@@ -1705,7 +1708,9 @@ static HRESULT resolve_texture_target(struct Resource *r)
         struct Resource *parent=resource(r->owner);
         if (parent) parent->dirty=1;
     }
-    free(pixels); return result;
+    free(pixels);
+    wrath_profile_surface(WRATH_PROFILE_RESOLVE,profile_start,(uint64_t)r->width*r->height*4);
+    return result;
 }
 static HRESULT prepare_texture_target(struct Resource *r)
 {
@@ -1788,6 +1793,7 @@ void sub_000FF580(void) /* CopyRects(source,rectangles,count,destination,points)
     if (!count) count = 1;
     uint32_t *pixels = malloc((size_t)source->width * source->height * 4);
     if (!pixels) { finish(20, 0x8007000E); return; }
+    uint64_t profile_start=wrath_profile_begin();
     HRESULT result = surface_pixels(source, pixels);
     for (unsigned i = 0; result >= 0 && i < count; ++i) {
         D3DRECT rect = {0,0,(LONG)source->width,(LONG)source->height};
@@ -1823,7 +1829,9 @@ void sub_000FF580(void) /* CopyRects(source,rectangles,count,destination,points)
             if (parent) parent->dirty = 1;
         }
     }
-    free(pixels); finish(20, (uint32_t)result);
+    free(pixels);
+    wrath_profile_surface(WRATH_PROFILE_COPYRECTS,profile_start,(uint64_t)source->width*source->height*4);
+    finish(20, (uint32_t)result);
 }
 
 #include "index_bridge.inc"
@@ -2152,6 +2160,7 @@ static void test_shader_bridge(void)
 #include "../tools/test_native_fog.inc"
 #include "../tools/test_dot_reflection.inc"
 #include "../tools/test_mirror_once.inc"
+#include "../tools/test_context_profile_bench.inc"
 #include "../tools/test_texture_snapshot.inc"
 
 int main(void)
@@ -2492,6 +2501,7 @@ int main(void)
     test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();
+    test_context_profile_bench();
     SDL_Quit();
     free(memory);
     return 0;

@@ -15,6 +15,12 @@ static uint64_t wrath_profile_clock(clockid_t clock)
 struct WrathFrameProfile {
     uint64_t last_end,last_cpu,work,work_cpu,present,interval,max_interval;
     uint64_t uploads,upload_bytes,upload_time,binds,rebinds,draws,stream_bytes;
+    struct {
+        uint32_t handle,format,width,height;
+        uint64_t count,bytes,time;
+    } upload_resources[32];
+    uint64_t upload_untracked;
+    uint64_t surface_count[3],surface_bytes[3],surface_time[3];
     unsigned frames,intervals;
 };
 static struct WrathFrameProfile wrath_profiles[2];
@@ -22,12 +28,30 @@ static struct WrathFrameProfile *wrath_profile_current(void)
 { return &wrath_profiles[window_thread()?0:1]; }
 static uint64_t wrath_profile_begin(void)
 { return wrath_profile_enabled()?wrath_profile_clock(CLOCK_MONOTONIC):0; }
-static void wrath_profile_upload(uint64_t start,uint64_t rgba_bytes)
+static void wrath_profile_upload(uint64_t start,uint64_t rgba_bytes,
+                                 uint32_t handle,uint32_t format,uint32_t width,uint32_t height)
 {
     if (!start) return;
     struct WrathFrameProfile *p=wrath_profile_current();
     ++p->uploads; p->upload_bytes+=rgba_bytes;
-    p->upload_time+=wrath_profile_clock(CLOCK_MONOTONIC)-start;
+    uint64_t elapsed=wrath_profile_clock(CLOCK_MONOTONIC)-start;
+    p->upload_time+=elapsed;
+    for(unsigned i=0;i<32;++i) {
+        if(p->upload_resources[i].count && p->upload_resources[i].handle!=handle) continue;
+        p->upload_resources[i].handle=handle;p->upload_resources[i].format=format;
+        p->upload_resources[i].width=width;p->upload_resources[i].height=height;
+        ++p->upload_resources[i].count;p->upload_resources[i].bytes+=rgba_bytes;
+        p->upload_resources[i].time+=elapsed;return;
+    }
+    ++p->upload_untracked;
+}
+enum { WRATH_PROFILE_READBACK,WRATH_PROFILE_COPYRECTS,WRATH_PROFILE_RESOLVE };
+static void wrath_profile_surface(unsigned kind,uint64_t start,uint64_t bytes)
+{
+    if(!start || kind>=3) return;
+    struct WrathFrameProfile *p=wrath_profile_current();
+    ++p->surface_count[kind];p->surface_bytes[kind]+=bytes;
+    p->surface_time[kind]+=wrath_profile_clock(CLOCK_MONOTONIC)-start;
 }
 static void wrath_profile_bind(uint32_t handle,uint32_t previous)
 {
@@ -76,5 +100,22 @@ static void wrath_profile_present_end(uint64_t start)
         (unsigned long long)p->uploads,p->upload_bytes/1048576.0,p->upload_time/n/1e6,
         (unsigned long long)p->binds,(unsigned long long)p->rebinds,(unsigned long long)p->draws,
         p->stream_bytes/1048576.0,scene,position,step,read32(0x1BAA2C),read32(0x1BABB0));
+    fprintf(stderr,"[wrath surface profile] thread=%s readbacks=%llu readback_MiB=%.3f readback_ms=%.3f copies=%llu copy_source_MiB=%.3f copy_ms=%.3f resolves=%llu resolve_MiB=%.3f resolve_ms=%.3f upload_untracked=%llu\n",
+        window_thread()?"main":"worker",(unsigned long long)p->surface_count[0],p->surface_bytes[0]/1048576.0,p->surface_time[0]/n/1e6,
+        (unsigned long long)p->surface_count[1],p->surface_bytes[1]/1048576.0,p->surface_time[1]/n/1e6,
+        (unsigned long long)p->surface_count[2],p->surface_bytes[2]/1048576.0,p->surface_time[2]/n/1e6,(unsigned long long)p->upload_untracked);
+    /* At most five heavy resources per60 frames. Fixed storage and bounded scan;
+     * overflow is reported rather than silently claiming complete attribution. */
+    unsigned emitted=0;
+    for(unsigned rank=0;rank<5;++rank) {
+        int best=-1;
+        for(unsigned i=0;i<32;++i)if(!(emitted&(1u<<i)) && p->upload_resources[i].count &&
+            (best<0 || p->upload_resources[i].time>p->upload_resources[best].time))best=(int)i;
+        if(best<0)break;emitted|=1u<<best;
+        fprintf(stderr,"[wrath upload resource] thread=%s handle=%08X format=%02X size=%ux%u count=%llu MiB=%.3f ms_per_frame=%.3f\n",
+            window_thread()?"main":"worker",p->upload_resources[best].handle,p->upload_resources[best].format,
+            p->upload_resources[best].width,p->upload_resources[best].height,(unsigned long long)p->upload_resources[best].count,
+            p->upload_resources[best].bytes/1048576.0,p->upload_resources[best].time/n/1e6);
+    }
     memset(p,0,sizeof(*p)); p->last_end=now; p->last_cpu=cpu;
 }
