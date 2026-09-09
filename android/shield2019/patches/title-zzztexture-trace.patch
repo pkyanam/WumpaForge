@@ -1,0 +1,103 @@
+--- a/graphics.c
++++ b/graphics.c
+@@ -924,6 +924,7 @@
+  * complete mip chain padded to 128 bytes. Pixel data remains guest-owned. */
+ extern GLuint xbox_D3D8GLTextureName(IDirect3DTexture8 *texture);
+ #include "dxt_upload.inc"
++#include "texture_trace.inc"
+ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint name, unsigned faces,
+                                      const uint32_t *colors, unsigned color_count)
+ {
+@@ -932,6 +933,7 @@
+     /* P8 output also depends on the stage palette: its caller validates that
+      * key. Other formats require byte equality even if no Lock marked dirty. */
+     if (r->format != 0x0B && texture_snapshot_matches(r)) { r->dirty=0; return 0; }
++    wumpa_texture_trace_end(wumpa_texture_trace_begin(r,0),"upload",r,0);
+     if (r->format == 0x0B) {
+         for (unsigned level = 0; level < r->levels; ++level) {
+             const uint8_t *indices = guest_ptr(r->data + r->offsets[level]);
+@@ -1925,6 +1927,7 @@
+     if (bpp<=0) return D3DERR_INVALIDCALL;
+     uint32_t *pixels=malloc((size_t)r->width*r->height*4);
+     if (!pixels) return (HRESULT)0x8007000E;
++    struct WumpaTextureTrace trace=wumpa_texture_trace_begin(r,1);
+     HRESULT result=surface_pixels(r,pixels);
+     if (result>=0) {
+         uint8_t *data=guest_ptr(r->data);
+@@ -1947,6 +1950,7 @@
+         if (parent) parent->dirty=1;
+     }
+     free(pixels);
++    wumpa_texture_trace_end(trace,"resolve",r,result);
+     wrath_profile_surface(WRATH_PROFILE_RESOLVE,profile_start,(uint64_t)r->width*r->height*4);
+     return result;
+ }
+--- /dev/null
++++ b/texture_trace.inc
+@@ -0,0 +1,66 @@
++/* One selected frame, bounded diagnostics only. Caller holds graphics mutex.
++ * No guest writes, GL calls, snapshot edits, or altered resource lifetimes. */
++#define WUMPA_TEXTURE_TRACE_BYTES (256u*1024u)
++#define WUMPA_TEXTURE_TRACE_RECORDS 96u
++struct WumpaTextureTrace { unsigned record; uint8_t *before; };
++static int wumpa_texture_trace_active(void)
++{
++    static int initialized;
++    static uint32_t selected;
++    if(!initialized) {
++        const char *value=getenv("WRATH_TRACE_TEXTURE_FRAME");
++        char *end=NULL;
++        unsigned long frame=value?strtoul(value,&end,10):0;
++        if(value && *value && end && !*end && frame>0 && frame<=UINT32_MAX)selected=(uint32_t)frame;
++        initialized=1;
++    }
++    return selected && read32(GUEST_SWAP_COUNT)+1==selected;
++}
++static struct WumpaTextureTrace wumpa_texture_trace_begin(struct Resource *r,int copy)
++{
++    static unsigned records;
++    struct WumpaTextureTrace trace={0,NULL};
++    if(!wumpa_texture_trace_active() || records>=WUMPA_TEXTURE_TRACE_RECORDS ||
++       !r || !r->bytes || r->bytes>WUMPA_TEXTURE_TRACE_BYTES)return trace;
++    trace.record=++records;
++    if(copy) {
++        trace.before=malloc(r->bytes);
++        if(trace.before)memcpy(trace.before,guest_ptr(r->data),r->bytes);
++    }
++    return trace;
++}
++static uint32_t wumpa_texture_trace_hash(const uint8_t *p,size_t bytes)
++{
++    uint32_t hash=2166136261u;
++    for(size_t i=0;i<bytes;++i)hash=(hash^p[i])*16777619u;
++    return hash;
++}
++static void wumpa_texture_trace_end(struct WumpaTextureTrace trace,const char *event,
++                                   struct Resource *r,HRESULT status)
++{
++    if(!trace.record)return;
++    const uint8_t *data=guest_ptr(r->data);
++    struct Resource *parent=r->owner?resource(r->owner):r;
++    const uint8_t *shadow=NULL;
++    uint32_t offset=0;
++    int mip=-1;
++    if(parent && r->data>=parent->data && r->data-parent->data<=parent->bytes &&
++       r->bytes<=parent->bytes-(r->data-parent->data)) {
++        offset=r->data-parent->data;
++        if(parent->snapshot_valid && parent->encoded_snapshot)shadow=parent->encoded_snapshot+offset;
++        for(unsigned i=0;i<parent->levels && i<13;++i)
++            if(offset==parent->offsets[i]) {mip=(int)i;break;}
++    }
++    uint32_t changed=0,first=UINT32_MAX,shadow_changed=0,shadow_first=UINT32_MAX;
++    for(uint32_t i=0;i<r->bytes;++i) {
++        if(trace.before && trace.before[i]!=data[i]) {++changed;if(first==UINT32_MAX)first=i;}
++        if(shadow && shadow[i]!=data[i]) {++shadow_changed;if(shadow_first==UINT32_MAX)shadow_first=i;}
++    }
++    fprintf(stderr,"[shield texture] n=%u frame=%u event=%s handle=%08X owner=%08X data=%08X offset=%u mip=%d size=%ux%u bytes=%u fmt=%02X caller=%08X status=%08X dirty=%d snapshot=%d serial=%llu before=%d before_hash=%08X after_hash=%08X changed=%u first=%u shadow=%d shadow_changed=%u shadow_first=%u\n",
++        trace.record,read32(GUEST_SWAP_COUNT)+1,event,r->handle,r->owner,r->data,offset,mip,
++        r->width,r->height,r->bytes,r->format,read32(g_esp),(unsigned)status,r->dirty,
++        parent?parent->snapshot_valid:0,(unsigned long long)(parent?parent->upload_serial:0),
++        trace.before!=NULL,trace.before?wumpa_texture_trace_hash(trace.before,r->bytes):0,
++        wumpa_texture_trace_hash(data,r->bytes),changed,first,shadow!=NULL,shadow_changed,shadow_first);
++    free(trace.before);
++}
