@@ -141,3 +141,9 @@ be presented as the performance difference between production Off and On.
 clang -std=c11 -O2 -Wall -Wextra tools/test_presentation_filter.c -framework OpenGL -o build/input/test_presentation_filter
 build/input/test_presentation_filter
 ```
+
+The later `wrath_filter_check` CMake target in [testing instructions](TESTING.md)
+repeats the same synthetic fixture with assertions explicitly enabled. Its M3
+run passed all strengths/resolutions (`local/reports/component-filter-check.log`);
+1440p Medium measured0.0883ms median in another short noisy sample. This remains
+an isolated filter cost, not a whole-game performance or latency guarantee.

@@ -3,6 +3,7 @@
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -13,12 +14,12 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 SYNTHETIC = (
     'test_lifter.py', 'test_incremental_lift.py', 'test_flag_merge.py',
-    'test_mixed_flag_paths.py', 'test_logical_shift_widths.py',
+    'test_mixed_flag_paths.py', 'test_frame_state.py', 'test_logical_shift_widths.py',
     'test_shift_rotate_widths.py', 'test_carry_rotates.py',
     'test_x87_rounding.py', 'test_x87_status_rounding.py',
-    'test_x87_classification.py', 'test_sha_context.py', 'test_audio_probe.py',
+    'test_x87_classification.py', 'test_sahf_remainder.py', 'test_sha_context.py', 'test_audio_probe.py',
 )
-ORIGINAL = ('test_double_shifts.py', 'test_crt_division.py')
+ORIGINAL = ('test_double_shifts.py', 'test_crt_division.py', 'test_sahf_remainder.py')
 ORIGINAL_INPUTS = (
     'local/assets/default.xbe', 'local/reports/disasm/functions.json',
     'local/reports/disasm/labels.json',
@@ -33,10 +34,13 @@ def main():
                         default='synthetic', help='default: synthetic; original needs completed local analysis')
     parser.add_argument('--list', action='store_true', help='print selected commands without running them')
     args = parser.parse_args()
-    tests = (() if args.suite == 'original' else SYNTHETIC) + (() if args.suite == 'synthetic' else ORIGINAL)
+    tests = tuple(dict.fromkeys((() if args.suite == 'original' else SYNTHETIC)
+                                + (() if args.suite == 'synthetic' else ORIGINAL)))
+    original = '0' if args.suite == 'synthetic' else '1'
     if args.list:
         for test in tests:
-            print(shlex.join([sys.executable, str(ROOT / 'tools' / test)]))
+            print(shlex.join(['env', 'WRATH_TEST_ORIGINAL='+original,
+                              sys.executable, str(ROOT / 'tools' / test)]))
         return 0
     if not (ROOT / 'third_party/xboxrecomp/tools/recomp/lifter.py').is_file() or not shutil.which('clang'):
         parser.error('pinned toolkit and Clang are required; complete the README setup first')
@@ -54,7 +58,8 @@ def main():
         print(f'Running {test} ...', flush=True)
         with log.open('w') as stream:
             run = subprocess.run([sys.executable, str(ROOT / 'tools' / test)], cwd=ROOT,
-                                 stdout=stream, stderr=subprocess.STDOUT)
+                                 stdout=stream, stderr=subprocess.STDOUT,
+                                 env={**os.environ, 'WRATH_TEST_ORIGINAL': original})
         result = {'test': test, 'returncode': run.returncode,
                   'seconds': round(time.monotonic() - start, 3), 'log': str(log)}
         results.append(result)

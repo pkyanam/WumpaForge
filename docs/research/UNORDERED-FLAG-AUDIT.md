@@ -29,8 +29,8 @@ which inputs reach each branch.
 
 For a masked-invalid x87 comparison with a NaN operand, the status condition
 bits are C3/C2/C0=111. FNSTSW AX followed by SAHF consequently sets ZF/PF/CF=111.
-The current model correctly represents the comparison as `g_fp_cmp=2`, but
-SAHF emits only a comment and its branch conditions compare that enum with zero.
+At the pre-fix checkpoint, the model correctly represented the comparison as `g_fp_cmp=2`, but
+SAHF emitted only a comment and its branch conditions compare that enum with zero.
 JNE and JAE become true, while JBE and JE become false: each contradicts the
 actual flag bits. Ordered inputs can conceal this error.
 
@@ -73,10 +73,10 @@ Although F4344 is labeled a tail alias, it has real indirect caller evidence:
 - Original calls to F433A occur at1A5C3/return1A5C8, B0E6C/returnB0E71,
   E7EC0/returnE7EC5, E7EF6/returnE7EFB, E8825/returnE882A and E88B1/returnE88B6.
 
-FXAM of a normal finite value leaves C2=1. Current FPREM computes the complete
-binary64 `fmod` result but does not update any x87 status bits. For example,
-normal operands5.5 and2 produce remainder1.5 while leaving C2 set. Today the
-emitted JP is constant false. Correcting SAHF to read AH without correcting
+FXAM of a normal finite value leaves C2=1. Pre-fix FPREM computed the complete
+binary64 `fmod` result but did not update any x87 status bits. For example,
+normal operands5.5 and2 produce remainder1.5 while leaving C2 set. At that checkpoint the
+emitted JP was constant false. Correcting SAHF to read AH without correcting
 FPREM completion status could loop forever on this ordinary finite path.
 
 A subsequent bounded repair should first validate FPREM completion/status
@@ -132,7 +132,8 @@ original sites were found in this audit.
 carry consumption, unknown-OF capability checks, and15040 signed/rounding
 FPREM/FPREM1 cases. Quotient expectations use independent exact Python integer
 ratios, including ties, subnormal values, huge exponent gaps and every host
-rounding mode. With the user's XBE present it translates and executes the actual
+rounding mode. With `WRATH_TEST_ORIGINAL=1` (or `tools/check.py --suite all`) it requires the
+user's XBE and translates/executes the actual
 F4344 helper, starting with C2 set, verifies termination, numeric result, quotient
 bits and stack pop. No original bytes or generated C are committed. Exceptional
 input tests verify the explicit boundary. The local report is

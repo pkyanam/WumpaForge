@@ -8,7 +8,7 @@ therefore host-local garbage. Their eventual `LEAVE` restored that garbage.
 Ordinary returns also left the two TLS EBP mirrors holding a nested callee's frame;
 a frameless relay could consequently pass a dead frame to its next helper.
 
-`tools/test_frame_state.py` translates small original instruction sequences and
+`tools/test_frame_state.py` translates small synthetic x86 instruction sequences and
 compiles them to native C with UBSan and deterministic Clang automatic-variable
 initialization. The five baseline cases all failed. Saved EBP was `AAAAAAAA`
 instead of `7770`, and a framed indirect call inherited `7FF4` instead of its

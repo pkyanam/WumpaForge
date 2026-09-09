@@ -46,9 +46,10 @@ No backend implementation or cumulative graphics dependency patch changed.
 smoke test. It checks swizzled mip1 and linear whole/subrectangle locks, actual
 GPU colors, top-left row orientation, pitch and pointer offsets, isolation of
 the other mip, unchanged active target, no-wait staging behavior, and release
-lifetimes. Root owns visible GPU execution; build command/output is recorded
-in `local/reports/texture-target-lock-build.log`, with the resulting executable
-at `build/input/test_texture_target_lock`.
+lifetimes. Reproduce through the `wrath_graphics_check` CMake target in
+[testing instructions](TESTING.md). Root also used the focused executable
+`build/input/test_texture_target_lock`; build diagnostics are in
+`local/reports/texture-target-lock-build.log`.
 The after-fix GPU run exited **0**, including this fixture and the complete
 existing graphics smoke suite; `local/reports/texture-target-lock-after.log`
 records the result. The baseline exited134 on the expected stale-pixel assertion.

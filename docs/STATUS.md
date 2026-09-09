@@ -47,6 +47,9 @@ remain ignored. Generated project branding is intentionally tracked.
 | Carry rotations and division |0367fab implements RCL/RCR carry rings and wrapping NEG. Four actual original CRT64 division/remainder helpers pass40000 random pairs plus edge cases under UBSan. Architectural division exceptions remain unchanged. [Audit](research/AOT-CORRECTNESS-AUDIT.md) |
 | Mixed flag branches |7b39d0a fixes four original CFG joins, including Aku Aku follower-angle selection.1236 emitted native checks pass; full translation adds no fallback sites. This is not a demonstrated Cortex-distortion cause. [Audit](research/MASK-ANGLE-FLAG-AUDIT.md) |
 | Sharpening strengths |f081a53 tests Off/Light/Medium/Strong at HD/FHD/QHD against independent pixels and alpha/bars.1440p Medium median0.0522ms in a short isolated filter measurement; host load was uncontrolled and no whole-game latency inference follows. [Presentation](WINDOW-PRESENTATION.md) |
+| Active read-only texture locks |1b385a3 resolves current GPU pixels for synchronized read-only locks of the active mip. Stale-blue baseline fails; full GPU suite passes after correction. Writable active-target coherence remains open. [Contract](TEXTURE-TARGET-LOCKS.md) |
+| Guest SHA context |eaf3ace corrects116-byte guest storage and24-byte prefix.79 layout/prefix failures become zero; standard hash vectors and canaries pass. Full save/load remains unverified. [Audit](research/SHA-CONTEXT-AUDIT.md) |
+| SAHF and remainder status |383c2f1 couples actual AH flag snapshots with FPREM completion/quotient bits.805376 flag checks,15040 remainder cases and the original F4344 loop pass. Exceptional FPREM remains an explicit boundary. [Audit](research/UNORDERED-FLAG-AUDIT.md) |
 
 Build61 snow measurements varied: median42.35FPS in a heavier sampled area and
 60FPS later. The user reported smooth full-level play. Build63 hub samples had
@@ -61,8 +64,8 @@ verified **PRIVATE**, with origin configured and source history pushed. Root
 must push the newest evening commits again before handoff and verify remote SHA.
 A fresh authenticated clone plus setup dry-run passed. All five dependency
 patches replayed on a clean pinned checkout and matched all41 affected files
-through build67 (`local/reports/patch-replay67.json`). Source7eec696 is pushed;
-the later evening commits still require the final private push.
+through build67 (`local/reports/patch-replay67.json`). Sourcef6b878e is pushed;
+the later evening commits still require the final private push/replay.
 
 [README](../README.md) includes the private clone/setup one-liner, BYO supported
 USA Xbox ISO, runtime asset requirement, controls and optional AI agents.
@@ -82,13 +85,16 @@ probe. Root macOS build is unchanged by this scaffolding.
 
 ## Active ownership and next steps
 
-- regression_audit: read-only independent review of mixed flag changes and their
-  interaction with shift/rotate provenance. No production edits or compiler.
-- mac_runtime: read-only animated geometry/resource lifetime audit for a concrete
-  stale-state counterexample. No production edits or compiler.
-- Root: integrated build67 is packaged. Continue bounded source audits until the
-  final23:45 EDT freeze; private push and final verification remain. Do not launch
-  the game for validation unless the user changes the current preference.
+- mac_runtime: completing a bounded guest EBP frame-state correction. Eleven
+  synthetic frame/tail/SEH exchange cases pass; final tests/patch freeze pending.
+- regression_audit: FP source383c2f1 frozen; read-only independent review of EBP.
+- Root: build67 remains packaged. New compatibility changes await combined
+  regeneration/build. The new CMake graphics/filter targets both pass and are
+  excluded from normal builds; no game assets or generated C are required for
+  those component targets. CPU runner includes explicit original-input selection.
+- Continue until23:45 EDT integration freeze, then final build/package/private
+  push and verification by midnight. Do not launch the game for validation unless
+  the user changes the current preference.
 
 Intermittent story/hologram/demo visuals remain unproven; prior GetStatus target0
 in story13 remains unreproduced. Physical Xbox/PS5 Bluetooth controllers remain

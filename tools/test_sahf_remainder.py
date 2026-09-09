@@ -1,6 +1,7 @@
 """CPU-only SAHF flags and binary64 FPREM status, including original CRT loop."""
 from pathlib import Path
 import math
+import os
 import random
 import subprocess
 import sys
@@ -64,7 +65,10 @@ class SahfRemainder(unittest.TestCase):
         self.assertEqual(advance_flag_state(sahf,None), ('sahf',[]))
         self.assertIsNone(_make_condition('jo','sahf',[]))
         self.assertEqual(merge_flag_states([('sahf',[]),('sahf_of',[])]),('sahf',[]))
-        xbe = ROOT/'local/assets/default.xbe'; original = xbe.exists()
+        xbe = ROOT/'local/assets/default.xbe'
+        original = os.environ.get('WRATH_TEST_ORIGINAL') == '1'
+        if original:
+            self.assertTrue(xbe.is_file(), 'WRATH_TEST_ORIGINAL=1 requires the supplied XBE')
         if original:
             config.configure_from_xbe(str(xbe))
             batch = BatchTranslator(xbe_path=str(xbe),
@@ -183,7 +187,7 @@ int main(void) {
                 assert(g_fp_stack[g_fp_top]==expected && (expected!=0. || !!signbit(g_fp_stack[g_fp_top])==!!signbit(expected)));
                 assert(!(g_fp_status_word&0x400u) && quotient_bits()==v->q);
             }'''
-        source=source.replace('ORIGINAL_LABEL','passed' if original else 'not available (BYO XBE)').replace('ORIGINAL',original_check if original else '')
+        source=source.replace('ORIGINAL_LABEL','passed' if original else 'not requested').replace('ORIGINAL',original_check if original else '')
         with tempfile.TemporaryDirectory(prefix='wumpaforge-sahf-') as tmp:
             path=Path(tmp)/'test.c';path.write_text(source);binary=Path(tmp)/'test'
             subprocess.run(['clang','-std=c11','-O2','-Wall','-Wextra','-Werror','-Wno-unused-variable','-Wno-unused-but-set-variable','-Wno-unused-label',
