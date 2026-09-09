@@ -79,3 +79,20 @@ submission/context work. Do not hold the graphics lock across arbitrary original
 guest execution: potential guest lock/wait ordering must be proven or explicitly
 handled. The9.98-second maximum early frame also includes loading and1571texture
 uploads over its60-frame window; steady-state FPS does not describe that pause.
+
+## Final uniform-cache validation
+
+Source9166913 fullphysicalGPU suite returned0, including changedvertexconstant
+pixels. PID8695 measured51.73/52.72FPS at animation326.5/356.5;28.32/21.32 at
+416.5/446.5;16.20 at686.5. The small change is not a controlled speedup claim.
+Initial load max9952.665ms persists. Logs: uniform-values-game.log and
+uniform-values-graphics.log. At77%weeklyusage, stop new work to preserve the20%
+remainingfloor buffer. No60FPS, audio-sync or hub-crash completion is claimed.
+
+Next rendering work: measure a fixed heavy scene, then design a way to reduce
+EGL ownership transfers without holding graphics locks across guest waits. A
+render-thread command submission design must copy pointer payloads at submission,
+preserve getter/readback/deletion ordering and guest resource lifetimes, handle
+SDL lifecycle/context loss and propagate failures. It is a substantial change,
+not an approved shortcut to remove locking. Separately trace the original heap
+free-list corruption beforeEndStateBlock allocation; retain fullstate semantics.

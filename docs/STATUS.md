@@ -29,7 +29,15 @@ list (20000 UBSan reference comparisons) and removes duplicate texture snapshot
 checks within each draw. Full real Shield GPU regression passes with both changes;
 opening light windows measure51.22/52.18FPS, heavier windows28.54/21.64FPS.
 Driver reports640x480 internal rendering,1920x1080 drawable, swapinterval1.
-These are modest improvements, not sustained60FPS. Android worker/main profiling is
+These are modest improvements, not sustained60FPS.
+The next installed build adds exact per-program vertex-constant value caching;
+UBSan signed-zero/NaN/reuse/change checks and the full physical GPU suite pass.
+Its final run measured51.73/52.72FPS in lighter opening windows,28.32/21.32FPS
+in heavier windows, and16.20FPS at animation686.5. Early loading still contains a
+9.95-second maximum frame. No sustained60FPS or corrected audio synchronization.
+At77% weekly used (23% remaining), new work is paused with the requested20% floor
+buffer. Latest installed source9166913; native process8695 was left running.
+Source/pixel checks do not establish crash freedom; the original heap issue remains. Android worker/main profiling is
 now separated and reports actual internal/drawable dimensions. Repeat source
 preparation passes after cleaning disposable title copies before patch replay.
 No playable Shield milestone or60FPS/audio-sync guarantee is claimed. Mac build68 remains intact. The earlier

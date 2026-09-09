@@ -82,6 +82,9 @@ rumble or reconnect behavior is correct. Unmapped controllers need a mapping.
 - Lazy EGL binding and ordered scalar GL batching, cached profile flags, API
   binding guard and uniform locations improve that same segment to51.08–51.35FPS.
   Other intro segments measure roughly20–40FPS; this remains below the target.
+  Later indexed-resource/texture changes passed the full GPU suite; measured
+  opening windows51.22/52.18FPS and heavier28.54/21.64FPS remain below60.
+  Actual output is1920x1080 from640x480 internal rendering.
 - Opt-in on-disk shader binaries pass the real GPU suite cold and warm; the warm
   run loaded23 cached programs, saved0 new ones, and returned0. The host fixture
   also rejects corrupt, mismatched-driver and link-rejected entries and bounds

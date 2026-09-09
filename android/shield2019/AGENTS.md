@@ -30,3 +30,21 @@ graphics components and PCM callback checks pass. Actual game opening renders,
 but initial performance was only about16FPS with severe audio/video desync.
 Do not describe it as playable. Root is measuring Android context overhead and
 adding a remote control scheme. Read README for the current evidence.
+
+## Latest rendering continuation
+The user reiterated parallel Shield60FPS work. Three bounded agents audited
+context/draw submission, shader data, and presentation. Real GPU suite passes
+through vertex-uniform cache source9166913; installed latest APK. Mac untouched.
+Read PERFORMANCE-AUDIT.md and root docs/STATUS.md before further optimization.
+Do not mistake the earlier worker-held guestCS observation for a proven lock leak:
+33 traced outer worker releases reached depth0 with successfulpthread unlocks.
+A subsequent story-skip/hub load crashed in original heapEF72D atEF7DB, reading
+MEM16(ESI-8) withESI0; trace heapMEM32(9453B0), head+180, requestF1629.
+Do not bypass originalEndStateBlock or force-unlock locks to hide that corruption.
+Never keep native graphics mutex across arbitrary generated guest code without
+proving guest-lock/wait ordering. Current context release overhead remains large.
+Useful ignored reports: render-current.data/dump/report (indexed scan10.38%CPU),
+bounds-current-report (different later scene; do not claim controlledcomparison),
+uniform-values-graphics.log (fullphysicalGPU pass), hub-crash-logcat.txt.
+Latest weeklycheck77%used (23%remaining): new work paused at buffer. Finish
+source handoff only; preserve20%remaining. All implementation agents finished.
