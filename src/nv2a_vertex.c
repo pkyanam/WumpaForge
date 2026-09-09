@@ -146,6 +146,7 @@ int nv2a_vertex_generate(const uint32_t *words,size_t count,char *out,size_t cap
          "out vec4 vD0,vD1,vT0,vT1,vT2,vT3;\nout float vFog;\n"
          "float nv_clamp(float x) { float a=clamp(abs(x),uintBitsToFloat(0x1f800000u),uintBitsToFloat(0x5f800000u)); return (floatBitsToUint(x)&0x80000000u)!=0u ? -a:a; }\n"
          "vec4 nv_mul(vec4 a,vec4 b) { vec4 p=a*b; for(int j=0;j<4;j++) if(a[j]==0.0||b[j]==0.0)p[j]=0.0; return p; }\n"
+         "vec4 nv_color(vec4 c) { for(int j=0;j<4;j++) if(isnan(c[j]))c[j]=1.0; return clamp(c,0.0,1.0); }\n"
          "vec4 nv_constant(float index) { if(index>=0.0 && index<192.0) return u_vconstants[int(index)]; return vec4(0.0); }\n"
          "void main() {\n  vec4 r[12]; vec4 o[13]; float a0=0.0;\n"
          "  for(int j=0;j<12;j++)r[j]=vec4(0.0);\n"
@@ -157,7 +158,7 @@ int nv2a_vertex_generate(const uint32_t *words,size_t count,char *out,size_t cap
         if(words[4*e.slot+3]&1) { final=1; break; }
     }
     if(!final && !e.failed)fail(&e,"missing FINAL instruction bit");
-    emit(&e,"  vD0=clamp(o[3],0.0,1.0); vD1=clamp(o[4],0.0,1.0);\n"
+    emit(&e,"  vD0=nv_color(o[3]); vD1=nv_color(o[4]);\n"
          "  vT0=o[9]; vT1=o[10]; vT2=o[11]; vT3=o[12]; vFog=1.0; gl_PointSize=o[6].x;\n"
          "  if(u_nv2a_fog_mode!=0) {\n"
          "    float d=o[5].x, f;\n"

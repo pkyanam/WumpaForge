@@ -74,3 +74,10 @@ PY
 clang -std=c11 -O0 -Wall -Wextra -Werror -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 tools/tests/nv2a_vertex.c src/nv2a_vertex.c src/nv2a_vertex_input.c -L/opt/homebrew/lib -lSDL2 -lepoxy -o build/nv2a-vertex-test
 build/nv2a-vertex-test local/reports/boot14-shader-objects.bin local/reports/boot35-vertex-words.bin > local/reports/nv2a-vertex-arl-test.log 2>&1
 ```
+
+
+Later story09/story10 captures now include the missing declaration: bone v2 is
+FLOAT3 at byte20, not normalized bytes. The16-matrix fixture now uses that actual
+56-byte interleaved layout through native attribute conversion and still passes.
+See [the numerical audit](research/VERTEX-NUMERIC-AUDIT.md) for the separate
+reproduced NaN color-boundary discrepancy and its focused correction.

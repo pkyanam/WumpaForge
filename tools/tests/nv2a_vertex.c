@@ -188,13 +188,26 @@ static void test_bone_rows(void)
     glUniform4fv(glGetUniformLocation(program,"u_vconstants"),192,&constants[0][0]);
     glUniform4f(glGetUniformLocation(program,"u_nv2a_viewport"),0,0,640,480);
     glUniform2f(glGetUniformLocation(program,"u_nv2a_depth"),0,200);
-    GLuint vao,buffer; glGenVertexArrays(1,&vao); glBindVertexArray(vao);
-    glVertexAttrib4f(0,2,3,4,1); glVertexAttrib4f(3,5,6,7,99); glVertexAttrib4f(5,.25f,.5f,.75f,1);
+    GLuint vao,buffer,input_buffer; glGenVertexArrays(1,&vao); glBindVertexArray(vao);
+    /* Same 56-byte primary declaration as captured69/88: FLOAT3 position,
+     * FLOAT2 weights, FLOAT3 indices/normals, BGRA8 diffuse, FLOAT2 UV. */
+    struct {float position[3],weights[2],indices[3],normal[3];uint32_t diffuse;float uv[2];} input={
+        {2,3,4},{.25f,.75f},{0,1,2},{5,6,7},0xFF4080C0,{.25f,.5f}};
+    _Static_assert(sizeof(input)==56,"captured primary stride");
+    glGenBuffers(1,&input_buffer);glBindBuffer(GL_ARRAY_BUFFER,input_buffer);
+    glBufferData(GL_ARRAY_BUFFER,sizeof(input),&input,GL_STREAM_DRAW);
+    const unsigned formats[]={0x32,0x22,0x32,0x32,0x40,0x22},offsets[]={0,12,20,32,44,48};
+    for(unsigned i=0;i<6;++i){Nv2aVertexSlot slot={0};
+        assert(nv2a_vertex_format_decode(formats[i],&slot,error,sizeof(error)));
+        glEnableVertexAttribArray(i);glVertexAttribPointer(i,i==4?GL_BGRA:slot.components,
+            i==4?GL_UNSIGNED_BYTE:GL_FLOAT,slot.normalized,sizeof(input),(void *)(uintptr_t)offsets[i]);}
+    assert(formats[2]==0x32);
     glGenBuffers(1,&buffer); glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER,buffer);
     glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER,12*sizeof(float),NULL,GL_STREAM_READ);
     glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER,0,buffer);
     for(unsigned bone=0;bone<16;bone++) {
-        glVertexAttrib4f(2,(float)bone,0,0,0);
+        input.indices[0]=(float)bone;input.indices[1]=(float)(15-bone);input.indices[2]=(float)(bone/2);
+        glBindBuffer(GL_ARRAY_BUFFER,input_buffer);glBufferSubData(GL_ARRAY_BUFFER,0,sizeof(input),&input);
         glBeginTransformFeedback(GL_POINTS); glDrawArrays(GL_POINTS,0,1); glEndTransformFeedback();
         float result[12]; glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER,0,sizeof(result),result);
         for(unsigned row=0;row<3;row++) {
@@ -202,11 +215,39 @@ static void test_bone_rows(void)
             assert(result[4+row]==(float)((row+5)*(bone+1)));
         }
         assert(result[3]==1 && result[7]==1);
-        for(unsigned j=0;j<4;j++)assert(result[8+j]==(j+1)*.25f);
+        const float uv[4]={.25f,.5f,0,1};for(unsigned j=0;j<4;j++)assert(result[8+j]==uv[j]);
     }
     assert(glGetError()==GL_NO_ERROR);
-    glDeleteBuffers(1,&buffer); glDeleteVertexArrays(1,&vao); glDeleteProgram(program); glDeleteShader(shader);
-    puts("PASS: GPU 16 bone matrices, physical relative B-source DP4/DP3 rows and paired ARL texture output");
+    glDeleteBuffers(1,&input_buffer);glDeleteBuffers(1,&buffer); glDeleteVertexArrays(1,&vao); glDeleteProgram(program); glDeleteShader(shader);
+    puts("PASS: captured56-byte declaration FLOAT3 bone indices, GPU16 bone matrices, physical relative B-source DP4/DP3 rows and paired ARL texture output");
+}
+static void test_numeric_edges(void)
+{
+    uint32_t words[][4]={
+        {0,(1u<<21)|(1u<<9)|0x1b,2u<<26,(15u<<12)|(1u<<11)|(3u<<3)},
+        {0,(1u<<21)|(1u<<9)|0x1b,2u<<26,(15u<<12)|(1u<<11)|(4u<<3)},
+        {0,(4u<<25)|(1u<<9),0,(2u<<28)|(15u<<12)|(1u<<11)|(9u<<3)|4},
+        {0,(1u<<21)|0x1b,2u<<26,(15u<<12)|(1u<<11)|1}
+    };
+    Nv2aVertexInfo info;assert(nv2a_vertex_generate(&words[0][0],4,source,sizeof(source),&info,error,sizeof(error)));
+    GLuint shader=compile(source),program=glCreateProgram();glAttachShader(program,shader);
+    const char *feedback[]={"vD0","vD1","vT0"};glTransformFeedbackVaryings(program,3,feedback,GL_INTERLEAVED_ATTRIBS);
+    glLinkProgram(program);GLint ok;glGetProgramiv(program,GL_LINK_STATUS,&ok);assert(ok);glUseProgram(program);
+    glUniform4f(glGetUniformLocation(program,"u_nv2a_viewport"),0,0,640,480);glUniform2f(glGetUniformLocation(program,"u_nv2a_depth"),0,200);
+    GLuint vao,buffer;glGenVertexArrays(1,&vao);glBindVertexArray(vao);glVertexAttrib4f(0,160,120,100,1);
+    glGenBuffers(1,&buffer);glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER,buffer);glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER,12*sizeof(float),NULL,GL_STREAM_READ);glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER,0,buffer);
+    const float cases[]={0,-0.0f,.125f,.5f,.9999f,4,-4,INFINITY,-INFINITY,NAN,-NAN};unsigned mismatches=0;
+    for(unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);++i){
+        float x=cases[i];glVertexAttrib4f(1,x,x,x,x);glBeginTransformFeedback(GL_POINTS);glDrawArrays(GL_POINTS,0,1);glEndTransformFeedback();
+        float result[12];glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER,0,sizeof(result),result);
+        float color=isnan(x)?1:fminf(1,fmaxf(0,x));float rsq=x==0?INFINITY:isinf(x)?0:1/sqrtf(fabsf(x));
+        for(unsigned j=0;j<12;++j){float want=j<8?color:rsq;
+            if(!(result[j]==want || (isnan(result[j])&&isnan(want)))){
+                fprintf(stderr,"VERTEX-EDGE case%u input%g output%u actual%g expected%g\n",i,x,j,result[j],want);++mismatches;}}
+    }
+    glDeleteBuffers(1,&buffer);glDeleteVertexArrays(1,&vao);glDeleteProgram(program);glDeleteShader(shader);
+    assert(glGetError()==GL_NO_ERROR);assert(!mismatches);
+    puts("PASS native GPU diffuse/specular NaN clamp and RSQ signed-zero/infinity/negative finite edge cases");
 }
 int main(int argc,char **argv)
 {
@@ -253,6 +294,7 @@ int main(int argc,char **argv)
     glDeleteBuffers(1,&buffer); glDeleteVertexArrays(1,&vao); glDeleteProgram(program); glDeleteShader(shader);
     test_relative();
     test_bone_rows();
+    test_numeric_edges();
     test_dead_input_gpu();
     uint32_t saved=words[1]; words[1]=(words[1]&~(15u<<21))|(15u<<21);
     assert(!nv2a_vertex_generate(words,3,source,sizeof(source),&info,error,sizeof(error)) && strstr(error,"MAC opcode 15") && !source[0]);
