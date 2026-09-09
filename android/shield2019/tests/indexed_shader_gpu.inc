@@ -20,8 +20,10 @@
         uint32_t indexed_draw[]={5,6,index_data+2};
         uint8_t baseline[60*60*4],optimized[sizeof(baseline)],first[sizeof(baseline)];
         GLboolean old_restart=glIsEnabled(GL_PRIMITIVE_RESTART);
-        GLboolean old_fixed=glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX);
-        glEnable(GL_PRIMITIVE_RESTART);glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+        int supports_fixed=indexed_fixed_restart_supported();
+        GLboolean old_fixed=supports_fixed?glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX):GL_FALSE;
+        glEnable(GL_PRIMITIVE_RESTART);
+        if(supports_fixed)glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
         for(unsigned mutation=0;mutation<3;++mutation) {
             if(mutation==1) { /* Retained guest pointer changes position without Unlock. */
                 for(unsigned i=0;i<4;++i) {
@@ -41,7 +43,8 @@
             assert(s_indexed_shader_hits==before+1); /* Explicit eligible hit. */
             glReadPixels(35,240-90,60,60,GL_RGBA,GL_UNSIGNED_BYTE,optimized);
             assert(!memcmp(baseline,optimized,sizeof(baseline)));
-            assert(glIsEnabled(GL_PRIMITIVE_RESTART) && glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX));
+            assert(glIsEnabled(GL_PRIMITIVE_RESTART));
+            if(supports_fixed)assert(glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX));
             if(!mutation) {
                 memcpy(first,baseline,sizeof(first));
                 unsigned lit=0;for(unsigned i=0;i<sizeof(first);i+=4)lit+=first[i]||first[i+1]||first[i+2];
@@ -59,7 +62,7 @@
         indexed_draw[2]=index_data+2;call(0x101BC0,indexed_draw,3);
         assert(g_eax==(uint32_t)D3DERR_INVALIDCALL && s_indexed_shader_hits==before);
         if(!old_restart)glDisable(GL_PRIMITIVE_RESTART);
-        if(!old_fixed)glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+        if(supports_fixed&&!old_fixed)glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
         bind_index[0]=saved_index;bind_index[1]=saved_base;call(0xFFEA0,bind_index,2);
         bind_stream[1]=saved_stream;bind_stream[2]=saved_stride;call(0x102580,bind_stream,3);
         write32(0x10F284,saved_offset);write32(0x10EC10,read32(0x10EC10)|0x40);

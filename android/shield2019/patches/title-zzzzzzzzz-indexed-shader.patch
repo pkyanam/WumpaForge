@@ -37,16 +37,17 @@
      uint8_t *expanded=scratch.data;
 --- a/shader_bridge.inc
 +++ b/shader_bridge.inc
-@@ -7,6 +7,8 @@
+@@ -7,6 +7,9 @@
  extern GLuint xbox_D3D8GLTextureName(IDirect3DTexture8 *texture);
  extern void xbox_D3D8GLApplyRenderStates(void);
  static uint32_t s_vertex_handle, s_pixel_handle;
 +static GLuint s_shader_ibo;
 +static uint64_t s_indexed_shader_hits;
++#include "indexed_restart_cap.inc"
  static Nv2aVertexObject s_vertex_object;
  static Nv2aPixelDef s_pixel_definition;
  static float s_vertex_constants[192][4];
-@@ -315,7 +317,8 @@
+@@ -315,7 +318,8 @@
      if (secondary_bytes>64u*1024u*1024u) return D3DERR_INVALIDCALL;
      if (!s_shader_vao) { glGenVertexArrays(1,&s_shader_vao); glGenBuffers(1,&s_shader_vbo); glGenSamplers(4,s_shader_samplers); }
      glBindVertexArray(s_shader_vao); glBindBuffer(GL_ARRAY_BUFFER,s_shader_vbo);
@@ -56,7 +57,7 @@
      int transitive_proof_ready=0;
      uint16_t transitive_dead=0;
      for (unsigned i=0;i<16;++i) {
-@@ -486,7 +489,22 @@
+@@ -486,7 +490,24 @@
      extern uint64_t xbox_D3D8GLProfileDrawBegin(void);
      extern void xbox_D3D8GLProfileDrawEnd(uint64_t);
      uint64_t profile_draw=xbox_D3D8GLProfileDrawBegin();
@@ -65,8 +66,10 @@
 +        /* This path is restricted to triangle lists and stream0. Never let
 +         * ambient restart state turn the ordinary Xbox index 65535 into a cut. */
 +        GLboolean restart=glIsEnabled(GL_PRIMITIVE_RESTART);
-+        GLboolean fixed_restart=glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX);
-+        glDisable(GL_PRIMITIVE_RESTART);glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++        int supports_fixed=indexed_fixed_restart_supported();
++        GLboolean fixed_restart=supports_fixed?glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX):GL_FALSE;
++        glDisable(GL_PRIMITIVE_RESTART);
++        if(supports_fixed)glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
 +        GLint old_ibo;glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING,&old_ibo);
 +        if(!s_shader_ibo)glGenBuffers(1,&s_shader_ibo);
 +        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,s_shader_ibo);
@@ -110,7 +113,7 @@
       * samplers. At u=1.25 stage0 reads red and stage1 reads green; sum is yellow. */
 --- /dev/null
 +++ b/test_indexed_shader.inc
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,75 @@
 +    { /* Exact production shader path: baseline pixels versus real indexed GPU. */
 +        const char *previous_mode=getenv("WRATH_INDEXED_SHADER");
 +        char *saved_mode=previous_mode?strdup(previous_mode):NULL;
@@ -133,8 +136,10 @@
 +        uint32_t indexed_draw[]={5,6,index_data+2};
 +        uint8_t baseline[60*60*4],optimized[sizeof(baseline)],first[sizeof(baseline)];
 +        GLboolean old_restart=glIsEnabled(GL_PRIMITIVE_RESTART);
-+        GLboolean old_fixed=glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX);
-+        glEnable(GL_PRIMITIVE_RESTART);glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++        int supports_fixed=indexed_fixed_restart_supported();
++        GLboolean old_fixed=supports_fixed?glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX):GL_FALSE;
++        glEnable(GL_PRIMITIVE_RESTART);
++        if(supports_fixed)glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
 +        for(unsigned mutation=0;mutation<3;++mutation) {
 +            if(mutation==1) { /* Retained guest pointer changes position without Unlock. */
 +                for(unsigned i=0;i<4;++i) {
@@ -154,7 +159,8 @@
 +            assert(s_indexed_shader_hits==before+1); /* Explicit eligible hit. */
 +            glReadPixels(35,240-90,60,60,GL_RGBA,GL_UNSIGNED_BYTE,optimized);
 +            assert(!memcmp(baseline,optimized,sizeof(baseline)));
-+            assert(glIsEnabled(GL_PRIMITIVE_RESTART) && glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX));
++            assert(glIsEnabled(GL_PRIMITIVE_RESTART));
++            if(supports_fixed)assert(glIsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX));
 +            if(!mutation) {
 +                memcpy(first,baseline,sizeof(first));
 +                unsigned lit=0;for(unsigned i=0;i<sizeof(first);i+=4)lit+=first[i]||first[i+1]||first[i+2];
@@ -172,7 +178,7 @@
 +        indexed_draw[2]=index_data+2;call(0x101BC0,indexed_draw,3);
 +        assert(g_eax==(uint32_t)D3DERR_INVALIDCALL && s_indexed_shader_hits==before);
 +        if(!old_restart)glDisable(GL_PRIMITIVE_RESTART);
-+        if(!old_fixed)glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++        if(supports_fixed&&!old_fixed)glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
 +        bind_index[0]=saved_index;bind_index[1]=saved_base;call(0xFFEA0,bind_index,2);
 +        bind_stream[1]=saved_stream;bind_stream[2]=saved_stride;call(0x102580,bind_stream,3);
 +        write32(0x10F284,saved_offset);write32(0x10EC10,read32(0x10EC10)|0x40);
@@ -183,3 +189,26 @@
 +        assert(glGetError()==GL_NO_ERROR);
 +        puts("PASS: indexed shader eligible hits, exact baseline pixels, base/offset, guest alias mutations, restart/VAO state, bounds and lifetime");
 +    }
+--- /dev/null
++++ b/indexed_restart_cap.inc
+@@ -0,0 +1,20 @@
++/* The process owns one desktop GL context; capabilities are immutable across
++ * its serialized callers. Query once without touching unsupported state enums. */
++static int s_indexed_fixed_restart=-1;
++static int indexed_fixed_restart_supported(void)
++{
++    if(s_indexed_fixed_restart>=0)return s_indexed_fixed_restart;
++    GLint major=0,minor=0,count=0;
++    glGetIntegerv(GL_MAJOR_VERSION,&major);glGetIntegerv(GL_MINOR_VERSION,&minor);
++    s_indexed_fixed_restart=major>4||(major==4&&minor>=3);
++    if(!s_indexed_fixed_restart) {
++        glGetIntegerv(GL_NUM_EXTENSIONS,&count);
++        for(GLint i=0;i<count;++i) {
++            const char *extension=(const char *)glGetStringi(GL_EXTENSIONS,(GLuint)i);
++            if(extension&&!strcmp(extension,"GL_ARB_ES3_compatibility")) {
++                s_indexed_fixed_restart=1;break;
++            }
++        }
++    }
++    return s_indexed_fixed_restart;
++}

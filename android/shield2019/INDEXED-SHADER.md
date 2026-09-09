@@ -14,7 +14,9 @@ the additional `VertexFetch` field synchronously, preserving pointer lifetime.
 
 No resource contents are cached. Every selected draw uploads current vertex/index
 bytes, including writes through retained guest pointers. The shader VAO's prior
-EBO binding and both primitive-restart enables are restored. Index 65535 remains
+EBO binding and supported primitive-restart enables are restored. Fixed-index
+restart is queried only with GL 4.3+ or exact ARB_ES3_compatibility support;
+the immutable context capability is cached once. The actual Shield requests GL 4.1. Index 65535 remains
 an ordinary Xbox index. Quads, secondary and retained streams, fixed rendering,
 sparse ranges, disabled mode and uncertain declarations keep the established path.
 The original physical vertex-array commit and resource/index bounds remain intact.

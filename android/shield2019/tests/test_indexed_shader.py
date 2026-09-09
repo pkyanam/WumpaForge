@@ -50,6 +50,36 @@ int main(void) {
  puts("PASS: opt-in indexed selection, guarded fallback and 10000 original-expansion equivalence cases");
 }
 '''
+CAP=r'''
+#include <assert.h>
+#include <string.h>
+#include <stdio.h>
+typedef int GLint;typedef unsigned GLuint;
+#define GL_MAJOR_VERSION 1
+#define GL_MINOR_VERSION 2
+#define GL_NUM_EXTENSIONS 3
+#define GL_EXTENSIONS 4
+static int major=4,minor=1,queries,extension;
+static void glGetIntegerv(unsigned key,int *out) {
+ ++queries;
+ switch(key){case GL_MAJOR_VERSION:*out=major;break;case GL_MINOR_VERSION:*out=minor;break;
+ case GL_NUM_EXTENSIONS:*out=1;break;default:assert(0);}
+}
+static const unsigned char *glGetStringi(unsigned key,unsigned index) {
+ assert(key==GL_EXTENSIONS && index==0);++queries;
+ return (const unsigned char *)(extension==1?"GL_ARB_ES3_compatibility":extension==2?"GL_ARB_ES3_compatibility_suffix":"GL_ARB_other");
+}
+#include "indexed_restart_cap.inc"
+int main(void) {
+ assert(!indexed_fixed_restart_supported());int old=queries;
+ assert(!indexed_fixed_restart_supported() && queries==old);
+ s_indexed_fixed_restart=-1;extension=1;assert(indexed_fixed_restart_supported());
+ s_indexed_fixed_restart=-1;extension=2;assert(!indexed_fixed_restart_supported());
+ s_indexed_fixed_restart=-1;minor=3;old=queries;assert(indexed_fixed_restart_supported() && queries==old+2);
+ s_indexed_fixed_restart=-1;major=5;minor=0;assert(indexed_fixed_restart_supported());
+ puts("PASS: GL4.1 unsupported, exact extension match, GL4.3+ and immutable capability cache");
+}
+'''
 def main():
  out=ROOT/'build/shield2019';out.mkdir(parents=True,exist_ok=True)
  with tempfile.TemporaryDirectory(prefix='indexed-source-',dir=out) as directory:
@@ -63,9 +93,13 @@ def main():
    subprocess.run(['git','apply',str(patch)],cwd=work,env=env,check=True)
   else:
    (work/'indexed_shader_select.inc').write_text((out/'title/indexed_shader_select.inc').read_text())
+   (work/'indexed_restart_cap.inc').write_text((out/'title/indexed_restart_cap.inc').read_text())
   (work/'fixture.c').write_text(C)
   subprocess.run(['cc','-std=c11','-O1','-fsanitize=address,undefined',str(work/'fixture.c'),'-o',str(work/'fixture')],check=True)
   subprocess.run([str(work/'fixture')],check=True)
+  (work/'cap.c').write_text(CAP)
+  subprocess.run(['cc','-std=c11','-O1','-fsanitize=address,undefined',str(work/'cap.c'),'-o',str(work/'cap')],check=True)
+  subprocess.run([str(work/'cap')],check=True)
   # Structural transfer check: fetch pointer is passed synchronously through RPC.
   wrapper=(HERE/'shader_draw_rpc_wrap.inc').read_text()
   assert '.fetch=fetch' in wrapper and 'request->stride,request->fetch' in wrapper
