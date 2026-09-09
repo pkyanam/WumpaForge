@@ -116,15 +116,23 @@ int main(void) {
         byte=Operand('reg',reg='al'); imm=Operand('imm',imm=7)
         cmp=('cmp',[a,imm]); other=('cmp',[b,imm])
         self.assertEqual(merge_flag_states([cmp,other]),cmp)
-        self.assertEqual(merge_flag_states([cmp,('test',[b,imm])]), ("snapshot_zf", []))
-        self.assertEqual(merge_flag_states([cmp,('cmp',[byte,imm])]), ("snapshot_zf", []))
+        self.assertEqual(merge_flag_states([cmp,('test',[b,imm])]), ("snapshot_sz", []))
+        self.assertEqual(merge_flag_states([cmp,('cmp',[byte,imm])]), ("snapshot_sz", []))
         self.assertIsNone(merge_flag_states([cmp,None]))
         self.assertIsNone(merge_flag_states([]))
-        self.assertIsNone(merge_flag_states([('sub',[a,imm]),('sub',[b,imm])]))
+        self.assertEqual(merge_flag_states([('sub',[a,imm]),('sub',[b,imm])]), ("snapshot_zf", []))
         self.assertEqual(merge_flag_states([cmp,cmp]),cmp)
-        # The mixed meet provides only ZF. Signed conditions remain unresolved.
+        # CMP/TEST meets supply signed-less as well as ZF; partial arithmetic
+        # meets still prove ZF only and cannot justify signed conditions.
         mixed=fixture('mixed_join','3d07000000','85cb',0x7C)
-        self.assertIn('if (_flags',mixed)
+        self.assertNotIn('if (_flags',mixed)
+        partial=fixture('partial_join','3d07000000','ffcb',0x7C)
+        self.assertIn('if (_flags',partial)
+        for raw in ('d3eb', 'd1cb', '0fa3cb'):
+            unsupported=fixture('partial_flags','3d07000000',raw,0x74,True)
+            self.assertIn('if (_flags',unsupported)
+        preserved=fixture('zero_shift_join','3d07000000','85dbc1eb00',0x7C,True)
+        self.assertNotIn('if (_flags',preserved)
         unknown=fixture('unknown_join','3d07000000','0f31',0x74,True)
         self.assertIn('if (_flags',unknown)
         call=fixture('call_join','3d07000000','e800000000',0x74,True)
