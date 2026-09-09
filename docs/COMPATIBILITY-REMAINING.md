@@ -28,12 +28,20 @@ The current run reaches these public ABI boundaries and returns E_NOTIMPL:
 | Commit deferred spatial settings |136D09|B9898|
 
 Evidence: `play-25.log` lines524,528,2351–2353,5262;
-`src/audio_bridge.c` bindings and original functionsB8D20/B8F70/B96B0/B96D0/B9880
+`src/audio_bridge.c` bindings and original functionsB8D20/B8F70/B96B0/B96D0/B9890
 in ignored generated source `recomp_0020.c`. AtB8D7A a negative result branches
 toB8D93, skipping the subsequent SetMaxDistance136D3D call that would set50.0
 (returnB8D8D). Minimum distance is3.0/deferred. The outer64-buffer constructor
 loop atB9AB1 ignores this helper result and continues; this is an incomplete
 audio setup, not evidence of an initialization crash.
+
+Original argument order is `(buffer, distance, apply)` for min/max; source
+position is `(buffer, x, y, z, 0)` with immediate application. Listener position
+is `(device, x, y, z, 1)` and orientation is `(device, frontX, frontY, frontZ,
+topX, topY, topZ, 1)`, both deferred. Commit takes only the device. Startup rolloff
+is `(device, 1.0f, 0)`; the separate B9700 path can change that factor. These
+are guest DWORD/float slots, not host-width fields. Source-position helperB8F70
+copies coordinates into its wrapper+1C/+20/+24 before returning the SDK HRESULT.
 
 A bounded implementation must retain source/listener state, implement immediate
 versus deferred application, and actually apply documented distance attenuation
