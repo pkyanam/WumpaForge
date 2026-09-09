@@ -1,0 +1,191 @@
+--- a/graphics.c
++++ b/graphics.c
+@@ -480,10 +480,15 @@
+     glGetBooleanv(GL_COLOR_WRITEMASK, old_color_mask);
+     glGetBooleanv(GL_DEPTH_WRITEMASK, &old_depth_mask);
+     old_scissor_enabled = glIsEnabled(GL_SCISSOR_TEST);
+-    glGetIntegerv(GL_SCISSOR_BOX, old_scissor);
+-    glGetIntegerv(GL_STENCIL_WRITEMASK, &old_stencil_mask);
+-    glGetIntegerv(GL_STENCIL_BACK_WRITEMASK, &old_back_stencil_mask);
+-    glGetIntegerv(GL_STENCIL_CLEAR_VALUE, &old_stencil_clear);
++    {
++        const WumpaGLIntegerQuery queries[]={
++            {GL_SCISSOR_BOX,old_scissor},
++            {GL_STENCIL_WRITEMASK,&old_stencil_mask},
++            {GL_STENCIL_BACK_WRITEMASK,&old_back_stencil_mask},
++            {GL_STENCIL_CLEAR_VALUE,&old_stencil_clear}
++        };
++        wumpa_gl_get_integers(queries,sizeof(queries)/sizeof(queries[0]));
++    }
+     glGetFloatv(GL_COLOR_CLEAR_VALUE, old_color);
+     glGetDoublev(GL_DEPTH_CLEAR_VALUE, &old_depth);
+     glColorMask((flags & 0x10) != 0, (flags & 0x20) != 0,
+@@ -603,10 +608,18 @@
+         fprintf(stderr,"[wrath graphics] capture allocation failed\n"); free(pixels); free(row); return;
+     }
+     GLint old_fbo,old_buffer,old_pack,old_alignment,old_row,old_skip_rows,old_skip_pixels;
+-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&old_fbo); glGetIntegerv(GL_READ_BUFFER,&old_buffer);
+-    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING,&old_pack); glGetIntegerv(GL_PACK_ALIGNMENT,&old_alignment);
+-    glGetIntegerv(GL_PACK_ROW_LENGTH,&old_row); glGetIntegerv(GL_PACK_SKIP_ROWS,&old_skip_rows);
+-    glGetIntegerv(GL_PACK_SKIP_PIXELS,&old_skip_pixels);
++    {
++        const WumpaGLIntegerQuery queries[]={
++            {GL_READ_FRAMEBUFFER_BINDING,&old_fbo},
++            {GL_READ_BUFFER,&old_buffer},
++            {GL_PIXEL_PACK_BUFFER_BINDING,&old_pack},
++            {GL_PACK_ALIGNMENT,&old_alignment},
++            {GL_PACK_ROW_LENGTH,&old_row},
++            {GL_PACK_SKIP_ROWS,&old_skip_rows},
++            {GL_PACK_SKIP_PIXELS,&old_skip_pixels}
++        };
++        wumpa_gl_get_integers(queries,sizeof(queries)/sizeof(queries[0]));
++    }
+     glBindFramebuffer(GL_READ_FRAMEBUFFER,xbox_D3D8GLBackBuffer(0)); glReadBuffer(GL_COLOR_ATTACHMENT0);
+     glBindBuffer(GL_PIXEL_PACK_BUFFER,0); glPixelStorei(GL_PACK_ALIGNMENT,4);
+     glPixelStorei(GL_PACK_ROW_LENGTH,0); glPixelStorei(GL_PACK_SKIP_ROWS,0); glPixelStorei(GL_PACK_SKIP_PIXELS,0);
+@@ -995,13 +1008,18 @@
+     GLenum pending_error=GL_NO_ERROR;
+     const uint8_t *encoded=texture_snapshot_capture(r);
+     GLint old_texture, old_unpack, old_alignment, old_row, old_rows, old_columns, old_swap;
+-    glGetIntegerv(target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_BINDING_CUBE_MAP : GL_TEXTURE_BINDING_2D, &old_texture);
+-    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &old_unpack);
+-    glGetIntegerv(GL_UNPACK_ALIGNMENT, &old_alignment);
+-    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &old_row);
+-    glGetIntegerv(GL_UNPACK_SKIP_ROWS, &old_rows);
+-    glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &old_columns);
+-    glGetIntegerv(GL_UNPACK_SWAP_BYTES, &old_swap);
++    {
++        const WumpaGLIntegerQuery queries[]={
++            {target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_BINDING_CUBE_MAP : GL_TEXTURE_BINDING_2D,&old_texture},
++            {GL_PIXEL_UNPACK_BUFFER_BINDING,&old_unpack},
++            {GL_UNPACK_ALIGNMENT,&old_alignment},
++            {GL_UNPACK_ROW_LENGTH,&old_row},
++            {GL_UNPACK_SKIP_ROWS,&old_rows},
++            {GL_UNPACK_SKIP_PIXELS,&old_columns},
++            {GL_UNPACK_SWAP_BYTES,&old_swap}
++        };
++        wumpa_gl_get_integers(queries,sizeof(queries)/sizeof(queries[0]));
++    }
+     glBindTexture(target, name);
+     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+     glPixelStorei(GL_UNPACK_ALIGNMENT, 4); glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+@@ -1737,7 +1755,13 @@
+ {
+     if (s_depth_canonical_fbo) return 0;
+     GLuint depth=xbox_D3D8GLDepthBuffer(); if (!depth) return D3DERR_INVALIDCALL;
+-    GLint rd,wr; glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&rd);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&wr);
++    GLint rd,wr; {
++        const WumpaGLIntegerQuery queries[]={
++            {GL_READ_FRAMEBUFFER_BINDING,&rd},
++            {GL_DRAW_FRAMEBUFFER_BINDING,&wr}
++        };
++        wumpa_gl_get_integers(queries,sizeof(queries)/sizeof(queries[0]));
++    }
+     glGenFramebuffers(1,&s_depth_canonical_fbo);glBindFramebuffer(GL_FRAMEBUFFER,s_depth_canonical_fbo);
+     glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,GL_RENDERBUFFER,depth);
+     glReadBuffer(GL_NONE);glDrawBuffer(GL_NONE);
+@@ -1750,7 +1774,13 @@
+ {
+     if (!r || !r->target_depth) return 0;
+     struct Resource *z=resource(s_depthbuffer_handle);if(!z || depth_canonical_ready()<0)return D3DERR_INVALIDCALL;
+-    GLint rd,wr;glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&rd);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&wr);
++    GLint rd,wr;{
++        const WumpaGLIntegerQuery queries[]={
++            {GL_READ_FRAMEBUFFER_BINDING,&rd},
++            {GL_DRAW_FRAMEBUFFER_BINDING,&wr}
++        };
++        wumpa_gl_get_integers(queries,sizeof(queries)/sizeof(queries[0]));
++    }
+     GLboolean scissor=glIsEnabled(GL_SCISSOR_TEST);glDisable(GL_SCISSOR_TEST);
+     glBindFramebuffer(GL_READ_FRAMEBUFFER,to_canonical?r->target_fbo:s_depth_canonical_fbo);
+     glBindFramebuffer(GL_DRAW_FRAMEBUFFER,to_canonical?s_depth_canonical_fbo:r->target_fbo);
+@@ -1765,7 +1795,14 @@
+ static HRESULT attach_target_depth(struct Resource *r,struct Resource *z)
+ {
+     GLint rd,wr,rb,old_depth,old_stencil;
+-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&rd);glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&wr);glGetIntegerv(GL_RENDERBUFFER_BINDING,&rb);
++    {
++        const WumpaGLIntegerQuery queries[]={
++            {GL_READ_FRAMEBUFFER_BINDING,&rd},
++            {GL_DRAW_FRAMEBUFFER_BINDING,&wr},
++            {GL_RENDERBUFFER_BINDING,&rb}
++        };
++        wumpa_gl_get_integers(queries,sizeof(queries)/sizeof(queries[0]));
++    }
+     GLuint fbo=r->framebuffer==GL_BACK?xbox_D3D8GLBackBuffer(0):r->target_fbo;
+     glBindFramebuffer(GL_FRAMEBUFFER,fbo);
+     glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,&old_depth);
+@@ -1925,13 +1962,18 @@
+     if (gpu) {
+         uint64_t profile_start=wrath_profile_begin();
+         GLint old_fbo, old_buffer, old_pack, old_alignment, old_row, old_rows, old_pixels;
+-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &old_fbo);
+-        glGetIntegerv(GL_READ_BUFFER, &old_buffer);
+-        glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &old_pack);
+-        glGetIntegerv(GL_PACK_ALIGNMENT, &old_alignment);
+-        glGetIntegerv(GL_PACK_ROW_LENGTH, &old_row);
+-        glGetIntegerv(GL_PACK_SKIP_ROWS, &old_rows);
+-        glGetIntegerv(GL_PACK_SKIP_PIXELS, &old_pixels);
++        {
++            const WumpaGLIntegerQuery queries[]={
++                {GL_READ_FRAMEBUFFER_BINDING,&old_fbo},
++                {GL_READ_BUFFER,&old_buffer},
++                {GL_PIXEL_PACK_BUFFER_BINDING,&old_pack},
++                {GL_PACK_ALIGNMENT,&old_alignment},
++                {GL_PACK_ROW_LENGTH,&old_row},
++                {GL_PACK_SKIP_ROWS,&old_rows},
++                {GL_PACK_SKIP_PIXELS,&old_pixels}
++            };
++            wumpa_gl_get_integers(queries,sizeof(queries)/sizeof(queries[0]));
++        }
+         glBindFramebuffer(GL_READ_FRAMEBUFFER, gpu->framebuffer ? xbox_D3D8GLBackBuffer(gpu->framebuffer==GL_FRONT) : gpu->target_fbo);
+         glReadBuffer(GL_COLOR_ATTACHMENT0); glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+         glPixelStorei(GL_PACK_ALIGNMENT, 4); glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+@@ -2046,10 +2088,19 @@
+         uint32_t swap=pixels[a]; pixels[a]=pixels[b]; pixels[b]=swap;
+     }
+     GLint old_read,old_draw,old_tex,old_unpack,old_alignment,old_row,old_rows,old_pixels;
+-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&old_read); glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&old_draw);
+-    glGetIntegerv(GL_TEXTURE_BINDING_2D,&old_tex); glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING,&old_unpack);
+-    glGetIntegerv(GL_UNPACK_ALIGNMENT,&old_alignment); glGetIntegerv(GL_UNPACK_ROW_LENGTH,&old_row);
+-    glGetIntegerv(GL_UNPACK_SKIP_ROWS,&old_rows); glGetIntegerv(GL_UNPACK_SKIP_PIXELS,&old_pixels);
++    {
++        const WumpaGLIntegerQuery queries[]={
++            {GL_READ_FRAMEBUFFER_BINDING,&old_read},
++            {GL_DRAW_FRAMEBUFFER_BINDING,&old_draw},
++            {GL_TEXTURE_BINDING_2D,&old_tex},
++            {GL_PIXEL_UNPACK_BUFFER_BINDING,&old_unpack},
++            {GL_UNPACK_ALIGNMENT,&old_alignment},
++            {GL_UNPACK_ROW_LENGTH,&old_row},
++            {GL_UNPACK_SKIP_ROWS,&old_rows},
++            {GL_UNPACK_SKIP_PIXELS,&old_pixels}
++        };
++        wumpa_gl_get_integers(queries,sizeof(queries)/sizeof(queries[0]));
++    }
+     if (!r->target_texture) glGenTextures(1,&r->target_texture);
+     if (!r->target_fbo) glGenFramebuffers(1,&r->target_fbo);
+     glBindTexture(GL_TEXTURE_2D,r->target_texture); glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
+@@ -2072,10 +2123,19 @@
+                                      unsigned width, unsigned height, int x, int y)
+ {
+     GLint old_read, old_draw, old_texture, old_unpack, old_alignment, old_row, old_rows, old_pixels;
+-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &old_read); glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &old_draw);
+-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture); glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &old_unpack);
+-    glGetIntegerv(GL_UNPACK_ALIGNMENT, &old_alignment); glGetIntegerv(GL_UNPACK_ROW_LENGTH, &old_row);
+-    glGetIntegerv(GL_UNPACK_SKIP_ROWS, &old_rows); glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &old_pixels);
++    {
++        const WumpaGLIntegerQuery queries[]={
++            {GL_READ_FRAMEBUFFER_BINDING,&old_read},
++            {GL_DRAW_FRAMEBUFFER_BINDING,&old_draw},
++            {GL_TEXTURE_BINDING_2D,&old_texture},
++            {GL_PIXEL_UNPACK_BUFFER_BINDING,&old_unpack},
++            {GL_UNPACK_ALIGNMENT,&old_alignment},
++            {GL_UNPACK_ROW_LENGTH,&old_row},
++            {GL_UNPACK_SKIP_ROWS,&old_rows},
++            {GL_UNPACK_SKIP_PIXELS,&old_pixels}
++        };
++        wumpa_gl_get_integers(queries,sizeof(queries)/sizeof(queries[0]));
++    }
+     GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+     GLuint texture, framebuffer; glGenTextures(1, &texture); glBindTexture(GL_TEXTURE_2D, texture);
+     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0); glPixelStorei(GL_UNPACK_ALIGNMENT, 4);

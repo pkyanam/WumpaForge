@@ -37,12 +37,23 @@ int xbox_D3D8GLBeginStateCall(void) { return 1; }
 int xbox_D3D8GLEnsureCurrent(void) { return 1; }
 void xbox_D3D8GLEndCall(int outer) { assert(outer==1); }
 void wumpa_gl_rpc_call(void (*function)(void *),void *argument) { function(argument); }
+void wumpa_gl_rpc_call_named(const char *name,void (*function)(void *),void *argument) { (void)name;function(argument); }
 void *SDL_GL_GetProcAddress(const char *name) { (void)name;return NULL; }
 static void enabled(GLenum cap) { sequence[transitions++]=cap; }
 static void disabled(GLenum cap) { sequence[transitions++]=cap+1; }
 static void depth(GLdouble near_value,GLdouble far_value) { (void)near_value;(void)far_value;++depths; }
 static void clear(GLbitfield bits) { (void)bits;++clears; }
-static GLenum error(void) { return GL_NO_ERROR; }
+static GLenum pending_error;
+static GLenum error(void) { GLenum result=pending_error;pending_error=0;return result; }
+static unsigned query_count,query_before;
+static void integer_query(GLenum pname,GLint *output) {
+    assert(transitions==query_before+1); /* Prior deferred state must be visible. */
+    const GLenum expected[]={GL_VIEWPORT,0xbadu,GL_MAX_TEXTURE_SIZE};
+    assert(query_count<3 && pname==expected[query_count++]);
+    if(pname==GL_VIEWPORT) { for(int i=0;i<4;++i)output[i]=10+i; }
+    else if(pname==0xbadu)pending_error=GL_INVALID_ENUM;
+    else *output=4096;
+}
 int main(void) {
     assert(!setenv("WRATH_EGL_DEFER_STATE","1",1));
     wumpa_glEnable=enabled;wumpa_glDisable=disabled;wumpa_glDepthRange=depth;
@@ -63,6 +74,17 @@ int main(void) {
     glDisable(GL_BLEND);assert(wumpa_state_count==1 && transitions==before+256);
     glClear(GL_COLOR_BUFFER_BIT);glClear(GL_COLOR_BUFFER_BIT);
     assert(wumpa_state_count==0 && transitions==before+257 && clears==2);
+    wumpa_glGetIntegerv=integer_query;query_before=transitions;
+    glEnable(GL_DEPTH_TEST);assert(wumpa_state_count==1);
+    wumpa_gl_get_integers(NULL,0);assert(wumpa_state_count==1 && transitions==query_before);
+    GLint viewport[6]={77,0,0,0,0,88},invalid=123,limit=0;
+    const WumpaGLIntegerQuery queries[]={
+        {GL_VIEWPORT,viewport+1},{0xbadu,&invalid},{GL_MAX_TEXTURE_SIZE,&limit}};
+    wumpa_gl_get_integers(queries,3);
+    assert(query_count==3 && wumpa_state_count==0);
+    assert(viewport[0]==77 && viewport[5]==88 && invalid==123 && limit==4096);
+    for(int i=0;i<4;++i)assert(viewport[i+1]==10+i);
+    assert(glGetError()==GL_INVALID_ENUM && glGetError()==GL_NO_ERROR);
     return 0;
 }
 ''')

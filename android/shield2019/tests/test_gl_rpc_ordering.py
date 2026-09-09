@@ -122,6 +122,9 @@ int main(void) {
     glShaderSource(71,2,strings,lengths);
     GLint result=0;glGetIntegerv(GL_MAX_TEXTURE_SIZE,&result);assert(result==4096);
     assert(!strcmp((const char *)glGetString(GL_VENDOR),"mock GPU"));
+    GLint first=0,second=0;
+    const WumpaGLIntegerQuery queries[]={{GL_MAX_TEXTURE_SIZE,&first},{GL_MAX_TEXTURE_SIZE,&second}};
+    wumpa_gl_get_integers(queries,2);assert(first==4096 && second==4096);
     pthread_t a,b;assert(!pthread_create(&a,NULL,caller,(void *)(uintptr_t)0));
     assert(!pthread_create(&b,NULL,caller,(void *)(uintptr_t)1));
     assert(!pthread_join(a,NULL));assert(!pthread_join(b,NULL));
