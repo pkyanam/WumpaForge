@@ -25,7 +25,7 @@ public final class LauncherActivity extends Activity {
         LinearLayout body=new LinearLayout(this); body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(40,24,40,24);
         TextView title=new TextView(this); title.setText("WumpaForge — SHIELD Pro 2019 development"); title.setTextSize(24); body.addView(title);
-        TextView help=new TextView(this); help.setText("Bring your own USA Xbox assets. This build has not been tested on a Shield.\nUse the remote D-pad or a paired gamepad to select an action."); body.addView(help);
+        TextView help=new TextView(this); help.setText("Bring your own USA Xbox assets. Experimental native ARM64 build.\nUse the remote D-pad or a paired gamepad to select an action."); body.addView(help);
         Button diagnostics=new Button(this); diagnostics.setText("Run memory and graphics diagnostics"); body.addView(diagnostics);
         Button graphics=new Button(this); graphics.setText("Run full graphics component checks (no assets)"); body.addView(graphics);
         Button controllers=new Button(this); controllers.setText("List connected controllers"); body.addView(controllers);

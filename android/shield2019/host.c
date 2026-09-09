@@ -17,7 +17,10 @@ int wumpa_host_start(const char *log_name)
     const char *state=SDL_AndroidGetInternalStoragePath();
     if(!storage||!state) return 0;
     char profile[4096];
-    int profile_n=snprintf(profile,sizeof(profile),"%s/profile-context",storage);
+    int profile_n=snprintf(profile,sizeof(profile),"%s/profile",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
+        SDL_setenv("WRATH_PROFILE","1",1);
+    profile_n=snprintf(profile,sizeof(profile),"%s/profile-context",storage);
     if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0){
         SDL_setenv("WRATH_PROFILE","1",1);
         SDL_setenv("WRATH_PROFILE_CONTEXT","1",1);
@@ -46,6 +49,7 @@ int wumpa_host_start(const char *log_name)
 
 extern int xbox_D3D8GLAcquire(void);
 extern int xbox_D3D8GLEnsureCurrent(void);
+extern void wumpa_gl_flush_state(void);
 extern void xbox_D3D8GLRelease(void);
 void wumpa_pump_input_events(void)
 {
@@ -57,6 +61,7 @@ void wumpa_pump_input_events(void)
        binding/swapping while SDL backs up or restores the window surface. */
     if(!xbox_D3D8GLAcquire())abort();
     if(!xbox_D3D8GLEnsureCurrent())abort();
+    wumpa_gl_flush_state();
     SDL_PumpEvents();
     if(SDL_HasEvent(SDL_RENDER_DEVICE_RESET)){
         fprintf(stderr,"[shield] EGL context lost during input pump; resource restoration is not implemented.\n");

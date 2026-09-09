@@ -6,8 +6,9 @@ The user authorized network ADB to 192.168.1.46 on September 9; the device is
 verified NVIDIA mdarcy, Android 11/API30, ARM64. Use the explicit ADB serial.
 
 - Check account weekly usage before each substantial work chunk. Started at
-  65% used (35% remaining). The latest user limit is 25% weekly remaining: stop new work at 74% used
-  and reserve the buffer for documenting/committing; do not cross 75% used.
+  65% used (35% remaining). The latest user instruction is to keep working efficiently and preserve20%
+  weekly remaining. Stop new work at77% used to reserve a documentation buffer;
+  do not intentionally cross80% used.
   Account usage is shared, so recheck during builds and before final actions.
 - Aim to wrap by 11:24 UTC or the usage threshold, whichever comes first.
 - Source/configuration lives here. Downloads, copied runtime, generated loaders,
