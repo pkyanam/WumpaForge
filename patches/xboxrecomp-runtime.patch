@@ -1,7 +1,16 @@
 diff --git a/src/kernel/kernel.h b/src/kernel/kernel.h
-index ade9b08..42926eb 100644
+index ade9b08..fd38337 100644
 --- a/src/kernel/kernel.h
 +++ b/src/kernel/kernel.h
+@@ -477,7 +477,7 @@ void xbox_kernel_set_thunk_address(uint32_t xbox_va, uint32_t count);
+ 
+ /**
+  * Get the kernel thunk table address and entry count currently in effect.
+- * Set during memory layout init from the XBE header. *xbox_va/*count are
++ * Set during memory layout init from the XBE header. *xbox_va and *count are
+  * zeroed if never configured.
+  */
+ void xbox_kernel_get_thunk_address(uint32_t *xbox_va, uint32_t *count);
 @@ -537,9 +537,10 @@ typedef char  xbox_host_char;
   * host_path_buf must be at least MAX_PATH characters (not bytes).
   */
@@ -864,7 +873,7 @@ index e9b6344..4bec709 100644
  #include <stdint.h>
  #include <stdlib.h>
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index fe24fdc..854dc7a 100644
+index fe24fdc..d0e1196 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -15,6 +15,14 @@
@@ -927,6 +936,15 @@ index fe24fdc..854dc7a 100644
      if (g_memory_base) {
          fprintf(stderr, "xbox_MemoryLayoutInit: already initialized\n");
          return FALSE;
+@@ -1022,7 +1045,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+         NULL                    /* unnamed mapping */
+     );
+     if (!g_mapping_handle) {
+-        fprintf(stderr, "xbox_MemoryLayoutInit: CreateFileMapping failed (error %lu)\n",
++        fprintf(stderr, "xbox_MemoryLayoutInit: CreateFileMapping failed (error %u)\n",
+                 GetLastError());
+         return FALSE;
+     }
 @@ -1033,6 +1056,16 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
       * Windows 11 where low addresses are often reserved), try page-aligned
       * addresses upward until we find a free region.
@@ -1046,6 +1064,60 @@ index fe24fdc..854dc7a 100644
          {
              DWORD tls_dir_va = *(const DWORD *)(xbe + XBE_TLS_ADDR_OFFSET);
  
+@@ -1459,7 +1535,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+                     XBOX_CONTIG_SIZE / (1024 * 1024), XBOX_CONTIG_BASE);
+         } else {
+             fprintf(stderr, "  WARNING: contiguous window at 0x%08X failed "
+-                    "(error %lu); pinned physical allocations will fault\n",
++                    "(error %u); pinned physical allocations will fault\n",
+                     XBOX_CONTIG_BASE, GetLastError());
+         }
+     }
+@@ -1502,7 +1578,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+                     XBOX_NV2A_SIZE / (1024 * 1024), XBOX_NV2A_BASE);
+         } else {
+             fprintf(stderr, "  WARNING: NV2A aperture at 0x%08X failed "
+-                    "(error %lu); D3D register access will fault\n",
++                    "(error %u); D3D register access will fault\n",
+                     XBOX_NV2A_BASE, GetLastError());
+         }
+     }
+@@ -1598,7 +1674,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+                     XBOX_MCPX_SIZE / (1024 * 1024), XBOX_MCPX_BASE);
+         } else {
+             fprintf(stderr, "  WARNING: MCPX aperture at 0x%08X failed "
+-                    "(error %lu); USB/audio register access will fault\n",
++                    "(error %u); USB/audio register access will fault\n",
+                     XBOX_MCPX_BASE, GetLastError());
+         }
+     }
+@@ -1619,7 +1695,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+                     XBOX_FLASH_SIZE / (1024 * 1024), XBOX_FLASH_BASE);
+         } else {
+             fprintf(stderr, "  WARNING: flash aperture at 0x%08X failed "
+-                    "(error %lu); a title reading flash will fault\n",
++                    "(error %u); a title reading flash will fault\n",
+                     XBOX_FLASH_BASE, GetLastError());
+         }
+     }
+@@ -1721,7 +1797,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+             if (g_mirror_views[m]) {
+                 mirrors_ok++;
+             } else {
+-                fprintf(stderr, "  Mirror %d: FAILED at %p (error %lu)\n",
++                fprintf(stderr, "  Mirror %d: FAILED at %p (error %u)\n",
+                         m + 1, (void *)mirror_base, GetLastError());
+             }
+         }
+@@ -1783,7 +1859,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+                     XBOX_TILED_BASE);
+         } else {
+             fprintf(stderr, "  WARNING: tiled aperture at 0x%08X failed"
+-                    " (error %lu); rendering writes will fault\n",
++                    " (error %u); rendering writes will fault\n",
+                     XBOX_TILED_BASE, GetLastError());
+         }
+     }
 @@ -1855,6 +1931,15 @@ void xbox_MemoryLayoutShutdown(void)
          CloseHandle(g_mapping_handle);
          g_mapping_handle = NULL;

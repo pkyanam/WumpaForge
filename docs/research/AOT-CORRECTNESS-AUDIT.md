@@ -112,3 +112,60 @@ entries remain shared volatile diagnostics: concurrent updates can lose trace
 ordering, but bounded indices do not feed the actual local dispatch target or
 transform arithmetic. Shared guest memory remains a separate concurrency-model
 limitation, not a demonstrated demo race.
+
+## Build66 logical/double-shift follow-up
+
+The compiler warning at generated `recomp_0005.c:8393` exposed an unmasked
+`SHR [EAX],89h` at discovered function `41B20`. Original bytes show this is a
+misaligned `imm_ref_target` seed: `41B1F: 83 C0 28` is ADD EAX,28h and
+`41B22: 89 41 14` is MOV [ECX+14h],EAX. Starting at41B20 instead decodes operand
+bytes as SHR. The database records no direct callers; neighboring41B0C/14/1C/24
+are also immediate-reference discoveries. The NV2A SetPalette method value is
+also41B20. No discovered function boundary was removed on that evidence alone.
+
+Independent emitted CPU fixtures prove the helper issue: raw C shifts did not
+mask the count and promoted byte/word operands to signed int. UBSan stopped on
+an emitted shift exponent136 for count89h. Logical SHL/SHR now mask the count to
+five bits, truncate operands/results to8/16/32 bits, preserve masked-zero helper
+flags, and produce defined carry and one-bit overflow without C shift UB.
+Snapshots retain ZF/SF/PF/CF and immediate one-bit OF branch inputs after MOV;
+immediate masked-zero shifts preserve the preceding flag state and snapshots.
+Undefined SHL/SHR carry for masked counts at least the operand width is assigned
+zero, without treating it as a defined architectural result.
+
+There is also a directly called, valid original path: CRT64 helpers F4600,
+F61A0 and F64A0 use SHLD/SHRD for counts below32, including zero. The old
+expressions shifted the other DWORD by32 at zero. The CPU fixture translates
+these original functions into temporary files, reproduces that UBSan error,
+and now passes all256 CL values for left, logical-right and arithmetic-right
+64-bit results. No original game bytes or generated functions are tracked.
+
+| Helper | Original call/return evidence |
+| --- | --- |
+| F4600, left | 669C2/669C7;66E67/66E6C;70FB3/70FB8;7116B/71170;87430/87435 |
+| F61A0, logical right | EE2A7/EE2AC |
+| F64A0, arithmetic right | 1560D3/1560D8 |
+
+SHLD/SHRD now mask counts, retain the destination for zero, and handle16/32-bit
+operands, defined carry and one-bit overflow. The16-bit result and flags are
+undefined above count16; the helper deterministically retains the destination
+and flags there. No global EFLAGS redesign was attempted. In particular,
+variable zero-count merges with preceding flag writers and variable-count OF
+branch reconstruction remain limitations; helper preservation alone does not
+claim those control-flow cases are fixed.
+
+`tools/test_logical_shift_widths.py` passes UBSan for all byte values/counts,
+representative16/32-bit values, and complete translated JO/JB/JE/JS/JP functions
+with an intervening destination-overwriting MOV and another masked-zero shift.
+`tools/test_double_shifts.py` passes the actual CRT64 functions and independent
+bit-step SHLD/SHRD16/32 result/defined-flag cases. Existing rotate, flag-merge,
+incremental translation and unsupported-instruction tests pass. Reports:
+`logical-shifts-before.log`, `logical-shifts-fixed.log`, `double-shifts-before.log`,
+`double-shifts-fixed.log`, `logical-double-shift-original.txt` under local/reports.
+
+The inventory of already-generated functions contains260 variable32-bit logical
+shifts,41 variable byte shifts and5 variable word shifts. Its sole immediate
+count at least32 is the false-positive41B20 seed. This inventory includes
+existing discovery aliases/false positives and supplies no runtime frequency or
+claim that an out-of-range count occurred during the reported demo. Full details
+are in `local/reports/logical-shift-inventory.json`.
