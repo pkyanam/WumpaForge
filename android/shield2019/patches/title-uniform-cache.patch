@@ -1,0 +1,69 @@
+--- a/shader_bridge.inc
++++ b/shader_bridge.inc
+@@ -129,6 +129,17 @@
+     struct ShaderKey key;
+     GLuint program;
+     GLint sampler_location[4], mirror_once_location[4];
++    /* Uniform locations belong to this linked program, including inactive -1. */
++    GLint u_vconstants_location;
++    GLint u_nv2a_viewport_location;
++    GLint u_nv2a_depth_location;
++    GLint u_nv2a_fog_mode_location;
++    GLint u_nv2a_fog_params_location;
++    GLint u_psconstants_location;
++    GLint u_fogcolor_location;
++    GLint u_alpha_enable_location;
++    GLint u_alpha_func_location;
++    GLint u_alpha_ref_location;
+     uint64_t age;
+     Nv2aVertexInfo vertex;
+     Nv2aPixelInfo pixel;
+@@ -212,6 +223,16 @@
+     }
+     if (slot->program) glDeleteProgram(slot->program);
+     slot->key=key; slot->program=program; slot->vertex=vi; slot->pixel=pi; slot->age=++s_shader_age;
++    slot->u_vconstants_location=glGetUniformLocation(program,"u_vconstants");
++    slot->u_nv2a_viewport_location=glGetUniformLocation(program,"u_nv2a_viewport");
++    slot->u_nv2a_depth_location=glGetUniformLocation(program,"u_nv2a_depth");
++    slot->u_nv2a_fog_mode_location=glGetUniformLocation(program,"u_nv2a_fog_mode");
++    slot->u_nv2a_fog_params_location=glGetUniformLocation(program,"u_nv2a_fog_params");
++    slot->u_psconstants_location=glGetUniformLocation(program,"u_psconstants");
++    slot->u_fogcolor_location=glGetUniformLocation(program,"u_fogcolor");
++    slot->u_alpha_enable_location=glGetUniformLocation(program,"u_alpha_enable");
++    slot->u_alpha_func_location=glGetUniformLocation(program,"u_alpha_func");
++    slot->u_alpha_ref_location=glGetUniformLocation(program,"u_alpha_ref");
+     for (unsigned i=0;i<4;++i) {
+         char name[8]; snprintf(name,sizeof(name),"tex%u",i);
+         slot->sampler_location[i]=glGetUniformLocation(program,name);
+@@ -383,21 +404,21 @@
+         glVertexAttribPointer(i,components,type,normalize,attribute_stride,(const void *)(uintptr_t)attribute_offset);
+     }
+     glUseProgram(p->program);
+-    glUniform4fv(glGetUniformLocation(p->program,"u_vconstants"),192,&s_vertex_constants[0][0]);
+-    glUniform4f(glGetUniformLocation(p->program,"u_nv2a_viewport"),s_viewport.X,s_viewport.Y,s_viewport.Width,s_viewport.Height);
+-    glUniform2f(glGetUniformLocation(p->program,"u_nv2a_depth"),s_viewport.MinZ*viewport_depth_scale(),s_viewport.MaxZ*viewport_depth_scale());
++    glUniform4fv(p->u_vconstants_location,192,&s_vertex_constants[0][0]);
++    glUniform4f(p->u_nv2a_viewport_location,s_viewport.X,s_viewport.Y,s_viewport.Width,s_viewport.Height);
++    glUniform2f(p->u_nv2a_depth_location,s_viewport.MinZ*viewport_depth_scale(),s_viewport.MaxZ*viewport_depth_scale());
+     float fog_parameters[2]; int fog_mode=shader_fog_parameters(fog_parameters);
+-    glUniform1i(glGetUniformLocation(p->program,"u_nv2a_fog_mode"),fog_mode);
+-    glUniform2fv(glGetUniformLocation(p->program,"u_nv2a_fog_params"),1,fog_parameters);
++    glUniform1i(p->u_nv2a_fog_mode_location,fog_mode);
++    glUniform2fv(p->u_nv2a_fog_params_location,1,fog_parameters);
+     float colors[18][4];
+     for (unsigned i=0;i<8;++i) { shader_rgba(pixel.constant0[i],colors[i*2]); shader_rgba(pixel.constant1[i],colors[i*2+1]); }
+     shader_rgba(pixel.final_constant0,colors[16]); shader_rgba(pixel.final_constant1,colors[17]);
+-    glUniform4fv(glGetUniformLocation(p->program,"u_psconstants"),18,&colors[0][0]);
++    glUniform4fv(p->u_psconstants_location,18,&colors[0][0]);
+     float fog_color[4]; shader_rgba(read32(0x10EFF4),fog_color);
+-    glUniform3fv(glGetUniformLocation(p->program,"u_fogcolor"),1,fog_color);
+-    glUniform1i(glGetUniformLocation(p->program,"u_alpha_enable"),read32(0x10EE18+60*4)!=0);
+-    glUniform1i(glGetUniformLocation(p->program,"u_alpha_func"),(int)read32(0x10EE18+58*4)-GL_NEVER+1);
+-    glUniform1f(glGetUniformLocation(p->program,"u_alpha_ref"),(read32(0x10EE18+61*4)&255)/255.0f);
++    glUniform3fv(p->u_fogcolor_location,1,fog_color);
++    glUniform1i(p->u_alpha_enable_location,read32(0x10EE18+60*4)!=0);
++    glUniform1i(p->u_alpha_func_location,(int)read32(0x10EE18+58*4)-GL_NEVER+1);
++    glUniform1f(p->u_alpha_ref_location,(read32(0x10EE18+61*4)&255)/255.0f);
+     GLint previous_samplers[4];
+     for (unsigned i=0;i<4;++i) { glActiveTexture(GL_TEXTURE0+i); glGetIntegerv(GL_SAMPLER_BINDING,&previous_samplers[i]); }
+     for (unsigned i=0;i<4;++i) {
