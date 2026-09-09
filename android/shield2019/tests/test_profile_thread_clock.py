@@ -68,7 +68,10 @@ int main(void) {
     puts("Independent worker CPU and wall-clock intervals passed"); return 0;
 }
 '''
-with tempfile.TemporaryDirectory(prefix='wumpa-profile-clock-') as temporary:
+# Replay inside the repository, matching prepare.py's nested build directory.
+# A Git-format diff header can otherwise silently skip paths from this cwd.
+(ROOT / 'build/shield2019').mkdir(parents=True, exist_ok=True)
+with tempfile.TemporaryDirectory(prefix='wumpa-profile-clock-', dir=ROOT / 'build/shield2019') as temporary:
     work = Path(temporary)
     source = work / 'graphics_timing_probe.inc'
     shutil.copyfile(ROOT / 'src/graphics_timing_probe.inc', source)

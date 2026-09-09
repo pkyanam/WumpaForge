@@ -1,4 +1,3 @@
-diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -5261,5 +5261,9 @@

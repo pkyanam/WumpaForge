@@ -100,7 +100,10 @@ def fragment(source):
     end = source.index('/* ── Initialization', start)
     return source[start:end]
 
-with tempfile.TemporaryDirectory(prefix='wumpa-kernel-tls-') as temporary:
+# Replay inside the repository, matching prepare.py's nested build directory.
+# A Git-format diff header can otherwise silently skip paths from this cwd.
+(ROOT / 'build/shield2019').mkdir(parents=True, exist_ok=True)
+with tempfile.TemporaryDirectory(prefix='wumpa-kernel-tls-', dir=ROOT / 'build/shield2019') as temporary:
     work = Path(temporary)
     target = work / 'src/kernel/kernel_bridge.c'
     target.parent.mkdir(parents=True)
