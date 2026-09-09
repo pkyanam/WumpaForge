@@ -1,0 +1,13 @@
+--- a/src/input/desktop_input.h
++++ b/src/input/desktop_input.h
+@@ -45,6 +45,10 @@
+     int x = KEY(D) - KEY(A), y = KEY(W) - KEY(S);
+     if (x) p->sThumbLX = (SHORT)(x * (y ? 23170 : 32767));
+     if (y) p->sThumbLY = (SHORT)(y * (x ? 23170 : 32767));
++    /* Android TV remote camera layer, isolated from the macOS key map. */
++    int rx = KEY(L) - KEY(J), ry = KEY(I) - KEY(K);
++    if (rx) p->sThumbRX = (SHORT)(rx * (ry ? 23170 : 32767));
++    if (ry) p->sThumbRY = (SHORT)(ry * (rx ? 23170 : 32767));
+     if (s->mouse_focus) {
+         if (s->mouse_buttons & SDL_BUTTON_LMASK) p->bAnalogButtons[XBOX_BUTTON_X] = 255;
+         if (s->mouse_buttons & SDL_BUTTON_RMASK) p->bAnalogButtons[XBOX_BUTTON_B] = 255;

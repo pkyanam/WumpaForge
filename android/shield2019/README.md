@@ -150,3 +150,31 @@ Development is paused pending Shield access, as requested. No device connection,
 installation, diagnostic execution or Android gameplay test was performed.
 The remaining blockers are observed device/driver behavior and real gameplay,
 not a claim that the cross-built APK is already known to launch successfully.
+
+### Playing with the Shield remote
+
+The game activity now maps a limited TV remote to keyboard controls before SDL
+can treat its buttons as a partial gamepad. Analog-capable gamepads and devices
+with A, B and Start retain SDL controller mappings. Home, volume and voice retain
+Android behavior. In the game, Back is a game action; use Home to leave.
+
+| Remote button | Movement layer (default) | Camera layer | Extra buttons layer |
+| --- | --- | --- | --- |
+| D-pad | Move left stick + menu D-pad | Right stick / camera | Up: White; Down: Black; Left: LT; Right: RT |
+| Center / Select | A / jump / confirm | A | Xbox Back |
+| Back | B / spin / cancel | B | Left stick click |
+| Play/pause | Start / pause | Start | Right stick click |
+| Rewind | X | X | X |
+| Fast-forward | Y | Y | Y |
+| Menu | Cycle to Camera | Cycle to Extra buttons | Cycle to Movement |
+
+Menu displays a brief layer toast and releases held controls. Android repeats do
+not retrigger buttons; release, focus loss, activity pause and device removal
+clear held input. If the remote's configurable Menu button is assigned a system
+shortcut, configure it to send Menu before using the extra layers. The available
+buttons cannot replace two simultaneous analog sticks; a gamepad is preferable
+for normal play. This mapping covers the Xbox button set for debugging, but
+physical remote delivery and simultaneous-button support still need device tests.
+The host Java fixture checks repeats, layer transitions, overlapping logical
+buttons, releases and preservation of system keys; it does not prove Bluetooth
+behavior or Android firmware key delivery.
