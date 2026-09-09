@@ -60,3 +60,16 @@ movement and level selection, followed by endless green loading; not levelplay.
 The user explicitly authorizes working past20% weekly remaining to get the game
 working. The earlier20%floor and77%buffer are superseded. Remain token/resource
 efficient; no arbitrary usage burn. Root owns device testing and two-job builds.
+
+## Latest physical and integration checkpoint
+Arctic Antics loaded on actual-TLS run22299; no completed Shield level or60FPS
+claim. Read root STATUS latest section. The first TLS patch had silently skipped
+inside ignored build dirs; prepare.py now fences Git discovery and reverse-checks
+all applications. Verify symbol g_kernel_dispatch_slot is TLS, not OBJECT.
+Three newly requested researchers completed shader/CPU/timing work. Whole shader
+RPC and GPU-copy physical fixtures pass. New indexed shader path/O2 APK compiles
+but awaits physical validation. Actual driver context is GL4.1 NVIDIA495.00; gate
+GL4.3-only states by real version/extension. Default AOT optimization remains1;
+experimental build flag `--aot-opt 2` enables2.
+The user explicitly asked to leave the TV free after it switched to Hulu. Do not
+resume on-screen tests until the user makes it available; offline checks remain authorized.

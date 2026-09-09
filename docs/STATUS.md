@@ -1,6 +1,48 @@
 # Status — September 9 Shield follow-up
 
-## Latest: verified kernel TLS and renderer batching
+## Latest device checkpoint: Arctic Antics loads; performance remains inadequate
+
+Actual TLS-selector run22299 entered Arctic Antics (internal Level7/Demo0) through
+normal New Game/story-skip/hub/portal flow. `tls-level7.png` shows Crash/penguins;
+`tls-level7-live.log` records advancing gameplay frames. This verifies one level
+load, not a completed Shield level or acceptable playability. Instrumented level
+windows were only about2FPS. No repeat of the previous wrong-kernel dispatch crash
+was seen in the subsequent runs, but long-term reliability remains unproven.
+
+The user requested three NEW research agents; tegra_new_research,
+aot_new_research and timing_new_research completed distinct primary-source/code
+research, then bounded implementations. New research docs live under the Shield
+folder. Scalar sampler/uniform batching, owned vector-uniform payloads, a sampler
+query batch, whole shader-draw RPC and direct GPU CopyRects are committed. The
+physical GPU suite passes through a017766 (including actual GPU-copy hit/pixel,
+coherence, invalid-suffix and state/error assertions). Reports:
+vector-batch-graphics.log and shader-copy-graphics.log. All optimization paths
+preserve original fallbacks; whole-draw/copy remain opt-in markers.
+
+Live run25252 (whole shader RPC + GPU-copy, per-RPC profiling off) showed60FPS in
+light opening windows, ~16–29FPS in several heavy opening windows and ~5FPS in
+heavy hub views. Different camera/animation windows and tracing make these rough
+comparisons, not controlled whole-game benchmarks. The CPU was observed at
+2014500kHz; game PSS about231MiB with697MiB system memory available, so a measured
+memory-capacity shortage was not established. No60FPS-all-scenes or audio-sync
+claim. `shader-final-live.log` and source-matched `libmain-25252.so` are retained.
+
+The next APK builds successfully with `build.py --aot-opt 2` and source2f8e889:
+49 game source files compile with stronger optimization while preserving existing
+integer/aliasing options. It also contains opt-in indexed shader draws and explicit
+GPU comparison fixtures, including a capability guard for fixed-index restart on
+the actual **GL4.1 NVIDIA495.00** context. This APK is **not installed or physically
+validated yet**. `indexed-o2-build.log` and native library TLS symbol verification
+pass. The default build still uses AOT-O1; no performance benefit is asserted yet.
+
+The Shield switched to Hulu during testing. The user explicitly asked to leave the TV free; remote input and on-screen tests
+are paused. Offline integration checks pass for shader/UP RPC, owned uniforms,
+sampler queries, kernel TLS, per-thread clock history, indexed selection and GPU
+copy helpers. Do not resume on-screen tests without the user making the TV available. Next: run the
+new indexed physical fixture, compare O2/indexed performance, and test a second
+level/return-to-hub route. Keep the Mac build68 unchanged and repo PRIVATE.
+
+## Earlier verified kernel TLS and renderer batching
 
 On September9 the dispatch crash was traced to a shared kernel thunk selector:
 EnterCriticalSection could dispatch Sleep or SetInformationFile on another thread's

@@ -3,10 +3,44 @@
 This isolated Android work targets **NVIDIA SHIELD TV Pro 2019 (`mdarcy`)** only.
 The full original AOT game code and native runtime **cross-compile and link as
 Android ARM64**. The APK is installed on a real Shield and renders the original
-opening screen. Memory, graphics components and PCM callback checks pass.
+opening, menus, story and hub. Arctic Antics has loaded through the normal
+portal flow on the Shield. Memory, graphics components and PCM callback checks pass.
 Initial performance is severely slow with audio/video desynchronization, so this
 is **not yet a verified playable port**.
 The Mac app and its original dependency checkout are preserved.
+
+## Latest checkpoint
+
+The kernel dispatch selector is now thread-local, with actual ELF symbol
+verification and a deterministic race regression test. The earlier build-tool
+failure that silently skipped this patch is fixed; dependency patches now apply
+outside the parent Git repository and are reverse-checked.
+
+Light opening windows reach60FPS, but heavy scenes and hub/gameplay remain far
+slower. One Arctic Antics load is verified; a completed Shield level, all-level
+loading, sustained60FPS and audio synchronization are **not** established. See
+[root status](../../docs/STATUS.md) for exact builds, measurements and limitations.
+The TV is currently reserved for the user; on-screen testing is paused.
+
+New experiments are opt-in files in the application's external files directory:
+
+| Marker | Behavior | Validation |
+| --- | --- | --- |
+| `gl-rpc` | Persistent renderer thread | Physical graphics checks; performance varies |
+| `gl-rpc-draw` | Whole backend UP draw submission | Physical graphics checks |
+| `gl-rpc-shader` | Whole title shader draw submission | Physical graphics checks |
+| `gpu-copyrects` | Eligible GPU-to-GPU copies | Explicit physical hit/pixel/coherence/state checks |
+| `indexed-shader` | Eligible original indices sent to GPU | Compiled and host-tested; physical gate pending |
+| `gl-rpc-profile` | Expensive named per-call timing | Diagnostic only; disable for normal comparisons |
+
+The batching paths require the existing `defer-state` configuration. Keep RPC
+draw/shader markers alongside `gl-rpc`; do not infer safety or faster performance
+for every scene from a component test. The original fallback remains available.
+
+An optional compiler experiment is `python3 android/shield2019/build.py --aot-opt 2`.
+It builds successfully but awaits device comparison. The default remains `-O1`
+for generated game code; runtime/title compile options are unchanged. No fast-math
+or CPU interpretation is introduced.
 
 ## Build on the current Mac
 

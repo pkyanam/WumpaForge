@@ -4,6 +4,20 @@ This is a private experimental source project, not a published game release.
 Detailed evidence and commit references are in [STATUS](docs/STATUS.md) and Git
 history. Build numbers identify local development checkpoints.
 
+## 2026-09-09 — Shield loading and performance investigation
+
+- Verified an actual native Arctic Antics portal load on Shield Pro2019. Heavy
+  gameplay remains too slow; no completed Shield level or sustained60FPS claim.
+- Corrected cross-thread kernel-service dispatch and silent dependency patch
+  skipping; actual installed TLS symbol and forced-interleaving test verified.
+- Added bounded GL state/uniform batching, whole-draw owner execution and GPU
+  copies. Physical graphics regression and explicit copy pixel/coherence tests pass.
+- Added three independent Tegra/ARM64/timing research passes and documented
+  remaining concurrency, loading and performance hypotheses.
+- Added opt-in indexed shader draws, guarded for the real GL4.1 context, and an
+  AOT-O2 build experiment. Both compile; device testing is pending while the user
+  uses the TV. Mac build68 and the private/source-only repository remain preserved.
+
 ## 2026-09-09 — Isolated Shield cross-build
 
 - Cross-compiled the actual AOT game library and runtime for Android ARM64,
