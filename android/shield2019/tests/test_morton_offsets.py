@@ -18,6 +18,7 @@ def main():
         source = (work / 'graphics.c').read_text()
         original = re.search(r'static uint32_t morton_index\([^\n]+\)\n\{.*?\n\}', source, re.S).group(0)
         helper = re.search(r'static uint32_t \*morton_x_offsets\([^\n]+\)\n\{.*?\n\}', source, re.S).group(0)
+        encode = re.search(r'static uint32_t encode_color\([^\n]+\)\n\{.*?\n\}', source, re.S).group(0)
         fixture = r'''
 #include <assert.h>
 #include <stdint.h>
@@ -30,6 +31,7 @@ static void *guarded_malloc(size_t size) {
     uint8_t *p=malloc(size+32);assert(p);memset(p,0xAD,size+32);return p+16;
 }
 ORIGINAL
+ENCODE
 #define malloc guarded_malloc
 HELPER
 #undef malloc
@@ -60,6 +62,23 @@ static void check(unsigned width,unsigned height) {
         assert(!memcmp(expected,actual,bytes+32));
         for(unsigned i=0;i<16;++i)assert(actual[i]==0xCA && actual[16+bytes+i]==0xCA);
         free(expected);free(actual);
+        /* Reverse direction used by render-target resolve, including holes in
+           non-power-of-two storage and guard bytes surrounding guest data. */
+        size_t encoded_bytes=((size_t)largest+1)*bpp;
+        expected=malloc(encoded_bytes+32);actual=malloc(encoded_bytes+32);assert(expected&&actual);
+        memset(expected,0xCA,encoded_bytes+32);memset(actual,0xCA,encoded_bytes+32);
+        for(unsigned y=0;y<height;++y) {
+            unsigned yo=morton_index(0,y,width,height);
+            for(unsigned x=0;x<width;++x) {
+                uint32_t color=(x*1234567u+y*7654321u)^0x8AFEC301u;
+                uint32_t value=encode_color(color,bpp==1?0:bpp==2?5:6);
+                memcpy(expected+16+morton_index(x,y,width,height)*bpp,&value,bpp);
+                memcpy(actual+16+(table[x]|yo)*bpp,&value,bpp);
+            }
+        }
+        assert(!memcmp(expected,actual,encoded_bytes+32));
+        for(unsigned i=0;i<16;++i)assert(actual[i]==0xCA && actual[16+encoded_bytes+i]==0xCA);
+        free(expected);free(actual);
     }
     for(unsigned i=0;i<16;++i)assert(input[i]==0xCE && input[16+((size_t)largest+1)*4+i]==0xCE);
     free(input);release_offsets(table,width);
@@ -72,7 +91,7 @@ int main(void) {
     fail_allocation=1;assert(!morton_x_offsets(16,16));
     puts("PASS: Morton offsets/pixels for exhaustive1..33 rectangles and all power-of-two pairs through512, 1/2/4-byte pixels, guards, allocation cap/OOM");
 }
-'''.replace('ORIGINAL', original).replace('HELPER', helper)
+'''.replace('ORIGINAL', original).replace('HELPER', helper).replace('ENCODE', encode)
         test = work / 'test.c'
         test.write_text(fixture)
         binary = work / 'test'

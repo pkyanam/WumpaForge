@@ -1,0 +1,25 @@
+--- a/graphics.c
++++ b/graphics.c
+@@ -1930,10 +1930,18 @@
+         uint8_t *data=guest_ptr(r->data);
+         if(r->format==0x12) {
+             for(unsigned y=0;y<r->height;++y)memcpy(data+(size_t)y*r->pitch,pixels+(size_t)y*r->width,(size_t)r->width*4);
+-        } else for (unsigned y=0;y<r->height;++y) for (unsigned x=0;x<r->width;++x) {
+-            uint32_t value=encode_color(pixels[y*r->width+x],r->format);
+-            uint32_t offset=linear ? y*r->pitch+x*bpp : morton_index(x,y,r->width,r->height)*bpp;
+-            memcpy(data+offset,&value,bpp);
++        } else {
++            uint32_t *x_offsets=!linear?morton_x_offsets(r->width,r->height):NULL;
++            for (unsigned y=0;y<r->height;++y) {
++                uint32_t y_offset=x_offsets?morton_index(0,y,r->width,r->height):0;
++                for (unsigned x=0;x<r->width;++x) {
++                    uint32_t value=encode_color(pixels[y*r->width+x],r->format);
++                    uint32_t offset=linear ? y*r->pitch+x*bpp :
++                        (x_offsets?(x_offsets[x]|y_offset):morton_index(x,y,r->width,r->height))*bpp;
++                    memcpy(data+offset,&value,bpp);
++                }
++            }
++            free(x_offsets);
+         }
+         struct Resource *parent=resource(r->owner);
+         if (parent) parent->dirty=1;
