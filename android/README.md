@@ -1,5 +1,10 @@
 # SHIELD TV Pro 2019 groundwork
 
+**September 9 update:** [the isolated Shield build](shield2019/README.md) now
+cross-compiles the full ARM64 game library and packages a development TV APK.
+Device execution is still unavailable. The notes below describe the original
+September 8 probe scaffold; its diagnostic has since been cross-compiled.
+
 This directory contains an offline prerequisite checker and the source for an
 isolated Android ARM64 memory diagnostic. **It does not build WumpaForge or an
 APK.** There is no Android Activity, renderer port, game library or device result.

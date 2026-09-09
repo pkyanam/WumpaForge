@@ -1,5 +1,10 @@
 # SHIELD TV Pro 2019 preparation
 
+**September 9 update:** implementation has progressed to a cross-compiled native
+ARM64 game library and signed development APK in the
+[isolated Shield folder](../android/shield2019/README.md). Device tests remain
+outstanding. The following is the original September 8 research/planning snapshot.
+
 Research and source-only groundwork, 2026-09-08. The selected future target is
 **NVIDIA SHIELD TV Pro (2019)**. No other Shield model is in scope. WumpaForge
 currently runs only on Apple Silicon macOS; the user completed Arctic Antics on

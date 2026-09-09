@@ -24,6 +24,25 @@ int wumpa_host_start(const char *log_name)
     if(n<0||(size_t)n>=sizeof(path))return 0;
     if(!freopen(path,"a",stdout)||dup2(fileno(stdout),STDERR_FILENO)<0)return 0;
     setvbuf(stdout,NULL,_IONBF,0);setvbuf(stderr,NULL,_IONBF,0);
-    fprintf(stderr,"WumpaForge Android ARM64 host started (%s)\n",log_name);
+    fprintf(stderr,"WumpaForge Android ARM64 host started (%s) pid=%ld\n",log_name,(long)getpid());
     return 1;
+}
+
+extern int xbox_D3D8GLAcquire(void);
+extern void xbox_D3D8GLRelease(void);
+void wumpa_pump_input_events(void)
+{
+    if(!wumpa_is_game_thread()){
+        fprintf(stderr,"[shield] Input event pump called outside SDL game thread.\n");
+        abort();
+    }
+    /* Android's pump may block through pause/resume. Keep loading workers from
+       binding/swapping while SDL backs up or restores the window surface. */
+    if(!xbox_D3D8GLAcquire())abort();
+    SDL_PumpEvents();
+    if(SDL_HasEvent(SDL_RENDER_DEVICE_RESET)){
+        fprintf(stderr,"[shield] EGL context lost during input pump; resource restoration is not implemented.\n");
+        exit(EXIT_FAILURE);
+    }
+    xbox_D3D8GLRelease();
 }

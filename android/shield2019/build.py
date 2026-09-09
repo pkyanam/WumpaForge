@@ -44,7 +44,7 @@ def main():
         for file in sorted(classes.rglob('*.class')): archive.write(file,file.relative_to(classes))
     run([tools/'d8','--min-api','30','--lib',android_jar,'--output',dex,jar],env=env)
     unsigned=package/'unsigned.apk'; shutil.copy2(package/'resources.apk',unsigned)
-    libraries={'libmain.so':WORK/'native/libmain.so','libSDL2.so':WORK/'native/sdl2/libSDL2.so','libshield_probe.so':WORK/'native/libshield_probe.so','libgraphics_check.so':WORK/'native/libgraphics_check.so','libcontroller_check.so':WORK/'native/libcontroller_check.so'}
+    libraries={'libmain.so':WORK/'native/libmain.so','libSDL2.so':WORK/'native/sdl2/libSDL2.so','libshield_probe.so':WORK/'native/libshield_probe.so','libgraphics_check.so':WORK/'native/libgraphics_check.so','libcontroller_check.so':WORK/'native/libcontroller_check.so','libaudio_check.so':WORK/'native/libaudio_check.so'}
     strip=ndk/'toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip'
     readelf=strip.with_name('llvm-readelf')
     library_report={}

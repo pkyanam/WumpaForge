@@ -33,6 +33,9 @@ def main():
         with tarfile.open(deps/'sdl2.tar.gz') as archive:
             archive.extractall(deps,filter='data')
     # Source copies are disposable build inputs; the original Mac checkout stays intact.
+    runtime_source=OUT/'runtime/src'
+    if runtime_source.is_symlink():raise RuntimeError('Unexpected runtime source symlink')
+    if runtime_source.exists():shutil.rmtree(runtime_source)
     for source,dest in [(ROOT/'third_party/xboxrecomp/src',OUT/'runtime/src'),(ROOT/'src',OUT/'title')]:
         shutil.copytree(source,dest,dirs_exist_ok=True)
     for patch in sorted((HERE/'patches').glob('runtime-*.patch')):
@@ -47,7 +50,7 @@ def main():
     replace(backend,'void xbox_D3D8GLPumpEvents(void)\n{',
             'void xbox_D3D8GLPumpEvents(void)\n{\n    if (!wumpa_is_game_thread()) return;')
     replace(backend,'            output_event(&ev);',
-            '            if (ev.type == SDL_RENDER_DEVICE_RESET) {\n'
+            '            if (ev.type == SDL_RENDER_DEVICE_RESET || SDL_HasEvent(SDL_RENDER_DEVICE_RESET)) {\n'
             '                fprintf(stderr, "[shield] EGL context lost; resource restoration is not implemented. Ending this game process.\\n");\n'
             '                exit(EXIT_FAILURE);\n'
             '            }\n'
@@ -57,6 +60,9 @@ def main():
     title=OUT/'title/graphics.c'
     replace(title,'#include <epoxy/gl.h>','#include <epoxy/gl.h>\n#include "shield_host.h"')
     replace(title,'#else\n    return 1;\n#endif\n}', '#else\n    return wumpa_is_game_thread();\n#endif\n}')
+    input_runtime=OUT/'runtime/src/input/xinput_device.c'
+    replace(input_runtime,'#include <SDL.h>','#include <SDL.h>\n#include "shield_host.h"')
+    replace(input_runtime,'    SDL_PumpEvents();','    wumpa_pump_input_events();')
     input_source=OUT/'title/input_bridge.c'
     replace(input_source,'static int main_thread(void)\n{',
             '#include "shield_host.h"\nstatic int main_thread(void)\n{\n    if (!wumpa_is_game_thread()) return 0;')

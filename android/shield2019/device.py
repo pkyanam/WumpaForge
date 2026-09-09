@@ -62,28 +62,34 @@ def main():
         adb('install','-r',args.apk,capture=False)
         print('Installed. Open WumpaForge on the TV and run diagnostics before starting the game.');return
     if args.action=='logs':
-        for name in ('native.log','graphics-check.log','controller-check.log'):
+        for name in ('native.log','graphics-check.log','controller-check.log','audio-check.log','diagnostics.txt'):
             result=subprocess.run([str(args.adb),'-s',args.serial,'pull',STORAGE+'/'+name,str(reports/name)],check=False)
             if result.returncode:print('Log not available:',name)
         return
-    # App-specific storage exists after the launcher has run once.
+    # The launcher must have created app storage before importing.
     shell('test','-d',STORAGE)
-    destination=STORAGE+'/assets'
-    exists=subprocess.run([str(args.adb),'-s',args.serial,'shell',shlex.join(['test','-e',destination])],check=False)
-    if exists.returncode==0:raise RuntimeError('Existing assets preserved; this initial importer only installs into an empty asset destination')
-    if exists.returncode!=1:raise RuntimeError('Could not establish whether remote assets exist')
-    stage=STORAGE+'/assets.incoming-'+str(time.time_ns())
-    shell('mkdir',stage)
-    manifest=reports/'transfer.sha256'
-    manifest.write_text(''.join(f'{digest}  ./{name}\n' for name,_,digest in files))
-    # adb push directory/. copies only the validated tree contents into owned staging.
-    adb('push',str(args.assets.resolve())+'/.',stage,capture=False)
-    adb('push',manifest,stage+'/.wumpaforge-sha256',capture=False)
-    script='cd '+shlex.quote(stage)+' && sha256sum -c .wumpaforge-sha256'
-    check=adb('shell',script)
-    (reports/'remote-asset-verification.txt').write_text(check)
-    shell('rm',stage+'/.wumpaforge-sha256')
-    # Recheck before activation; never intentionally replace an existing asset tree.
-    adb('shell','test ! -e '+shlex.quote(destination)+' && mv '+shlex.quote(stage)+' '+shlex.quote(destination))
+    lock=STORAGE+'/.wumpaforge-import-lock'
+    shell('mkdir',lock)
+    try:
+        destination=STORAGE+'/assets'
+        exists=subprocess.run([str(args.adb),'-s',args.serial,'shell',shlex.join(['test','-e',destination])],check=False)
+        if exists.returncode==0:raise RuntimeError('Existing assets preserved; this initial importer only installs into an empty asset destination')
+        if exists.returncode!=1:raise RuntimeError('Could not establish whether remote assets exist')
+        stage=STORAGE+'/assets.incoming-'+str(time.time_ns())
+        shell('mkdir',stage)
+        manifest=reports/'transfer.sha256'
+        manifest.write_text(''.join(f'{digest}  ./{name}\n' for name,_,digest in files))
+        # adb push directory/. copies only the validated tree contents into owned staging.
+        adb('push',str(args.assets.resolve())+'/.',stage,capture=False)
+        adb('push',manifest,stage+'/.wumpaforge-sha256',capture=False)
+        script='cd '+shlex.quote(stage)+' && sha256sum -c .wumpaforge-sha256'
+        check=adb('shell',script)
+        (reports/'remote-asset-verification.txt').write_text(check)
+        shell('rm',stage+'/.wumpaforge-sha256')
+        # Recheck before activation; never intentionally replace an existing asset tree.
+        adb('shell','test ! -e '+shlex.quote(destination)+' && mv '+shlex.quote(stage)+' '+shlex.quote(destination))
+    finally:
+        # Leave any failed incoming tree for diagnosis; never delete user assets.
+        subprocess.run([str(args.adb),'-s',args.serial,'shell',shlex.join(['rmdir',lock])],check=False)
     print(f'Imported and remotely verified {len(files)} assets. Saves were untouched.')
 if __name__=='__main__':main()

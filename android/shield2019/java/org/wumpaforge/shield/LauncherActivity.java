@@ -12,6 +12,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.security.MessageDigest;
 import java.util.Arrays;
 
@@ -29,6 +30,7 @@ public final class LauncherActivity extends Activity {
         Button graphics=new Button(this); graphics.setText("Run full graphics component checks (no assets)"); body.addView(graphics);
         Button controllers=new Button(this); controllers.setText("List connected controllers"); body.addView(controllers);
         Button controllerTest=new Button(this);controllerTest.setText("Test live gamepad buttons, sticks and rumble");body.addView(controllerTest);
+        Button audio=new Button(this);audio.setText("Test stereo audio (quiet tones)");body.addView(audio);
         Button play=new Button(this); play.setText("Start game"); body.addView(play);
         report=new TextView(this); report.setTextIsSelectable(true); report.setTextSize(16);
         ScrollView scroll=new ScrollView(this); scroll.addView(report); body.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
@@ -42,6 +44,10 @@ public final class LauncherActivity extends Activity {
                 String result;
                 try {System.loadLibrary("shield_probe");result=nativeDiagnostics();}
                 catch(Throwable problem){result="Diagnostic failed: "+problem;}
+                try {
+                    File directory=getExternalFilesDir(null);
+                    if(directory!=null)try(FileOutputStream output=new FileOutputStream(new File(directory,"diagnostics.txt"))){output.write((deviceSummary()+"\n"+result).getBytes("UTF-8"));}
+                }catch(Exception ignored) { /* The visible report still remains available. */ }
                 final String text=result;
                 runOnUiThread(()->{busy=false;report.setText(deviceSummary()+"\n"+text);});
             },"ShieldDiagnostics").start();
@@ -52,6 +58,7 @@ public final class LauncherActivity extends Activity {
             startActivity(new Intent(this,GraphicsCheckActivity.class));
         });
         controllerTest.setOnClickListener(v->{String gate=deviceGate();if(gate!=null){report.setText(gate);return;}startActivity(new Intent(this,ControllerCheckActivity.class));});
+        audio.setOnClickListener(v->{String gate=deviceGate();if(gate!=null){report.setText(gate);return;}startActivity(new Intent(this,AudioCheckActivity.class));});
         controllers.setOnClickListener(v->report.setText(controllerSummary()));
         play.setOnClickListener(v->{
             String gate=deviceGate(); if(gate!=null){report.setText(gate);return;}

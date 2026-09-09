@@ -1,4 +1,11 @@
-# Status — 2026-09-08, evening
+# Status — September 9 Shield follow-up
+
+The latest work is isolated under [android/shield2019](../android/shield2019/README.md).
+The real AOT game library cross-compiles for Android ARM64, and a signed TV
+development APK includes asset-free memory/graphics/input/audio diagnostics.
+No Shield access is available until the user supplies it; no Android launch or
+playability is claimed. Mac build 68 remains intact. The earlier Mac handoff below
+is retained as its validation record.
 
 ## Midnight handoff
 

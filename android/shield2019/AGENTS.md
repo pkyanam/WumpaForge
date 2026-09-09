@@ -20,3 +20,9 @@ Device access is unavailable until tomorrow; do not probe the network hostname.
 - Use SDL mappings for Android-recognized gamepads of any brand. Reconnection,
   stale input clearing and actual Bluetooth behavior need on-device validation.
 - Keep precise progress and remaining device gates in README.md and Git history.
+
+## Handoff
+The user explicitly allowed stopping early rather than filling the time budget.
+The cross-build and local verification pass is complete; device access is the
+next meaningful gate. Do not start further background work or connect to SHIELD
+until the user provides access and resumes testing. Read README for exact evidence.

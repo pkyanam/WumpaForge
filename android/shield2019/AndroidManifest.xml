@@ -12,5 +12,6 @@
         <activity android:name=".GameActivity" android:exported="false" android:process=":game" android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|uiMode|navigation|screenLayout|density" />
         <activity android:name=".GraphicsCheckActivity" android:exported="false" android:process=":graphicscheck" android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|uiMode|navigation|screenLayout|density" />
         <activity android:name=".ControllerCheckActivity" android:exported="false" android:process=":controllercheck" android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|uiMode|navigation|screenLayout|density" />
+        <activity android:name=".AudioCheckActivity" android:exported="false" android:process=":audiocheck" android:screenOrientation="landscape" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|uiMode|navigation|screenLayout|density" />
     </application>
 </manifest>

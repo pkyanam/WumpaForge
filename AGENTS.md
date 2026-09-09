@@ -116,3 +116,15 @@ compilable console binary with a working native game.
   deadline is not authorization for a recurring or indefinite background task.
 - Read current STATUS, README, CHANGELOG and Git history. Preserve known gaps;
   do not reinterpret a passing fixture as whole-game correctness or crash freedom.
+
+## September 9 Shield follow-up
+- User authorized a few hours in a separate folder to advance the Shield build,
+  then clarified to stop early when meaningful progress needs device access.
+- Target remains 2019 Pro only. Device named SHIELD is unavailable until the user
+  provides access; do not discover/connect to it in the meantime.
+- Work lives in android/shield2019; read its AGENTS.md and README. Preserve Mac
+  runtime/build 68. Android patches apply only to disposable build-tree copies.
+- Weekly allowance must stay at least 20% remaining. Started at 35% remaining;
+  check the account tool and stop new work with a buffer (23% remaining).
+- Generic Android-recognized Bluetooth gamepads are in scope. Host synthetic
+  checks do not prove physical pairing, rumble or game performance on the Shield.

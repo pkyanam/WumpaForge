@@ -4,6 +4,21 @@ This is a private experimental source project, not a published game release.
 Detailed evidence and commit references are in [STATUS](docs/STATUS.md) and Git
 history. Build numbers identify local development checkpoints.
 
+## 2026-09-09 — Isolated Shield cross-build
+
+- Cross-compiled the actual AOT game library and runtime for Android ARM64,
+  packaged a signed private TV development APK, and preserved Mac build 68.
+- Added asset-free memory/EGL, graphics, controller and stereo-audio diagnostics.
+- Fixed Android toolchain API detection, owned guest-memory reservation,
+  TV remote/gamepad priority and case-insensitive Xbox asset/save path lookup.
+- Added serialized input event pumping and an explicit stop on EGL context loss
+  until graphics resource restoration exists.
+- Added verified local/device asset-import tooling, ELF/package checks and
+  [tomorrow's device instructions](android/shield2019/README.md).
+- Device access is unavailable; Android launch, gameplay and performance remain
+  unverified. Development stopped early at the user's request once further
+  meaningful validation needed the Shield.
+
 ## 2026-09-08 — Native playability and private staging
 
 The user completed Arctic Antics with keyboard controls on native ARM64 build 61.

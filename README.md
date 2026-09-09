@@ -115,13 +115,13 @@ and a concrete task. For example: “Read AGENTS.md and STATUS.md, then help me 
 the setup script with my ISO at `/absolute/path/game.iso`.” No agent subscription
 or API key is required to build or play.
 
-macOS Apple Silicon is the only current development target. There is no mobile
-or NVIDIA Shield build or tested port. Sharing an ARM64 CPU does not make the
-operating system, graphics or packaging compatible. See the
+macOS Apple Silicon is the only platform with demonstrated gameplay. An isolated
+[Shield Pro 2019 development build](android/shield2019/README.md) now produces an
+Android ARM64 game library and TV APK; it has not been run on the device. Sharing
+an ARM64 CPU does not establish operating-system, graphics or runtime compatibility. See the
 [future portability notes](docs/PORTABILITY.md) and the focused
-[SHIELD TV Pro 2019 plan](docs/ANDROID-TV-PLAN.md). The isolated
-[Android groundwork](android/README.md) has offline checks and memory-probe
-source; it does not build an APK or the game.
+[SHIELD TV Pro 2019 plan](docs/ANDROID-TV-PLAN.md). The earlier [Android groundwork](android/README.md) remains available alongside
+the new build and device-test instructions.
 
 Game content, extracted executables, translated game sources, binaries, build
 outputs, and dependency checkouts must stay out of commits. Upstream provenance

@@ -36,9 +36,9 @@ def inspect_apk(path):
                 libraries[name]=inspect_elf(archive.read(name))
                 if libraries[name]['interpreter'] is not None:raise ValueError('APK library has executable interpreter')
             elif re.fullmatch(r'classes(?:[2-9][0-9]*)?\.dex',name):dex+=1
-            elif name in ('AndroidManifest.xml','resources.arsc') or name.startswith(('res/','META-INF/')):pass
+            elif name in ('AndroidManifest.xml','resources.arsc','res/drawable/banner.xml','res/drawable/icon.png') or re.fullmatch(r'META-INF/[A-Z0-9_.-]+',name):pass
             else:raise ValueError('Unexpected APK payload: '+name)
-        required={'lib/arm64-v8a/libmain.so','lib/arm64-v8a/libSDL2.so','lib/arm64-v8a/libshield_probe.so','lib/arm64-v8a/libgraphics_check.so','lib/arm64-v8a/libcontroller_check.so'}
+        required={'lib/arm64-v8a/libmain.so','lib/arm64-v8a/libSDL2.so','lib/arm64-v8a/libshield_probe.so','lib/arm64-v8a/libgraphics_check.so','lib/arm64-v8a/libcontroller_check.so','lib/arm64-v8a/libaudio_check.so'}
         if set(libraries)!=required or dex<1:raise ValueError('Missing/unexpected application libraries or DEX')
     return {'apk':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'members':len(names),'libraries':libraries,'no_game_asset_payload':True,'executed':False}
 
