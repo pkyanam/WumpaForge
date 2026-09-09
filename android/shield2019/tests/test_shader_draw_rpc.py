@@ -66,14 +66,22 @@ def main():
         target=work/'runtime/src/d3d';target.mkdir(parents=True)
         shutil.copy2(ROOT/'third_party/xboxrecomp/src/d3d/d3d8_gl.c',target/'d3d8_gl.c')
         env=dict(os.environ,GIT_CEILING_DIRECTORIES=str(build))
-        original=None
+        body_identity_checked=False
         for patch in sorted((HERE/'patches').glob('title-*.patch')):
             if patch.name=='title-zzzzzzzz-shader-rpc.patch':original=(work/'title/shader_bridge.inc').read_text()
             subprocess.run(['git','apply','--check',str(patch)],cwd=work/'title',env=env,check=True)
             subprocess.run(['git','apply',str(patch)],cwd=work/'title',env=env,check=True)
-        actual=(work/'title/shader_bridge.inc').read_text()
-        restored=actual.replace('#include "shader_draw_rpc.inc"\n\n','').replace('shader_guest_return()','read32(g_esp)').replace('shader_draw_impl(','shader_draw(').replace('\n#include "shader_draw_rpc_wrap.inc"\n','')
-        assert original==restored,'The original body must be unchanged except diagnostic reads and function name'
+            if patch.name=='title-zzzzzzzz-shader-rpc.patch':
+                # Prove this transformation in isolation. Later independently
+                # audited patches may intentionally change the shader body.
+                actual=(work/'title/shader_bridge.inc').read_text()
+                restored=actual.replace('#include "shader_draw_rpc.inc"\n\n','').replace('shader_guest_return()','read32(g_esp)').replace('shader_draw_impl(','shader_draw(').replace('\n#include "shader_draw_rpc_wrap.inc"\n','')
+                assert original==restored,'The RPC patch must preserve the body except diagnostic reads and function name'
+                body_identity_checked=True
+        assert body_identity_checked,'The shader RPC patch was not replayed'
+        final=(work/'title/shader_bridge.inc').read_text()
+        assert final.count('#include "shader_draw_rpc.inc"')==1
+        assert final.count('#include "shader_draw_rpc_wrap.inc"')==1
         patch=HERE/'patches/runtime-shader-draw-profile.patch'
         subprocess.run(['git','apply',str(patch)],cwd=work/'runtime',env=env,check=True)
         backend=(target/'d3d8_gl.c').read_text()
