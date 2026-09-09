@@ -1,0 +1,164 @@
+--- a/graphics.c
++++ b/graphics.c
+@@ -691,6 +691,10 @@
+     uint8_t *encoded_snapshot;
+     int snapshot_valid;
+     uint64_t upload_serial;
++    /* Surface-owned proof that its retained RGBA8 target equals guest bytes. */
++    uint8_t *target_snapshot;
++    uint32_t target_snapshot_bytes;
++    int target_snapshot_valid;
+     IDirect3DTexture8 *texture;
+     IDirect3DVertexBuffer8 *vertex_buffer;
+ };
+@@ -730,6 +734,46 @@
+     if (!r->encoded_snapshot) return guest_ptr(r->data);
+     memcpy(r->encoded_snapshot,guest_ptr(r->data),r->bytes);
+     return r->encoded_snapshot;
++}
++
++/* Startup-only opt-in. All callers hold the existing graphics mutex. */
++static int s_target_return_cache_mode=-1;
++#ifdef WRATH_GRAPHICS_SMOKE_TEST
++static uint64_t s_target_return_cache_hits;
++#endif
++static int target_return_cache_candidate(const struct Resource *r)
++{
++    if(s_target_return_cache_mode<0) {
++        const char *v=getenv("WRATH_TARGET_RETURN_CACHE");
++        s_target_return_cache_mode=v&&!strcmp(v,"1");
++    }
++    return s_target_return_cache_mode && r->type==RESOURCE_SURFACE && r->owner &&
++        (r->format==6 || r->format==0x12) && r->target_texture && r->target_fbo;
++}
++static int target_return_snapshot_matches(const struct Resource *r)
++{
++    return target_return_cache_candidate(r) && r->target_snapshot_valid &&
++        r->target_snapshot && r->target_snapshot_bytes==r->bytes &&
++        !memcmp(r->target_snapshot,guest_ptr(r->data),r->bytes);
++}
++static void capture_target_return_snapshot(struct Resource *r)
++{
++    r->target_snapshot_valid=0;
++    if(!target_return_cache_candidate(r) || !r->bytes)return;
++    if(r->target_snapshot && r->target_snapshot_bytes!=r->bytes) {
++        s_texture_snapshot_bytes-=r->target_snapshot_bytes;free(r->target_snapshot);
++        r->target_snapshot=NULL;r->target_snapshot_bytes=0;
++    }
++    if(!r->target_snapshot && r->bytes<=TEXTURE_SNAPSHOT_BUDGET-s_texture_snapshot_bytes) {
++        r->target_snapshot=malloc(r->bytes);
++        if(r->target_snapshot) {
++            r->target_snapshot_bytes=r->bytes;s_texture_snapshot_bytes+=r->bytes;
++        }
++    }
++    if(r->target_snapshot) {
++        memcpy(r->target_snapshot,guest_ptr(r->data),r->bytes);
++        r->target_snapshot_valid=1;
++    }
+ }
+ 
+ /* Pages never move or disappear. A cached pointer is only a hint: release
+@@ -808,6 +852,7 @@
+     if (r->references || r->bindings) { update_common(r); return; }
+     s_index_resource_dirty=1;
+     if (r->encoded_snapshot) { s_texture_snapshot_bytes-=r->bytes; free(r->encoded_snapshot); }
++    if(r->target_snapshot){s_texture_snapshot_bytes-=r->target_snapshot_bytes;free(r->target_snapshot);}
+     if (r->target_fbo) glDeleteFramebuffers(1, &r->target_fbo);
+     if (r->target_texture) glDeleteTextures(1, &r->target_texture);
+     if (r->target_depth) glDeleteRenderbuffers(1, &r->target_depth);
+@@ -1948,6 +1993,7 @@
+         }
+         struct Resource *parent=resource(r->owner);
+         if (parent) parent->dirty=1;
++        capture_target_return_snapshot(r);
+     }
+     free(pixels);
+     wumpa_texture_trace_end(trace,"resolve",r,result);
+@@ -1970,6 +2016,15 @@
+ }
+ static HRESULT prepare_texture_target(struct Resource *r)
+ {
++    /* Resource metadata is immutable until release. Alias wrappers retain
++     * independent targets; SetRenderTarget resolves the old alias first. */
++    if(target_return_snapshot_matches(r)) {
++#ifdef WRATH_GRAPHICS_SMOKE_TEST
++        ++s_target_return_cache_hits;
++#endif
++        return 0;
++    }
++    r->target_snapshot_valid=0;
+     uint32_t *pixels=malloc((size_t)r->width*r->height*4);
+     if (!pixels) return (HRESULT)0x8007000E;
+     HRESULT result=surface_pixels(r,pixels);
+@@ -2438,6 +2493,7 @@
+ #include "../tools/test_context_profile_bench.inc"
+ #include "../tools/test_texture_snapshot.inc"
+ #include "test_dxt_upload.inc"
++#include "test_target_return_cache.inc"
+ 
+ int main(void)
+ {
+@@ -2767,6 +2823,7 @@
+     test_texture_snapshot();
+     test_cube_resources();
+     test_direct_dxt_upload();
++    test_target_return_cache();
+     test_palette_resources();
+     test_index_bridge();
+     test_immediate_bridge();
+--- /dev/null
++++ b/test_target_return_cache.inc
+@@ -0,0 +1,53 @@
++/* Actual pixels plus guest writes, independent aliases and lossy-format guard. */
++static void test_target_return_cache(void)
++{
++    int old_mode=s_target_return_cache_mode;s_target_return_cache_mode=1;
++    size_t budget_before=s_texture_snapshot_bytes;
++    for(unsigned variant=0;variant<3;++variant) {
++        uint32_t format=variant==0?6:variant==1?0x12:5,texture;
++        uint32_t surface=texture_depth_surface(16,16,format,&texture);
++        struct Resource *r=resource(surface);
++        uint32_t target[]={surface,0};call(0xFEF20,target,2);assert(g_eax==0);
++        glDisable(GL_SCISSOR_TEST);glColorMask(1,1,1,1);
++        glClearColor(1,0,0,1);glClear(GL_COLOR_BUFFER_BIT);
++        glEnable(GL_SCISSOR_TEST);glScissor(0,8,8,8);glClearColor(0,1,0,1);
++        glClear(GL_COLOR_BUFFER_BIT);glDisable(GL_SCISSOR_TEST);
++        target[0]=s_backbuffer_handle;target[1]=s_depthbuffer_handle;call(0xFEF20,target,2);assert(g_eax==0);
++        assert(r->target_snapshot_valid==(variant<2));
++        uint64_t hits=s_target_return_cache_hits;
++        target[0]=surface;target[1]=0;call(0xFEF20,target,2);assert(g_eax==0);
++        assert(s_target_return_cache_hits==hits+(variant<2));
++        uint32_t actual;glReadPixels(2,16-3,1,1,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,&actual);assert(actual==0xFF00FF00);
++        glReadPixels(12,16-13,1,1,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,&actual);assert(actual==0xFFFF0000);
++        target[0]=s_backbuffer_handle;target[1]=s_depthbuffer_handle;call(0xFEF20,target,2);assert(g_eax==0);
++        /* A retained CPU pointer mutates an inactive target without LockRect. */
++        uint32_t bpp=variant==2?2:4;
++        uint32_t offset=(variant==1?2*r->pitch+3*bpp:morton_index(3,2,16,16)*bpp);
++        uint32_t blue=encode_color(0xFF0000FF,format);memcpy((uint8_t *)guest_ptr(r->data)+offset,&blue,bpp);
++        hits=s_target_return_cache_hits;target[0]=surface;target[1]=0;call(0xFEF20,target,2);assert(g_eax==0);
++        assert(s_target_return_cache_hits==hits);
++        glReadPixels(3,16-3,1,1,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,&actual);assert(actual==0xFF0000FF);
++        uint32_t get[]={texture,0,0x1E170};call(0x103C30,get,3);assert(g_eax==0);uint32_t alias=read32(0x1E170);
++        target[0]=alias;call(0xFEF20,target,2);assert(g_eax==0);
++        glClearColor(0,1,1,1);glClear(GL_COLOR_BUFFER_BIT);
++        target[0]=s_backbuffer_handle;target[1]=s_depthbuffer_handle;call(0xFEF20,target,2);assert(g_eax==0);
++        hits=s_target_return_cache_hits;target[0]=surface;target[1]=0;call(0xFEF20,target,2);assert(g_eax==0);
++        assert(s_target_return_cache_hits==hits); /* Other alias changed shared bytes. */
++        glReadPixels(3,16-3,1,1,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,&actual);assert(actual==0xFF00FFFF);
++        if(variant==2) {
++            glClearColor(.1f,.2f,.3f,1);glClear(GL_COLOR_BUFFER_BIT);
++            glReadPixels(2,2,1,1,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,&actual);
++            uint32_t quantized=uncompressed_color(encode_color(actual,5),5);
++            target[0]=s_backbuffer_handle;target[1]=s_depthbuffer_handle;call(0xFEF20,target,2);assert(g_eax==0);
++            hits=s_target_return_cache_hits;target[0]=surface;target[1]=0;call(0xFEF20,target,2);assert(g_eax==0);
++            glReadPixels(2,2,1,1,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,&actual);
++            assert(actual==quantized && s_target_return_cache_hits==hits);
++        }
++        target[0]=s_backbuffer_handle;target[1]=s_depthbuffer_handle;call(0xFEF20,target,2);assert(g_eax==0);
++        uint32_t release[]={alias};call(0x103AD0,release,1);release[0]=surface;call(0x103AD0,release,1);
++        release[0]=texture;call(0x103AD0,release,1);
++        assert(!resource(alias)&&!resource(surface)&&!resource(texture)&&glGetError()==GL_NO_ERROR);
++    }
++    assert(s_texture_snapshot_bytes==budget_before);s_target_return_cache_mode=old_mode;
++    puts("PASS target-return cache: exact32-bit pixels/orientation, retainedCPUwrites, independentalias,16-bitquantization and lifetime");
++}
