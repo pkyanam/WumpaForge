@@ -6,6 +6,7 @@ int wumpa_gl_rpc_start(SDL_Window *window,SDL_GLContext context);
 int wumpa_gl_rpc_active(void);
 int wumpa_gl_rpc_owner(void);
 void wumpa_gl_rpc_call(void (*function)(void *),void *argument);
+void wumpa_gl_rpc_call_named(const char *name,void (*function)(void *),void *argument);
 int wumpa_gl_rpc_swap(SDL_Window *window);
 int wumpa_gl_rpc_swap_interval(void);
 void wumpa_gl_rpc_stop(void);

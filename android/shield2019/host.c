@@ -27,6 +27,9 @@ int wumpa_host_start(const char *log_name)
         SDL_setenv("WRATH_PROFILE_CONTEXT","1",1);
         SDL_setenv("WRATH_TRACE_INPUT","1",1);
     }
+    profile_n=snprintf(profile,sizeof(profile),"%s/gl-rpc-profile",storage);
+    if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
+        SDL_setenv("WRATH_GL_RPC_PROFILE","1",1);
     profile_n=snprintf(profile,sizeof(profile),"%s/gl-rpc",storage);
     if(profile_n>0 && (size_t)profile_n<sizeof(profile) && access(profile,F_OK)==0)
         SDL_setenv("WRATH_GL_RPC","1",1);

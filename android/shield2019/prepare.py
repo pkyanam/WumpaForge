@@ -220,6 +220,8 @@ def generate_loader(registry):
     registry_text=registry.read_text()
     header=['/* Generated from pinned Khronos declarations; do not edit. */','#pragma once','#include <GL/glcorearb.h>','#define GL_FLAT 0x1D00 /* Guest shade-mode token; no legacy GL call. */','#define GL_SMOOTH 0x1D01','int wumpa_gl_load(void);','int epoxy_gl_version(void);','int epoxy_has_gl_extension(const char *name);']
     header += ['void wumpa_gl_flush_state(void); /* Caller holds context mutex. */']
+    header += ['typedef struct { GLenum pname; GLint *values; } WumpaGLIntegerQuery;',
+               'void wumpa_gl_get_integers(const WumpaGLIntegerQuery *queries,unsigned count);']
     body=['#include <SDL.h>','#include <stdio.h>','#include <stdlib.h>','#include <stdatomic.h>','#include <string.h>','#include "epoxy/gl.h"','#include "gl_rpc.h"',
           'extern int xbox_D3D8GLBeginCall(void);','extern int xbox_D3D8GLBeginStateCall(void);',
           'extern int xbox_D3D8GLEnsureCurrent(void);','extern void xbox_D3D8GLEndCall(int outer);',
@@ -273,7 +275,7 @@ def generate_loader(registry):
         wrappers += ['    int wumpa_outer=xbox_D3D8GLBeginCall();']
         initializer=', '.join(f'.{arg}={arg}' for arg in arguments) if arguments else '.unused=0'
         wrappers += [f'    WumpaRPC_{name} request={{ {initializer} }};',
-                     f'    wumpa_gl_rpc_call(wumpa_execute_{name},&request);',
+                     f'    wumpa_gl_rpc_call_named("{name}",wumpa_execute_{name},&request);',
                      '    xbox_D3D8GLEndCall(wumpa_outer);']
         if result!='void':wrappers += ['    return request.result;']
         wrappers += ['}']
@@ -298,8 +300,23 @@ def generate_loader(registry):
              'void wumpa_gl_flush_state(void) {',
              '    if(!wumpa_state_count)return;',
              '    if(!xbox_D3D8GLEnsureCurrent())abort();',
-             '    wumpa_gl_rpc_call(wumpa_execute_state,NULL);',
+             '    wumpa_gl_rpc_call_named("state-flush",wumpa_execute_state,NULL);',
              '    wumpa_state_count=0;', '}']
+    body += ['typedef struct { const WumpaGLIntegerQuery *queries; unsigned count; } WumpaIntegerBatch;',
+             'static void wumpa_execute_integers(void *opaque) {',
+             '    const WumpaIntegerBatch *request=opaque;',
+             '    wumpa_execute_state(NULL);',
+             '    for(unsigned i=0;i<request->count;++i)',
+             '        wumpa_glGetIntegerv(request->queries[i].pname,request->queries[i].values);',
+             '}',
+             'void wumpa_gl_get_integers(const WumpaGLIntegerQuery *queries,unsigned count) {',
+             '    if(!count)return;',
+             '    if(!queries || count>32)abort();',
+             '    int outer=xbox_D3D8GLBeginCall();',
+             '    WumpaIntegerBatch request={queries,count};',
+             '    wumpa_gl_rpc_call_named("glGetIntegervBatch",wumpa_execute_integers,&request);',
+             '    xbox_D3D8GLEndCall(outer);',
+             '}']
     body += wrappers
     body += ['int wumpa_gl_load(void) { int missing=0; wumpa_state_count=0;']
     for name in names:
