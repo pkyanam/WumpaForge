@@ -1,5 +1,7 @@
 # WumpaForge
 
+<img src="assets/branding/wumpaforge-icon.png" width="128" align="right" alt="WumpaForge tropical fruit and crate icon">
+
 An experimental native Apple Silicon macOS port of **Crash Bandicoot: The Wrath of
 Cortex**, built from your own original USA Xbox disc image. The original Xbox game
 code is translated ahead of time to C and compiled to ARM64, with compatibility
@@ -76,9 +78,15 @@ Xbox One/Series and PS5 DualSense mappings use SDL's game-controller interface.
 Pair the controller through macOS Bluetooth settings. Physical Bluetooth testing
 for both controller families remains unverified; keyboard and mouse are available.
 
-Resize or maximize the window normally. F11 (or Control–Command–F) toggles
-fullscreen; F10 toggles optional sharpening. Internal rendering remains 640×480
-with a 4:3 aspect ratio; larger output is scaled with borders as needed. See
+For QHD output, choose **Display → Window Size → 1440p** in the macOS menu bar.
+Choose **Display → Sharpening → Medium** or **Strong** for a more visible filter.
+The window title shows the measured output size and sharpening setting.
+
+Resize or maximize normally; F11 (or Control–Command–F) toggles fullscreen and
+F10 toggles the selected sharpening strength. A window-size preset exits
+fullscreen. Fullscreen already scales to the display drawable; F10 changes the
+filter, not the resolution. Internal rendering remains 640×480 with a 4:3 aspect
+ratio, so upscaling sharpens existing pixels without adding new scene detail. See
 [presentation details and limitations](docs/WINDOW-PRESENTATION.md).
 
 ## Development and AI agents
@@ -97,7 +105,10 @@ or API key is required to build or play.
 macOS Apple Silicon is the only current development target. There is no mobile
 or NVIDIA Shield build or tested port. Sharing an ARM64 CPU does not make the
 operating system, graphics or packaging compatible. See the
-[future portability notes](docs/PORTABILITY.md).
+[future portability notes](docs/PORTABILITY.md) and the focused
+[SHIELD TV Pro 2019 plan](docs/ANDROID-TV-PLAN.md). The isolated
+[Android groundwork](android/README.md) has offline checks and memory-probe
+source; it does not build an APK or the game.
 
 Game content, extracted executables, translated game sources, binaries, build
 outputs, and dependency checkouts must stay out of commits. Upstream provenance

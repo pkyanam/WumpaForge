@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Package the existing ARM64 build for local macOS UI inspection and launching."""
 from pathlib import Path
+import argparse
 import plistlib
 import shutil
 import subprocess
@@ -33,10 +34,14 @@ def build_icon():
 ROOT = Path(__file__).resolve().parents[1]
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, default=ROOT / 'build/Wrath Native.app',
+                        help='app destination; use a separate path to stage beside a running build')
+    args = parser.parse_args()
     binary = ROOT / 'build/native/wrath_native'
     if not binary.is_file():
         raise SystemExit('Build the native executable first.')
-    app = ROOT / 'build/Wrath Native.app'
+    app = args.output.expanduser().resolve()
     contents = app / 'Contents'
     executable = contents / 'MacOS/wrath_native'
     resources = contents / 'Resources'

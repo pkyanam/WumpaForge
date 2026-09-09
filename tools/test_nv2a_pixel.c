@@ -166,4 +166,5 @@ int main(int argc,char **argv)
  }
  glDeleteVertexArrays(1,&vao);SDL_GL_DeleteContext(context);SDL_DestroyWindow(window);SDL_Quit();
  puts("PASS: GLSL410 compile/link and synthetic pixel readbacks, parallel RGB/alpha, modifiers, scale/bias, dot/mux, final/default fog/specular, constants, explicit errors");
+ return 0;
 }
