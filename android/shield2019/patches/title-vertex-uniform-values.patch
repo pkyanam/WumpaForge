@@ -1,0 +1,35 @@
+--- a/shader_bridge.inc
++++ b/shader_bridge.inc
+@@ -132,6 +132,9 @@
+     GLint sampler_location[4], mirror_once_location[4];
+     /* Uniform locations belong to this linked program, including inactive -1. */
+     GLint u_vconstants_location;
++    /* Exact per-program bytes; uniforms persist across program switches. */
++    unsigned vertex_uniform_valid;
++    float vertex_uniform_values[192][4];
+     GLint u_nv2a_viewport_location;
+     GLint u_nv2a_depth_location;
+     GLint u_nv2a_fog_mode_location;
+@@ -233,6 +236,7 @@
+     if(binary_key.directory>=0)close(binary_key.directory);
+     if (slot->program) glDeleteProgram(slot->program);
+     slot->key=key; slot->program=program; slot->vertex=vi; slot->pixel=pi; slot->age=++s_shader_age;
++    slot->vertex_uniform_valid=0; /* New link, even when replacing an old slot. */
+     slot->u_vconstants_location=glGetUniformLocation(program,"u_vconstants");
+     slot->u_nv2a_viewport_location=glGetUniformLocation(program,"u_nv2a_viewport");
+     slot->u_nv2a_depth_location=glGetUniformLocation(program,"u_nv2a_depth");
+@@ -414,7 +418,13 @@
+         glVertexAttribPointer(i,components,type,normalize,attribute_stride,(const void *)(uintptr_t)attribute_offset);
+     }
+     glUseProgram(p->program);
+-    glUniform4fv(p->u_vconstants_location,192,&s_vertex_constants[0][0]);
++    if(!p->vertex_uniform_valid ||
++       memcmp(p->vertex_uniform_values,s_vertex_constants,sizeof(s_vertex_constants))) {
++        glUniform4fv(p->u_vconstants_location,192,&s_vertex_constants[0][0]);
++        /* The draw's existing GL-error check aborts on any failed upload. */
++        memcpy(p->vertex_uniform_values,s_vertex_constants,sizeof(s_vertex_constants));
++        p->vertex_uniform_valid=1;
++    }
+     glUniform4f(p->u_nv2a_viewport_location,s_viewport.X,s_viewport.Y,s_viewport.Width,s_viewport.Height);
+     glUniform2f(p->u_nv2a_depth_location,s_viewport.MinZ*viewport_depth_scale(),s_viewport.MaxZ*viewport_depth_scale());
+     float fog_parameters[2]; int fog_mode=shader_fog_parameters(fog_parameters);
