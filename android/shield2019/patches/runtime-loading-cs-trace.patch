@@ -9,7 +9,7 @@
  
  /* ============================================================================
   * String Initialization
-@@ -449,6 +451,31 @@
+@@ -449,6 +451,37 @@
  
  extern RECOMP_TLS uint32_t g_xbox_kernel_caller;
  
@@ -21,15 +21,21 @@
 +    static _Atomic int cached=-1;
 +    int enabled=atomic_load_explicit(&cached,memory_order_relaxed);
 +    if(enabled>=0)return enabled;
-+    const char *v=getenv("WRATH_TRACE_LOADING_CS");enabled=v && !strcmp(v,"1");
++    const char *v=getenv("WRATH_TRACE_LOADING_CS");
++    enabled=v && !strcmp(v,"outer") ? 2 : v && !strcmp(v,"1");
 +    atomic_store_explicit(&cached,enabled,memory_order_relaxed);return enabled;
 +}
 +static void wumpa_cs_trace(const char *event, PRTL_CRITICAL_SECTION guest,
 +                           long depth, int result)
 +{
 +    static _Atomic unsigned armed,records;
-+    if((uint32_t)((uintptr_t)guest-(uintptr_t)g_xbox_mem_offset)!=0x4EA440u ||
-+       !wumpa_cs_trace_enabled())return;
++    if((uint32_t)((uintptr_t)guest-(uintptr_t)g_xbox_mem_offset)!=0x4EA440u)return;
++    int mode=wumpa_cs_trace_enabled();
++    if(!mode)return;
++    /* Keep the outer worker ownership pairs across later level loads. Nested
++     * render calls must not consume this diagnostic mode's record budget. */
++    if(mode==2 && g_xbox_kernel_caller!=0x2BF67u &&
++       g_xbox_kernel_caller!=0x2BFF6u)return;
 +    if(g_xbox_kernel_caller==0x2BF67u)atomic_store_explicit(&armed,1,memory_order_relaxed);
 +    if(!atomic_load_explicit(&armed,memory_order_relaxed))return;
 +    unsigned record=atomic_fetch_add_explicit(&records,1,memory_order_relaxed);
@@ -41,7 +47,7 @@
  static void xbox_cs_note_owner(CRITICAL_SECTION* cs)
  {
      XBOX_CS_SLOT* slot = xbox_cs_slot_of(cs);
-@@ -457,6 +484,7 @@
+@@ -457,6 +490,7 @@
      slot->owner_site = g_xbox_kernel_caller;
      slot->owner_tid  = GetCurrentThreadId();
      slot->depth++;
@@ -49,7 +55,7 @@
  }
  
  static void xbox_cs_clear_owner(CRITICAL_SECTION* cs)
-@@ -527,8 +555,12 @@
+@@ -527,8 +561,12 @@
      if (cs) {
          InterlockedIncrement(&g_cs_leaves);
          crt_lock_trace("drop", CriticalSection);
