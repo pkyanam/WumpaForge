@@ -17,6 +17,7 @@ typedef void *SDL_GLContext;
 int SDL_GL_MakeCurrent(SDL_Window *, SDL_GLContext);
 SDL_GLContext SDL_GL_GetCurrentContext(void);
 void SDL_GL_SwapWindow(SDL_Window *);
+int SDL_GL_GetSwapInterval(void);
 const char *SDL_GetError(void);
 void *SDL_GL_GetProcAddress(const char *);
 '''
@@ -57,6 +58,7 @@ int SDL_GL_MakeCurrent(SDL_Window *w, SDL_GLContext c) {
 }
 SDL_GLContext SDL_GL_GetCurrentContext(void) { return current; }
 void SDL_GL_SwapWindow(SDL_Window *w) { assert(w==&window && current==context);++swaps; }
+int SDL_GL_GetSwapInterval(void) { assert(current==context);return 1; }
 const char *SDL_GetError(void) { return "injected bind failure"; }
 void SDL_WumpaSetGLContextCallbacks(int (*backup)(void *),int (*restore)(void *),void *arg) {
     backup_cb=backup;restore_cb=restore;callback_argument=arg;
@@ -125,6 +127,7 @@ int main(void) {
     assert(!pthread_join(a,NULL));assert(!pthread_join(b,NULL));
     assert(calls==2000 && expected[0]==1000 && expected[1]==1000);
     assert(!wumpa_gl_rpc_swap(&window));assert(swaps==1);
+    assert(wumpa_gl_rpc_swap_interval()==1);
     assert(backup_cb && restore_cb);
     assert(!backup_cb(callback_argument));assert(!bound);
     assert(!restore_cb(callback_argument));assert(bound);
