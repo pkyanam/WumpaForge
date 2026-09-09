@@ -1805,9 +1805,25 @@ static void flip_bgra_rows(uint32_t *pixels,unsigned width,unsigned height)
         memcpy(temporary,top,count*4);memcpy(top,bottom,count*4);memcpy(bottom,temporary,count*4);
     }
 }
+/* GetSurfaceLevel can return distinct wrappers for the same texture bytes.
+ * GPU authority follows that storage, not the wrapper used by SetRenderTarget.
+ * Only identical live views are aliased here; differing mips, pitches, formats
+ * or partial overlaps need their own explicit representation. */
+static struct Resource *surface_gpu_storage(struct Resource *r)
+{
+    if(r->framebuffer)return r;
+    struct Resource *active=resource(read32(GUEST_DEVICE+0x2070));
+    if(active && active->type==RESOURCE_SURFACE && active->target_fbo &&
+       r->type==RESOURCE_SURFACE && r->owner && r->owner==active->owner &&
+       r->data==active->data && r->bytes==active->bytes &&
+       r->width==active->width && r->height==active->height &&
+       r->pitch==active->pitch && r->format==active->format)return active;
+    return NULL;
+}
 static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
 {
-    if (r->framebuffer || (r->target_fbo && read32(GUEST_DEVICE+0x2070)==r->handle)) {
+    struct Resource *gpu=surface_gpu_storage(r);
+    if (gpu) {
         uint64_t profile_start=wrath_profile_begin();
         GLint old_fbo, old_buffer, old_pack, old_alignment, old_row, old_rows, old_pixels;
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &old_fbo);
@@ -1817,7 +1833,7 @@ static HRESULT surface_pixels(struct Resource *r, uint32_t *pixels)
         glGetIntegerv(GL_PACK_ROW_LENGTH, &old_row);
         glGetIntegerv(GL_PACK_SKIP_ROWS, &old_rows);
         glGetIntegerv(GL_PACK_SKIP_PIXELS, &old_pixels);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, r->framebuffer ? xbox_D3D8GLBackBuffer(r->framebuffer==GL_FRONT) : r->target_fbo);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, gpu->framebuffer ? xbox_D3D8GLBackBuffer(gpu->framebuffer==GL_FRONT) : gpu->target_fbo);
         glReadBuffer(GL_COLOR_ATTACHMENT0); glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         glPixelStorei(GL_PACK_ALIGNMENT, 4); glPixelStorei(GL_PACK_ROW_LENGTH, 0);
         glPixelStorei(GL_PACK_SKIP_ROWS, 0); glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
@@ -1982,12 +1998,13 @@ void sub_000FF580(void) /* CopyRects(source,rectangles,count,destination,points)
             result = D3DERR_INVALIDCALL; break;
         }
         if (!width || !height) continue;
-        if (destination->framebuffer || (destination->target_fbo && read32(GUEST_DEVICE+0x2070)==destination->handle)) {
+        struct Resource *gpu=surface_gpu_storage(destination);
+        if (gpu) {
             uint32_t *region = malloc((size_t)width * height * 4);
             if (!region) { result = (HRESULT)0x8007000E; break; }
             for (int64_t y = 0; y < height; ++y)
                 memcpy(region + y * width, pixels + (rect.y1 + y) * source->width + rect.x1, (size_t)width * 4);
-            result = pixels_to_framebuffer(destination, region, (unsigned)width, (unsigned)height, point[0], point[1]);
+            result = pixels_to_framebuffer(gpu, region, (unsigned)width, (unsigned)height, point[0], point[1]);
             free(region);
         } else {
             uint8_t *data = guest_ptr(destination->data);
@@ -2349,6 +2366,7 @@ static void test_shader_bridge(void)
 #include "../tools/test_linear_bgra.inc"
 #include "../tools/test_gpu_fences.inc"
 #include "../tools/test_texture_depth.inc"
+#include "../tools/test_surface_alias.inc"
 #include "../tools/test_context_profile_bench.inc"
 #include "../tools/test_texture_snapshot.inc"
 
@@ -2696,6 +2714,7 @@ int main(void)
     test_linear_bgra();
     test_gpu_fences();
     test_texture_depth();
+    test_surface_alias();
     test_resource_pages();
     puts("PASS: native GL, clears, guest ABI, texture/quad, vertex buffer, lifetime, native render states/blending/alpha tests/fill, framebuffer target/depth/copies, swap");
     xbox_D3D8GLRelease();
