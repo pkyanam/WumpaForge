@@ -1,0 +1,177 @@
+--- a/graphics.c
++++ b/graphics.c
+@@ -911,6 +911,7 @@
+ /* Cube faces are stored in Xbox face order (+X,-X,+Y,-Y,+Z,-Z), with each
+  * complete mip chain padded to 128 bytes. Pixel data remains guest-owned. */
+ extern GLuint xbox_D3D8GLTextureName(IDirect3DTexture8 *texture);
++#include "dxt_upload.inc"
+ static HRESULT upload_texture_images(struct Resource *r, GLenum target, GLuint name, unsigned faces,
+                                      const uint32_t *colors, unsigned color_count)
+ {
+@@ -930,8 +931,8 @@
+     /* LIN_A8R8G8B8 is already the native BGRA8 upload representation. Preserve
+      * the exact-byte snapshot and tell GL each level's actual guest row pitch. */
+     int direct_bgra=r->format==0x12;
+-    uint32_t *pixels = direct_bgra?NULL:malloc((size_t)r->width * r->height * 4);
+-    if (!direct_bgra && !pixels) return (HRESULT)0x8007000E;
++    uint32_t *pixels=NULL;
++    HRESULT upload_failure=0;
+     const uint8_t *encoded=texture_snapshot_capture(r);
+     GLint old_texture, old_unpack, old_alignment, old_row, old_rows, old_columns, old_swap;
+     glGetIntegerv(target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_BINDING_CUBE_MAP : GL_TEXTURE_BINDING_2D, &old_texture);
+@@ -946,6 +947,16 @@
+     glPixelStorei(GL_UNPACK_ALIGNMENT, 4); glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+     glPixelStorei(GL_UNPACK_SKIP_ROWS, 0); glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+     glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
++    GLenum compressed=native_dxt_format(r->format);
++    if(compressed&&upload_dxt_levels(r,target,faces,encoded,compressed,&profile_bytes))
++        goto texture_parameters;
++    /* Re-upload every face/level as RGBA8 after any compressed-path failure;
++     * mixing internal formats across mip levels would make a texture incomplete. */
++    profile_bytes=0;
++    if(!direct_bgra) {
++        pixels=malloc((size_t)r->width*r->height*4);
++        if(!pixels){upload_failure=(HRESULT)0x8007000E;goto texture_complete;}
++    }
+     int linear, bpp = format_info(r->format, &linear);
+     for (unsigned face = 0; face < faces; ++face) for (unsigned level = 0; level < r->levels; ++level) {
+         uint32_t width = r->width >> level, height = r->height >> level;
+@@ -970,6 +981,7 @@
+         glTexImage2D(target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : GL_TEXTURE_2D,
+                      (GLint)level, GL_RGBA8, width, height, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,direct_bgra?(const void *)source:pixels);
+     }
++texture_parameters: ;
+     glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, 0);
+     glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, (GLint)r->levels - 1);
+     if (target == GL_TEXTURE_CUBE_MAP) {
+@@ -979,12 +991,14 @@
+         glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+         glTexParameteri(target, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+     }
++texture_complete: ;
+     GLenum error = glGetError();
+     glBindTexture(target, old_texture); glBindBuffer(GL_PIXEL_UNPACK_BUFFER, old_unpack);
+     glPixelStorei(GL_UNPACK_ALIGNMENT, old_alignment); glPixelStorei(GL_UNPACK_ROW_LENGTH, old_row);
+     glPixelStorei(GL_UNPACK_SKIP_ROWS, old_rows); glPixelStorei(GL_UNPACK_SKIP_PIXELS, old_columns);
+     glPixelStorei(GL_UNPACK_SWAP_BYTES, old_swap);
+     free(pixels);
++    if(upload_failure<0)return upload_failure;
+     if (error != GL_NO_ERROR) {
+         fprintf(stderr, "[wrath graphics] texture upload failed GL0x%X\n", error);
+         return D3DERR_INVALIDCALL;
+--- /dev/null
++++ b/dxt_upload.inc
+@@ -0,0 +1,30 @@
++/* DXT storage is sampling-only: SetRenderTarget/CopyRects destination require
++ * format_info>0. Surface source readback still decodes authoritative guest bytes.
++ * Xbox DXT blocks use S3TC's byte layout; cube face padding stays outside levels. */
++static GLenum native_dxt_format(uint32_t format)
++{
++    if(format!=0x0C&&format!=0x0E&&format!=0x0F)return 0;
++    const char *disable=getenv("WRATH_DISABLE_DXT_UPLOAD");
++    if(disable&&!strcmp(disable,"1"))return 0;
++    static int supported=-1; /* One context lifetime; context loss ends this process. */
++    if(supported<0)supported=epoxy_has_gl_extension("GL_EXT_texture_compression_s3tc");
++    if(!supported)return 0;
++    return format==0x0C?0x83F1u:format==0x0E?0x83F2u:0x83F3u;
++}
++static int upload_dxt_levels(const struct Resource *r,GLenum target,unsigned faces,
++                             const uint8_t *encoded,GLenum format,uint64_t *bytes)
++{
++    *bytes=0;
++    for(unsigned face=0;face<faces;++face)for(unsigned level=0;level<r->levels;++level) {
++        unsigned width=r->width>>level,height=r->height>>level;
++        if(!width)width=1;if(!height)height=1;
++        uint64_t size=(uint64_t)((width+3)/4)*((height+3)/4)*(r->format==0x0C?8:16);
++        uint64_t offset=(uint64_t)face*r->face_stride+r->offsets[level];
++        if(size>r->sizes[level]||offset+size>r->bytes||size>0x7fffffffu)return 0;
++        glCompressedTexImage2D(target==GL_TEXTURE_CUBE_MAP?GL_TEXTURE_CUBE_MAP_POSITIVE_X+face:GL_TEXTURE_2D,
++                              (GLint)level,format,width,height,0,(GLsizei)size,encoded+offset);
++        if(glGetError()!=GL_NO_ERROR)return 0;
++        *bytes+=size;
++    }
++    return 1;
++}
+--- a/graphics.c
++++ b/graphics.c
+@@ -2387,6 +2387,7 @@
+ #include "../tools/test_texture_target_lock.inc"
+ #include "../tools/test_context_profile_bench.inc"
+ #include "../tools/test_texture_snapshot.inc"
++#include "test_dxt_upload.inc"
+ 
+ int main(void)
+ {
+@@ -2715,6 +2716,7 @@
+     assert(wrath_graphics_lookup(0xDEADBEEF) == NULL);
+     test_texture_snapshot();
+     test_cube_resources();
++    test_direct_dxt_upload();
+     test_palette_resources();
+     test_index_bridge();
+     test_immediate_bridge();
+--- /dev/null
++++ b/test_dxt_upload.inc
+@@ -0,0 +1,62 @@
++static void test_direct_dxt_upload(void)
++{
++    if(!native_dxt_format(0x0C)){puts("SKIP direct DXT: S3TC unavailable or disabled");return;}
++    GLint old_active,old_pack,old_alignment,old_row,old_rows,old_pixels;
++    glGetIntegerv(GL_ACTIVE_TEXTURE,&old_active);glActiveTexture(GL_TEXTURE0);
++    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING,&old_pack);
++    glGetIntegerv(GL_PACK_ALIGNMENT,&old_alignment);glGetIntegerv(GL_PACK_ROW_LENGTH,&old_row);
++    glGetIntegerv(GL_PACK_SKIP_ROWS,&old_rows);glGetIntegerv(GL_PACK_SKIP_PIXELS,&old_pixels);
++    glBindBuffer(GL_PIXEL_PACK_BUFFER,0);glPixelStorei(GL_PACK_ALIGNMENT,4);
++    glPixelStorei(GL_PACK_ROW_LENGTH,0);glPixelStorei(GL_PACK_SKIP_ROWS,0);glPixelStorei(GL_PACK_SKIP_PIXELS,0);
++    const uint32_t formats[]={0x0C,0x0E,0x0F};
++    for(unsigned f=0;f<3;++f)for(unsigned cube=0;cube<2;++cube) {
++        unsigned faces=cube?6:1,block_size=f?16:8;
++        struct Resource r={0};r.width=r.height=8;r.levels=4;r.format=formats[f];r.face_stride=128;r.bytes=faces*128;
++        r.data=xbox_HeapAlloc(r.bytes,128);assert(r.data);r.handle=r.data;r.dirty=1;
++        unsigned offset=0;
++        for(unsigned level=0;level<4;++level){unsigned edge=8>>level;if(!edge)edge=1;
++            r.offsets[level]=offset;r.sizes[level]=((edge+3)/4)*((edge+3)/4)*block_size;offset+=r.sizes[level];}
++        uint8_t *data=guest_ptr(r.data);memset(data,0,r.bytes);
++        for(unsigned face=0;face<faces;++face)for(unsigned level=0;level<4;++level)
++            for(unsigned block=0;block<r.sizes[level]/block_size;++block){
++                uint8_t *p=data+face*128+r.offsets[level]+block*block_size,*colors=p+(f?8:0);
++                colors[0]=0;colors[1]=0xF8;colors[2]=0x1F;colors[3]=0;
++                memset(colors+4,0xE4,4); // Red, blue and both exact 1/3 interpolants.
++                if(!f&&((face+level+block)&1)){colors[0]=colors[1]=0;colors[2]=colors[3]=255;memset(colors+4,255,4);}
++                if(f==1)memset(p,0xF0,8); // Explicit 0/255 alpha endpoints.
++                if(f==2){p[0]=255;p[1]=0;uint64_t bits=0;for(unsigned i=0;i<16;++i)bits|=(uint64_t)(i%8)<<(i*3);for(unsigned i=0;i<6;++i)p[i+2]=(uint8_t)(bits>>(i*8));}
++            }
++        GLenum target=cube?GL_TEXTURE_CUBE_MAP:GL_TEXTURE_2D;GLint previous;
++        glGetIntegerv(cube?GL_TEXTURE_BINDING_CUBE_MAP:GL_TEXTURE_BINDING_2D,&previous);
++        GLuint name;glGenTextures(1,&name);
++        assert(upload_texture_images(&r,target,name,faces,NULL,0)==0);glBindTexture(target,name);
++        for(unsigned face=0;face<faces;++face)for(unsigned level=0;level<4;++level){
++            GLenum image=cube?GL_TEXTURE_CUBE_MAP_POSITIVE_X+face:GL_TEXTURE_2D;
++            GLint compressed=0;glGetTexLevelParameteriv(image,level,GL_TEXTURE_COMPRESSED,&compressed);assert(compressed);
++            unsigned edge=8>>level;if(!edge)edge=1;uint32_t actual[64]={0};
++            glGetTexImage(image,level,GL_BGRA,GL_UNSIGNED_INT_8_8_8_8_REV,actual);
++            const uint8_t *source=data+face*128+r.offsets[level];
++            for(unsigned y=0;y<edge;++y)for(unsigned x=0;x<edge;++x){
++                unsigned block=(y/4)*((edge+3)/4)+x/4,pixel=(y%4)*4+x%4;
++                uint32_t expected=dxt_color(source+block*block_size,pixel,r.format),got=actual[y*edge+x];
++                for(unsigned shift=0;shift<32;shift+=8){int a=(got>>shift)&255,b=(expected>>shift)&255;
++                    /* BC alpha interpolation may round instead of CPU integer truncation;
++                     * endpoints, DXT1 transparency and DXT3 explicit alpha remain exact. */
++                    unsigned tolerance=(f==2&&shift==24&&pixel%8>=2)?1:0;
++                    assert(abs(a-b)<=(int)tolerance);}
++            }
++        }
++        // Reupload changed guest blocks, and exercise the explicit CPU fallback.
++        memset(data,0,r.bytes);r.dirty=1;assert(upload_texture_images(&r,target,name,faces,NULL,0)==0);
++        setenv("WRATH_DISABLE_DXT_UPLOAD","1",1);r.snapshot_valid=0;
++        assert(upload_texture_images(&r,target,name,faces,NULL,0)==0);
++        glBindTexture(target,name);GLint compressed=1;glGetTexLevelParameteriv(cube?GL_TEXTURE_CUBE_MAP_POSITIVE_X:target,0,GL_TEXTURE_COMPRESSED,&compressed);assert(!compressed);
++        unsetenv("WRATH_DISABLE_DXT_UPLOAD");
++        glDeleteTextures(1,&name);glBindTexture(target,previous);
++        if(r.encoded_snapshot){s_texture_snapshot_bytes-=r.bytes;free(r.encoded_snapshot);}xbox_HeapFree(r.data);
++    }
++    glBindBuffer(GL_PIXEL_PACK_BUFFER,old_pack);glPixelStorei(GL_PACK_ALIGNMENT,old_alignment);
++    glPixelStorei(GL_PACK_ROW_LENGTH,old_row);glPixelStorei(GL_PACK_SKIP_ROWS,old_rows);glPixelStorei(GL_PACK_SKIP_PIXELS,old_pixels);
++    glActiveTexture(old_active);assert(glGetError()==GL_NO_ERROR);
++    puts("PASS direct DXT1/3/5: 2D/cube four mips, selectors/alpha, guest mutation and CPU fallback");
++}
