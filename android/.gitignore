@@ -1,0 +1,8 @@
+# Local Android tooling and possible future package/signing output.
+.cxx/
+.gradle/
+local.properties
+*.apk
+*.aab
+*.keystore
+*.jks

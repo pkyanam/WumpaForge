@@ -5,6 +5,11 @@ current development target. There are no iOS, iPadOS, Android or NVIDIA Shield
 builds or device test results. See [STATUS.md](STATUS.md) for the evolving macOS
 gameplay evidence and unresolved correctness issues; even macOS is experimental.
 
+The user's selected next target is now **SHIELD TV Pro (2019)**. Its focused
+[Android TV plan](ANDROID-TV-PLAN.md) and [source-only preparation](../android/README.md)
+cover actual device identity, Android ABI, desktop OpenGL through EGL, and a
+standalone memory diagnostic. No Android game port or cross-build is verified.
+
 Sharing ARM64 makes the generated game C a useful starting point. It does not
 make a macOS executable run on another operating system. Each target needs its
 own compiler/SDK, ABI-compatible libraries, application lifecycle, graphics
@@ -69,7 +74,8 @@ page size must remain distinct.
    audio latency and controller observations. Keep 60 FPS as a measured target;
    desktop results cannot predict mobile or Shield performance.
 
-No target presets, application shells, new graphics backends or portability
-runtime changes were added with this document. Review was source-only on
-2026-09-08; no mobile SDK downloads, cross-builds or physical-device tests were
-performed. The next useful implementation remains the current macOS milestone.
+This general architecture review added no application shells, new graphics
+backends or portability runtime changes. The later Pro-only preparation adds an
+isolated diagnostic CMake target and offline checks, documented separately above.
+Review was source-only on 2026-09-08; no mobile SDK downloads, cross-builds or
+physical-device tests were performed. The game implementation remains macOS-only.
