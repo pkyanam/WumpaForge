@@ -1,5 +1,23 @@
 # Held remote key injection for ADB debugging
 
+## Offline timing summaries
+
+Summarize retained profile logs without connecting to the Shield:
+
+```sh
+python3 android/shield2019/tools/timing_report.py local/reports/shield2019/RUN.log
+python3 -B android/shield2019/tests/test_timing_report.py
+```
+
+The JSON keeps each input file and main/worker profile separate. Its percentiles
+describe **60-present window averages**, not individual frame times. Present calls
+do not prove independently displayed frames. The largest recorded interval is
+reported, but loading phase, actual frame p95/p99 and audio drift cannot be
+recovered from these logs. Compare matching scenes and instrumentation; do not
+pool overlapping log captures or unrelated runs as a performance baseline.
+
+## Held key tool
+
 Android 30's `input keyevent --longpress` does not necessarily sustain a key for
 long enough for a slow game frame to consume it. This small shell tool sends a
 real key-down, waits the requested milliseconds, and sends key-up in `finally`.
