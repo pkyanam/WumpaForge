@@ -1,5 +1,81 @@
 # Status — September 9 Shield follow-up
 
+## September 10 offline checkpoint — paused for device access and usage buffer
+
+Started from clean tracked HEAD `aa58bad`. Six bounded Luna audits reviewed RPC,
+indexed rendering, AOT CPU, loading/kernel, timing/audio and input/lifecycle.
+No new runtime defect was established that justifies changing rendering or guest
+semantics before the pending physical comparison. No ADB connection, installation,
+game launch, source preparation or full native rebuild occurred during this pass.
+The user requested pausing with at least 6% account usage remaining, preferably
+more; the work is checkpointed rather than starting another experiment.
+
+The pending O2/indexed APK is unchanged: SHA-256
+`81256cf8160b75c3803b54f89036add01e2222facd61f92365bab8349b7a5538`.
+Its packaged game library matches the existing manifest. NDK `llvm-readelf -sW`
+confirms `g_kernel_dispatch_slot` is a four-byte **TLS** symbol in the matching
+unstripped library. Generated make rules use final `-O2 -gline-tables-only` with
+`-fno-strict-aliasing -fwrapv`; those flags and the retained build log support the
+O2 candidate identity. Refreshed source is not evidence of a rebuilt or installed
+artifact. The historical checkpoint identifies project commit `2f8e889`; the
+package has no embedded source digest, so do not claim cryptographic source
+provenance from that label. The installed device artifact remains unqueried.
+
+Pending APK, matching unstripped symbols, original package manifest and flags are
+preserved under ignored `local/reports/shield2019/handoff-20260910/`, with their
+hashes in `initial-artifact-identity.json`. Current prepared/generated input hashes
+are recorded separately for the next rebuild; they do not retroactively identify
+the pending APK's inputs. `/Applications/WumpaForge.app` still points to the
+working Mac package. Its strict/deep signature and executable digest verify.
+
+Source additions are limited to an offline timing summary tool and regression
+coverage. `android/shield2019/tools/timing_report.py` separates input files and
+main/worker windows, labels percentiles as window averages, and leaves actual
+per-frame percentiles and audio drift unavailable. Existing logs summarize 60
+Present calls; they cannot establish actual display-frame distributions, loading
+phase or synchronized audio latency. The remote fixture now checks repeated
+lifecycle clears with held input, delayed releases and exactly one Menu layer
+transition despite repeat events. Production input code is unchanged.
+
+Focused checks passed, with at most two compiler jobs:
+
+```sh
+python3 -B tools/test_kernel_dispatch_tls.py
+python3 -B android/shield2019/tests/test_indexed_shader.py
+python3 -B android/shield2019/tests/test_gpu_copyrects.py
+python3 -B android/shield2019/tests/test_gl_rpc_ordering.py
+python3 -B android/shield2019/tests/test_gl_rpc_profile.py
+python3 -B android/shield2019/tests/test_up_draw_rpc.py
+python3 -B android/shield2019/tests/test_shader_draw_rpc.py
+python3 -B android/shield2019/tests/test_uniform_vector_queue.py
+python3 -B android/shield2019/tests/test_sampler_queries.py
+python3 -B android/shield2019/tests/test_profile_thread_clock.py
+python3 -B android/shield2019/tests/test_read_log_budget.py
+python3 -B android/shield2019/tests/test_input_tv.py
+python3 -B android/shield2019/tests/test_timing_report.py
+python3 -B android/shield2019/artifact_check.py build/shield2019/WumpaForge-Shield-Pro-2019-dev.apk
+git diff --check
+```
+
+`RemoteControls.java` and `RemoteControlsTest.java` also compile with installed
+JDK `javac --release 8`, Android-36 `android.jar` as classpath, and pass host
+`java -ea ... org.wumpaforge.shield.RemoteControlsTest`. Output is retained in
+`remote-controls.log` beside the other focused-check logs. These are synthetic
+input checks, not physical Bluetooth/lifecycle or gameplay validation.
+
+Resume by confirming TV availability and the explicit serial. First inspect the
+installed identity, then validate the pending indexed physical fixture, including
+optimized-path hits and pixel/coherence/state checks. Build matched O1/O2 from the
+same input snapshot and compare indexed off/on scenes with expensive tracing off.
+Actual per-frame timing and paired audio clocks still need instrumentation before
+claiming p95/p99 or drift. Then validate Arctic Antics play/return to hub and a
+second first-world level. Shared file-position and handle/DPC publication races
+remain conditional audit findings, not demonstrated causes of the current load.
+
+The public repository and current working Mac package take precedence over the
+stale PRIVATE/build68 instructions preserved in earlier history below. No game
+content, binaries, credentials, device address or captures belong in Git.
+
 ## Latest device checkpoint: Arctic Antics loads; performance remains inadequate
 
 Actual TLS-selector run22299 entered Arctic Antics (internal Level7/Demo0) through

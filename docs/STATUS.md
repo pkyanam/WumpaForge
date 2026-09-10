@@ -53,6 +53,12 @@ The detailed investigation, measured frame windows and pending checks are in
 [the Shield checkpoint](history/2026-09-09-shield-development.md). Earlier Mac
 checkpoints are in [the September8 history](history/2026-09-08-checkpoints.md).
 
+September 10 offline follow-up verified the pending APK identity, O2 flags and
+actual TLS symbol; focused renderer, kernel, clock and synthetic input checks pass.
+A log summary tool now distinguishes 60-present window averages from per-frame
+statistics. The APK and Mac app are unchanged. Device access is awaiting renewed
+confirmation, and work is paused to preserve the user's requested usage buffer.
+
 ## Release scope
 
 The repository is public at https://github.com/pkyanam/WumpaForge as of September 9,
